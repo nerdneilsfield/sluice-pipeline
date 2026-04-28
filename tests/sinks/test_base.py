@@ -77,3 +77,17 @@ async def test_emit_on_empty_skips(tmp_path):
         s.emit_on_empty = False
         res = await s.emit(PipelineContext("p", "p/r", "r", [], {}), emissions=e)
         assert res is None
+
+
+@pytest.mark.asyncio
+async def test_emit_on_empty_uses_sink_input_payload(tmp_path):
+    async with open_db(tmp_path / "d.db") as db:
+        e = EmissionStore(db)
+        s = StubSink("sid1")
+        s.input = "context.markdown"
+        res = await s.emit(
+            PipelineContext("p", "p/r", "r", [], {"markdown": "# brief"}),
+            emissions=e,
+        )
+        assert res is not None
+        assert res.created

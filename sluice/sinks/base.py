@@ -22,8 +22,33 @@ class Sink(ABC):
     async def update(self, external_id: str, ctx: PipelineContext) -> str:
         return await self.create(ctx)
 
+    def _input_payload(self, ctx: PipelineContext):
+        path = getattr(self, "input", None)
+        if not path:
+            return None
+        cur = ctx
+        for part in path.split("."):
+            if isinstance(cur, dict):
+                cur = cur.get(part)
+            else:
+                cur = getattr(cur, part, None)
+            if cur is None:
+                return None
+        return cur
+
+    def _has_input_payload(self, ctx: PipelineContext) -> bool:
+        value = self._input_payload(ctx)
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value != ""
+        try:
+            return len(value) > 0
+        except TypeError:
+            return True
+
     async def emit(self, ctx: PipelineContext, *, emissions: EmissionStore) -> SinkResult | None:
-        if not ctx.items and not self.emit_on_empty:
+        if not ctx.items and not self.emit_on_empty and not self._has_input_payload(ctx):
             return None
         if self.mode == "create_new":
             ext = await self.create(ctx)
