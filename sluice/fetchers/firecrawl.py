@@ -1,7 +1,10 @@
 import httpx
+from fake_useragent import UserAgent
 
 from sluice.fetchers._ssrf import guard
 from sluice.fetchers.base import register_fetcher
+
+_ua = UserAgent()
 
 
 @register_fetcher("firecrawl")
@@ -22,7 +25,11 @@ class FirecrawlFetcher:
             r = await c.post(
                 f"{self.base_url}/v1/scrape",
                 headers=headers,
-                json={"url": url, "formats": ["markdown"]},
+                json={
+                    "url": url,
+                    "formats": ["markdown"],
+                    "headers": {"User-Agent": _ua.chrome},
+                },
             )
             r.raise_for_status()
             data = r.json()

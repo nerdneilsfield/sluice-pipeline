@@ -2,9 +2,12 @@ import asyncio
 
 import httpx
 import trafilatura
+from fake_useragent import UserAgent
 
 from sluice.fetchers._ssrf import guard, guard_response, guarded_redirect_url
 from sluice.fetchers.base import register_fetcher
+
+_ua = UserAgent()
 
 
 @register_fetcher("trafilatura")
@@ -16,8 +19,9 @@ class TrafilaturaFetcher:
 
     async def extract(self, url: str) -> str:
         guard(url)
+        headers = {"User-Agent": _ua.chrome}
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False) as c:
-            r = await c.get(url)
+            r = await c.get(url, headers=headers)
             guard_response(r)
             # Manually follow redirects with SSRF guard at each hop
             redirect_count = 0
@@ -29,7 +33,7 @@ class TrafilaturaFetcher:
                 if not location:
                     break
                 next_url = guarded_redirect_url(str(r.url), location)
-                r = await c.get(next_url)
+                r = await c.get(next_url, headers=headers)
                 guard_response(r)
             r.raise_for_status()
             html = r.text

@@ -1,7 +1,10 @@
 import httpx
+from fake_useragent import UserAgent
 
 from sluice.fetchers._ssrf import guard, guard_response, guarded_redirect_url
 from sluice.fetchers.base import register_fetcher
+
+_ua = UserAgent()
 
 
 @register_fetcher("jina_reader")
@@ -21,7 +24,7 @@ class JinaReaderFetcher:
 
     async def extract(self, url: str) -> str:
         guard(url)
-        headers = {}
+        headers = {"User-Agent": _ua.chrome}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False) as c:

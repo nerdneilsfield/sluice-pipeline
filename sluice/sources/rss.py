@@ -3,10 +3,17 @@ from typing import AsyncIterator
 
 import feedparser
 import httpx
+from fake_useragent import UserAgent
 
 from sluice.core.item import Attachment, Item
 from sluice.sources.base import register_source
 from sluice.url_canon import canonical_url
+
+_ua = UserAgent()
+_RSS_UA = (
+    "Mozilla/5.0 (compatible; Sluice RSS Fetcher/1.0; "
+    "+https://github.com/sluice/sluice)"
+)
 
 
 @register_source("rss")
@@ -29,8 +36,12 @@ class RssSource:
         self.timeout = timeout
 
     async def fetch(self, window_start: datetime, window_end: datetime) -> AsyncIterator[Item]:
+        headers = {
+            "User-Agent": _RSS_UA,
+            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        }
         async with httpx.AsyncClient(timeout=self.timeout) as c:
-            r = await c.get(self.url)
+            r = await c.get(self.url, headers=headers)
             r.raise_for_status()
             text = r.text
         feed = feedparser.parse(text)
