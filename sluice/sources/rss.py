@@ -4,7 +4,7 @@ from typing import AsyncIterator
 import feedparser
 import httpx
 
-from sluice.core.item import Item
+from sluice.core.item import Attachment, Item
 from sluice.sources.base import register_source
 from sluice.url_canon import canonical_url
 
@@ -50,6 +50,7 @@ class RssSource:
                 title=getattr(e, "title", "") or "",
                 published_at=published,
                 raw_summary=getattr(e, "summary", None) or getattr(e, "description", None),
+                attachments=self._attachments(e),
                 tags=list(self.tags),
             )
 
@@ -60,3 +61,24 @@ class RssSource:
             if t:
                 return datetime(*t[:6], tzinfo=timezone.utc)
         return None
+
+    @staticmethod
+    def _attachments(e) -> list[Attachment]:
+        out = []
+        for enc in getattr(e, "enclosures", []) or []:
+            url = enc.get("href") or enc.get("url")
+            if not url:
+                continue
+            raw_length = enc.get("length")
+            try:
+                length = int(raw_length) if raw_length not in (None, "") else None
+            except (TypeError, ValueError):
+                length = None
+            out.append(
+                Attachment(
+                    url=url,
+                    mime_type=enc.get("type"),
+                    length=length,
+                )
+            )
+        return out
