@@ -58,3 +58,18 @@ def test_quota_cooldown(monkeypatch):
     for _ in range(50):
         ep = rt.pick_endpoint("glm-4-flash", rng=rng)
         assert ep.api_key != "v1"  # K1 is cooling down
+
+
+def test_active_windows_filter_bases(monkeypatch):
+    monkeypatch.setenv("K1", "v1")
+    monkeypatch.setenv("K2", "v2")
+    monkeypatch.setenv("K3", "v3")
+    monkeypatch.setattr("time.time", lambda: 1767225600)  # 2026-01-01 00:00:00 UTC
+    p = make_provider()
+    p.base[0].active_timezone = "UTC"
+    p.base[0].active_windows = ["01:00-02:00"]
+    p.base[1].active_timezone = "UTC"
+    p.base[1].active_windows = ["23:00-01:00"]
+    rt = ProviderRuntime(p)
+    ep = rt.pick_endpoint("glm-4-flash", rng=random.Random(0))
+    assert ep.base_url == "https://b"

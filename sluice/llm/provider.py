@@ -1,6 +1,8 @@
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Tuple
+from zoneinfo import ZoneInfo
 
 from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider
 
@@ -60,6 +62,30 @@ class ProviderRuntime:
             return v
         return key_cfg.value
 
+    @staticmethod
+    def _parse_clock(s: str):
+        hour, minute = s.split(":", 1)
+        return int(hour), int(minute)
+
+    def _base_is_active(self, base: BaseEndpoint, now_ts: float) -> bool:
+        if not base.active_windows:
+            return True
+        tz = ZoneInfo(base.active_timezone or "UTC")
+        now = datetime.fromtimestamp(now_ts, tz)
+        current = (now.hour, now.minute)
+        for window in base.active_windows:
+            start_s, sep, end_s = window.partition("-")
+            if not sep:
+                raise ValueError(f"invalid active window {window!r}; expected HH:MM-HH:MM")
+            start = self._parse_clock(start_s)
+            end = self._parse_clock(end_s)
+            if start <= end:
+                if start <= current < end:
+                    return True
+            elif current >= start or current < end:
+                return True
+        return False
+
     def pick_endpoint(self, model: str, rng) -> Endpoint:
         model_entry = self._models.get(model)
         if model_entry is None:
@@ -67,13 +93,17 @@ class ProviderRuntime:
 
         now = time.time()
         # Pick base by weight
-        r = rng.randint(1, self._base_total)
-        for bi, b, _ in self._base_weights:
+        active_bases = [(bi, b) for bi, b, _ in self._base_weights if self._base_is_active(b, now)]
+        if not active_bases:
+            raise ValueError(f"no active base endpoints for provider {self.provider.name!r}")
+        active_total = sum(b.weight for _, b in active_bases)
+        r = rng.randint(1, active_total)
+        for bi, b in active_bases:
             if r <= b.weight:
                 break
             r -= b.weight
         else:
-            bi, b = 0, self.provider.base[0]
+            bi, b = active_bases[0]
 
         # Pick key by weight, respecting cooldowns
         kw = self._key_weights[bi]
