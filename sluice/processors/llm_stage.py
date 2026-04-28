@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -8,6 +10,8 @@ from jinja2 import Template
 from sluice.context import PipelineContext
 from sluice.core.errors import BudgetExceeded, StageError
 from sluice.core.item import compute_item_key
+
+log = logging.getLogger(__name__)
 
 
 def _truncate(text: str, n: int, strategy: str) -> str:
@@ -108,7 +112,13 @@ class LLMStageProcessor:
     def _render_one(self, item):
         raw = item.get(self.input_field, default="") or ""
         truncated = _truncate(str(raw), self.max_input_chars, self.truncate_strategy)
-        item_view = type("It", (), {**item.__dict__, self.input_field: truncated})()
+        item_view = replace(
+            item,
+            attachments=list(item.attachments),
+            extras=dict(item.extras),
+            tags=list(item.tags),
+        )
+        _set_path(item_view, self.input_field, truncated)
         return self.template.render(item=item_view)
 
     def _parse(self, text):
@@ -143,15 +153,18 @@ class LLMStageProcessor:
                     raise
                 except Exception as e:
                     if self.failures is not None and self.pipeline_id:
-                        await self.failures.record(
-                            self.pipeline_id,
-                            compute_item_key(it),
-                            it,
-                            stage=self.name,
-                            error_class=type(e).__name__,
-                            error_msg=str(e),
-                            max_retries=self.max_retries,
-                        )
+                        try:
+                            await self.failures.record(
+                                self.pipeline_id,
+                                compute_item_key(it),
+                                it,
+                                stage=self.name,
+                                error_class=type(e).__name__,
+                                error_msg=str(e),
+                                max_retries=self.max_retries,
+                            )
+                        except Exception:
+                            log.exception("failed to persist per-item LLM failure")
                     return None
                 if parsed is None and self.on_parse_error == "skip":
                     return None
@@ -159,8 +172,20 @@ class LLMStageProcessor:
                 _set_path(it, self.output_field, parsed)
                 return it
 
-        results = await asyncio.gather(*[one(it, c) for it, c in zip(ctx.items, rendered)])
-        ctx.items = [it for it in results if it is not None]
+        results = await asyncio.gather(
+            *[one(it, c) for it, c in zip(ctx.items, rendered)],
+            return_exceptions=True,
+        )
+        kept = []
+        for result in results:
+            if isinstance(result, StageError):
+                raise result
+            if isinstance(result, Exception):
+                log.exception("unexpected per-item LLM failure", exc_info=result)
+                continue
+            if result is not None:
+                kept.append(result)
+        ctx.items = kept
         return ctx
 
     async def _run_aggregate(self, ctx: PipelineContext):

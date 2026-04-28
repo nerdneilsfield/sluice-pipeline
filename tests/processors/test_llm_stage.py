@@ -173,6 +173,76 @@ async def test_per_item_llm_failure_records_and_drops(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_per_item_failure_record_error_still_drops_item(tmp_path):
+    prompt = tmp_path / "p.md"
+    prompt.write_text("S: {{ item.fulltext }}")
+
+    class FlakyLLM:
+        def __init__(self):
+            self.n = 0
+
+        async def chat(self, messages):
+            self.n += 1
+            if self.n == 2:
+                raise RuntimeError("transient")
+            return f"ok-{self.n}"
+
+    class BrokenFailures:
+        async def record(self, pid, key, item, *, stage, error_class, error_msg, max_retries):
+            raise RuntimeError("db locked")
+
+    llm = FlakyLLM()
+    p = LLMStageProcessor(
+        name="summarize",
+        mode="per_item",
+        input_field="fulltext",
+        output_field="summary",
+        prompt_file=str(prompt),
+        llm_factory=lambda: llm,
+        output_parser="text",
+        max_input_chars=1000,
+        truncate_strategy="head_tail",
+        workers=1,
+        failures=BrokenFailures(),
+        pipeline_id="p",
+    )
+    ctx = await p.process(PipelineContext("p", "p/r", "2026-04-28", [mk(0), mk(1), mk(2)], {}))
+    assert [it.guid for it in ctx.items] == ["g0", "g2"]
+    assert [it.summary for it in ctx.items] == ["ok-1", "ok-3"]
+
+
+@pytest.mark.asyncio
+async def test_render_one_preserves_item_get_method(tmp_path):
+    prompt = tmp_path / "p.md"
+    prompt.write_text("{{ item.fulltext }} / {{ item.get('extras.foo') }}")
+    seen = []
+
+    class CaptureLLM:
+        async def chat(self, messages):
+            seen.append(messages[-1]["content"])
+            return "ok"
+
+    it = mk(0)
+    it.fulltext = "A" * 50
+    it.extras["foo"] = "bar"
+    p = LLMStageProcessor(
+        name="summarize",
+        mode="per_item",
+        input_field="fulltext",
+        output_field="summary",
+        prompt_file=str(prompt),
+        llm_factory=lambda: CaptureLLM(),
+        output_parser="text",
+        max_input_chars=5,
+        truncate_strategy="head",
+        workers=1,
+    )
+    ctx = await p.process(PipelineContext("p", "p/r", "2026-04-28", [it], {}))
+    assert seen == ["AAAAA / bar"]
+    assert ctx.items[0].fulltext == "A" * 50
+
+
+@pytest.mark.asyncio
 async def test_budget_preflight_blocks_on_call_count(tmp_path):
     from sluice.core.errors import BudgetExceeded
     from sluice.llm.budget import RunBudget
