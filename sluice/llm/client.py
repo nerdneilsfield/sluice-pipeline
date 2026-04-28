@@ -44,8 +44,7 @@ class LLMClient:
         headers = {"Authorization": f"Bearer {ep.api_key}",
                    "Content-Type": "application/json", **ep.extra_headers}
         payload = {"model": ep.model_entry.model_name, "messages": messages}
-        async with httpx.AsyncClient(timeout=self.cfg.timeout) as c:
-            r = await c.post(url, headers=headers, json=payload)
+        r = await self.pool.client.post(url, headers=headers, json=payload)
         if r.status_code == 429:
             text = r.text.lower()
             if any(t in text for t in ep._key_ref.quota_error_tokens):
