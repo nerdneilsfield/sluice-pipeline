@@ -16,9 +16,18 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         v = int(f.stem.split("_", 1)[0])
         if v <= have:
             continue
-        await db.executescript(f.read_text())
-        await db.execute(f"PRAGMA user_version = {v}")
-        await db.commit()
+        sql = f.read_text()
+        await db.execute("BEGIN")
+        try:
+            for statement in sql.split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    await db.execute(stmt)
+            await db.execute(f"PRAGMA user_version = {int(v)}")
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 @asynccontextmanager
 async def open_db(path):
@@ -26,5 +35,6 @@ async def open_db(path):
     async with aiosqlite.connect(str(path)) as db:
         await db.execute("PRAGMA foreign_keys = ON")
         await db.execute("PRAGMA journal_mode = WAL")
+        await db.execute("PRAGMA busy_timeout = 5000")
         await _migrate(db)
         yield db
