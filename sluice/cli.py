@@ -83,19 +83,26 @@ def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
     """Register all enabled pipelines as Prefect deployments."""
     _import_all()
     bundle = load_all(config_dir)
+    from prefect import serve as prefect_serve
     from prefect.client.schemas.schedules import CronSchedule
     from sluice.flow import build_flow
+
+    deployments = []
     for pid, pipe in bundle.pipelines.items():
         if not pipe.enabled:
             continue
         cron = pipe.cron or bundle.global_cfg.runtime.default_cron
         tz = pipe.timezone or bundle.global_cfg.runtime.timezone
         flow_obj = build_flow(pid)
-        flow_obj.serve(
+        dep = flow_obj.to_deployment(
             name=f"sluice-{pid}",
             schedule=CronSchedule(cron=cron, timezone=tz),
             parameters={"config_dir": str(config_dir.resolve())},
         )
+        deployments.append(dep)
+
+    if deployments:
+        prefect_serve(*deployments)
 
 if __name__ == "__main__":
     app()
