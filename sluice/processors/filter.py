@@ -10,6 +10,14 @@ def _coerce_dt(v):
         return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
     return None
 
+def _safe_search(pattern: str, text: str) -> bool:
+    if len(pattern) > 5000:
+        raise ValueError(f"regex pattern too long: {len(pattern)} chars")
+    try:
+        return bool(re.search(pattern, text))
+    except re.error as e:
+        raise ValueError(f"invalid regex pattern: {e}")
+
 def _eval(rule: FilterRule, item: Item) -> bool:
     v = item.get(rule.field)
     op, target = rule.op, rule.value
@@ -21,8 +29,8 @@ def _eval(rule: FilterRule, item: Item) -> bool:
     if op == "lt":  return v <  target
     if op == "lte": return v <= target
     if op == "eq":  return v == target
-    if op == "matches":      return bool(re.search(target, str(v)))
-    if op == "not_matches":  return not re.search(target, str(v))
+    if op == "matches":      return bool(_safe_search(target, str(v)))
+    if op == "not_matches":  return not _safe_search(target, str(v))
     if op == "contains":     return target in v
     if op == "not_contains": return target not in v
     if op == "in":           return v in target

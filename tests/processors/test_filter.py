@@ -53,3 +53,60 @@ async def test_newer_than():
                                           op="newer_than", value="48h")])
     out = await p.process(ctx_with([fresh, stale]))
     assert len(out.items) == 1
+
+
+def test_invalid_regex_raises():
+    from sluice.processors.filter import _safe_search
+    with pytest.raises(ValueError):
+        _safe_search("[invalid", "text")
+
+
+def test_long_pattern_rejected():
+    from sluice.processors.filter import _safe_search
+    with pytest.raises(ValueError):
+        _safe_search("a" * 5001, "text")
+
+
+@pytest.mark.asyncio
+async def test_eq():
+    items = [mk(title="a"), mk(title="b")]
+    p = FilterProcessor(name="f", mode="keep_if_all",
+                        rules=[FilterRule(field="title", op="eq", value="a")])
+    out = await p.process(ctx_with(items))
+    assert [it.title for it in out.items] == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_not_in():
+    items = [mk(title="a"), mk(title="b")]
+    p = FilterProcessor(name="f", mode="keep_if_all",
+                        rules=[FilterRule(field="title", op="not_in", value=["a"])])
+    out = await p.process(ctx_with(items))
+    assert [it.title for it in out.items] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_max_length():
+    items = [mk(summary="x"*10), mk(summary="x"*200)]
+    p = FilterProcessor(name="f", mode="keep_if_all",
+                        rules=[FilterRule(field="summary", op="max_length", value=50)])
+    out = await p.process(ctx_with(items))
+    assert len(out.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_exists():
+    items = [mk(summary="x"), mk(summary=None)]
+    p = FilterProcessor(name="f", mode="keep_if_all",
+                        rules=[FilterRule(field="summary", op="exists")])
+    out = await p.process(ctx_with(items))
+    assert len(out.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_contains():
+    items = [mk(title="hello world"), mk(title="goodbye")]
+    p = FilterProcessor(name="f", mode="keep_if_all",
+                        rules=[FilterRule(field="title", op="contains", value="world")])
+    out = await p.process(ctx_with(items))
+    assert len(out.items) == 1
