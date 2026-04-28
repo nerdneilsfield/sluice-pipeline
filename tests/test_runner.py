@@ -252,6 +252,148 @@ async def test_backpressure_fires_after_dedupe(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_backpressure_fires_without_dedupe(tmp_path):
+    from sluice.config import PipelineLimits
+
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(tmp_path / "test.db")),
+        runtime=RuntimeConfig(timezone="UTC"),
+    )
+    pipe = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            RenderConfig(
+                type="render",
+                name="render",
+                template=str(template_path),
+                output_field="context.markdown",
+            ),
+        ],
+        sinks=[
+            FileMdSinkConfig(
+                id="out",
+                type="file_md",
+                input="context.markdown",
+                path=str(tmp_path / "{run_date}.md"),
+            )
+        ],
+        limits=PipelineLimits(max_items_per_run=1),
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=ProvidersConfig(providers=[]),
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+    fake_source = FakeSource([mk_item("g1"), mk_item("g2"), mk_item("g3")])
+
+    with patch("sluice.runner.build_sources", return_value=[fake_source]):
+        result = await run_pipeline(
+            bundle, pipeline_id="p", now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+    assert result.status == "success"
+    assert result.items_out == 1
+    assert (tmp_path / "2026-04-28.md").read_text() == "1"
+
+
+@pytest.mark.asyncio
+async def test_priced_primary_allows_free_fallback_model(tmp_path):
+    from sluice.config import BaseEndpoint, KeyConfig, LLMStageConfig, ModelEntry, Provider
+
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("{{ item.fulltext }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(tmp_path / "test.db")),
+        runtime=RuntimeConfig(timezone="UTC"),
+    )
+    providers = ProvidersConfig(
+        providers=[
+            Provider(
+                name="openrouter",
+                type="openai_compatible",
+                base=[
+                    BaseEndpoint(
+                        url="https://llm.example",
+                        key=[KeyConfig(value="K")],
+                    )
+                ],
+                models=[
+                    ModelEntry(
+                        model_name="glm",
+                        input_price_per_1k=0.01,
+                        output_price_per_1k=0.01,
+                    )
+                ],
+            ),
+            Provider(
+                name="ollama",
+                type="openai_compatible",
+                base=[
+                    BaseEndpoint(
+                        url="http://localhost:11434",
+                        key=[KeyConfig(value="local")],
+                    )
+                ],
+                models=[ModelEntry(model_name="llama3")],
+            ),
+        ]
+    )
+    pipe = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            LLMStageConfig(
+                type="llm_stage",
+                name="summarize",
+                mode="per_item",
+                input_field="fulltext",
+                output_field="summary",
+                prompt_file=str(prompt_path),
+                model="openrouter/glm",
+                fallback_model="ollama/llama3",
+            ),
+            RenderConfig(
+                type="render",
+                name="render",
+                template=str(template_path),
+                output_field="context.markdown",
+            ),
+        ],
+        sinks=[
+            FileMdSinkConfig(
+                id="out",
+                type="file_md",
+                input="context.markdown",
+                path=str(tmp_path / "{run_date}.md"),
+            )
+        ],
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=providers,
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+
+    with patch("sluice.runner.build_sources", return_value=[FakeSource([])]):
+        result = await run_pipeline(
+            bundle, pipeline_id="p", now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+    assert result.status == "success"
+
+
+@pytest.mark.asyncio
 async def test_dry_run_writes_nothing_external(tmp_path):
     from sluice.state.db import open_db
     from sluice.state.seen import SeenStore
@@ -509,7 +651,7 @@ async def test_requeued_items_pass_through_stages_before_dedupe(tmp_path, monkey
 
     assert result.status == "success"
     assert result.items_out == 0
-    assert not (tmp_path / "out_2026-04-28.md").exists()
+    assert (tmp_path / "out_2026-04-28.md").read_text() == "count=0"
 
     async with open_db(tmp_path / "d.db") as conn:
         rows = await FailureStore(conn).list("p", status="failed")

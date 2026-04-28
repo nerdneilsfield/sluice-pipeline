@@ -15,7 +15,7 @@ from sluice.core.errors import ConfigError
 from sluice.fetchers.chain import FetcherChain
 from sluice.llm.client import LLMClient, StageLLMConfig
 from sluice.llm.pool import ProviderPool
-from sluice.llm.provider import parse_model_spec
+from sluice.pricing import model_price
 from sluice.registry import (
     get_fetcher,
     get_source,
@@ -23,17 +23,6 @@ from sluice.registry import (
 from sluice.state.cache import UrlCacheStore
 from sluice.state.failures import FailureStore
 from sluice.state.seen import SeenStore
-
-
-def _model_price(pool: ProviderPool, model_spec: str) -> tuple[float, float]:
-    prov, model = parse_model_spec(model_spec)
-    rt = pool.runtimes.get(prov)
-    if rt is None:
-        raise ConfigError(f"unknown provider in model spec: {model_spec}")
-    m = rt._models.get(model)
-    if m is None:
-        raise ConfigError(f"unknown model in model spec: {model_spec}")
-    return (m.input_price_per_1k, m.output_price_per_1k)
 
 
 def build_sources(pipe: PipelineConfig):
@@ -197,7 +186,7 @@ def build_processors(
                     pipeline_id=pipe.id,
                     max_retries=pipe.failures.max_retries,
                     model_spec=st.model,
-                    price_lookup=lambda spec, pool=llm_pool: _model_price(pool, spec),
+                    price_lookup=lambda spec, pool=llm_pool: model_price(pool, spec),
                 )
             )
         elif isinstance(st, RenderConfig):

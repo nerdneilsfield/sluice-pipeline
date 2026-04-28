@@ -15,6 +15,7 @@ from sluice.context import PipelineContext, RunStats
 from sluice.llm.budget import RunBudget
 from sluice.llm.pool import ProviderPool
 from sluice.loader import ConfigBundle
+from sluice.pricing import model_price
 from sluice.processors.dedupe import item_key
 from sluice.state.cache import UrlCacheStore
 from sluice.state.db import open_db
@@ -82,7 +83,6 @@ async def run_pipeline(
             needs_fetcher_chain = any(isinstance(st, FetcherApplyConfig) for st in pipe.stages)
             chain = build_fetcher_chain(global_cfg, pipe, cache) if needs_fetcher_chain else None
 
-            from sluice.builders import _model_price as _mp
             from sluice.config import LLMStageConfig as _LLMStageConfig
             from sluice.core.errors import ConfigError as _ConfigError
 
@@ -90,18 +90,26 @@ async def run_pipeline(
                 for st in pipe.stages:
                     if not isinstance(st, _LLMStageConfig):
                         continue
-                    for spec in (st.model, st.retry_model, st.fallback_model, st.fallback_model_2):
+                    ip, op = model_price(pool, st.model)
+                    if ip == 0.0 and op == 0.0:
+                        raise _ConfigError(
+                            f"pipeline {pipe.id!r}: max_estimated_cost_usd "
+                            f"is set but primary model {st.model!r} has no "
+                            f"input/output_price_per_1k in providers.toml "
+                            f"— cost cap would silently never trip. "
+                            f"Set prices or set max_estimated_cost_usd = 0 "
+                            f"to disable the USD cap explicitly."
+                        )
+                    for spec in (st.retry_model, st.fallback_model, st.fallback_model_2):
                         if spec is None:
                             continue
-                        ip, op = _mp(pool, spec)
+                        ip, op = model_price(pool, spec)
                         if ip == 0.0 and op == 0.0:
-                            raise _ConfigError(
-                                f"pipeline {pipe.id!r}: max_estimated_cost_usd "
-                                f"is set but model {spec!r} has no "
-                                f"input/output_price_per_1k in providers.toml "
-                                f"— cost cap would silently never trip. "
-                                f"Set prices or set max_estimated_cost_usd = 0 "
-                                f"to disable the USD cap explicitly."
+                            log.warning(
+                                "pipeline %r: fallback model %r has no pricing; "
+                                "USD preflight uses the primary model price",
+                                pipe.id,
+                                spec,
                             )
 
             window_start, window_end = compute_window(
@@ -148,15 +156,23 @@ async def run_pipeline(
 
             from sluice.processors.dedupe import DedupeProcessor
 
+            def apply_item_cap() -> None:
+                if len(ctx.items) <= cap:
+                    return
+                ctx.items.sort(
+                    key=lambda i: i.published_at or min_dt,
+                    reverse=(policy == "drop_oldest"),
+                )
+                ctx.items = ctx.items[:cap]
+
+            has_dedupe = any(isinstance(p, DedupeProcessor) for p in procs)
+            if not has_dedupe:
+                apply_item_cap()
+
             for p in procs:
                 ctx = await p.process(ctx)
                 if isinstance(p, DedupeProcessor):
-                    if len(ctx.items) > cap:
-                        ctx.items.sort(
-                            key=lambda i: i.published_at or min_dt,
-                            reverse=(policy == "drop_oldest"),
-                        )
-                        ctx.items = ctx.items[:cap]
+                    apply_item_cap()
 
             ctx.stats.items_out = len(ctx.items)
             ctx.stats.llm_calls = budget.calls
