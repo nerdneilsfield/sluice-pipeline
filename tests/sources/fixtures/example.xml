@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Ex</title><link>https://x.com</link><description>d</description>
+  <item>
+    <title>Article A</title>
+    <link>https://x.com/a</link>
+    <guid>guid-a</guid>
+    <pubDate>Mon, 28 Apr 2026 06:00:00 +0000</pubDate>
+    <description>Summary A</description>
+  </item>
+  <item>
+    <title>Article B (no guid)</title>
+    <link>https://x.com/b?utm_source=feed</link>
+    <pubDate>Mon, 28 Apr 2026 04:00:00 +0000</pubDate>
+    <description>Summary B</description>
+  </item>
+</channel></rss>
