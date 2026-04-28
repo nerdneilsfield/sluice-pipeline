@@ -51,3 +51,28 @@ async def test_migration_is_atomic(tmp_path):
         assert "t1" in tables
     finally:
         db_module.MIGRATIONS = orig_migrations
+
+
+@pytest.mark.asyncio
+async def test_migration_allows_semicolon_inside_string_literal(tmp_path):
+    import aiosqlite
+
+    from sluice.state import db as db_module
+
+    orig_migrations = db_module.MIGRATIONS
+    fake_migrations = tmp_path / "fake_migrations"
+    fake_migrations.mkdir()
+    (fake_migrations / "0001_init.sql").write_text(
+        "CREATE TABLE t (value TEXT);\n"
+        "INSERT INTO t(value) VALUES ('hello; world');\n"
+    )
+    db_module.MIGRATIONS = fake_migrations
+    try:
+        async with open_db(tmp_path / "semi.db"):
+            pass
+        async with aiosqlite.connect(str(tmp_path / "semi.db")) as db:
+            async with db.execute("SELECT value FROM t") as cur:
+                row = await cur.fetchone()
+        assert row[0] == "hello; world"
+    finally:
+        db_module.MIGRATIONS = orig_migrations
