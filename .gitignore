@@ -1,0 +1,12 @@
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+data/
+out/
+configs/sluice.toml
+configs/providers.toml
+configs/pipelines/*.toml
+!configs/**/*.example
