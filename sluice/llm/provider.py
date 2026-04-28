@@ -31,6 +31,7 @@ class ProviderRuntime:
 
     def _build_weights(self):
         import os
+
         self._base_weights = []
         total = 0
         for i, b in enumerate(self.provider.base):
@@ -52,6 +53,7 @@ class ProviderRuntime:
     def _resolve_key(self, key_cfg: KeyConfig) -> str:
         if key_cfg.value.startswith("env:"):
             import os
+
             v = os.environ.get(key_cfg.value[4:])
             if v is None:
                 raise ValueError(f"env var {key_cfg.value[4:]} not set")
@@ -84,15 +86,17 @@ class ProviderRuntime:
                 available.append((ki, k, cw))
         if not available:
             # All keys cooling down — pick the one that expires soonest
-            soonest = min((self._cooldowns.get((bi, ki), float('inf')), ki, k)
-                          for ki, k, _ in kw)
+            soonest = min((self._cooldowns.get((bi, ki), float("inf")), ki, k) for ki, k, _ in kw)
             _, ki, k = soonest
             api_key = self._resolve_key(k)
             return Endpoint(
-                base_url=b.url, api_key=api_key,
+                base_url=b.url,
+                api_key=api_key,
                 extra_headers={**self.provider.extra_headers, **b.extra_headers},
-                model_entry=model_entry, provider_name=self.provider.name,
-                _base_ref=b, _key_ref=k,
+                model_entry=model_entry,
+                provider_name=self.provider.name,
+                _base_ref=b,
+                _key_ref=k,
             )
 
         # Weighted random among available keys
@@ -107,10 +111,13 @@ class ProviderRuntime:
 
         api_key = self._resolve_key(k)
         return Endpoint(
-            base_url=b.url, api_key=api_key,
+            base_url=b.url,
+            api_key=api_key,
             extra_headers={**self.provider.extra_headers, **b.extra_headers},
-            model_entry=model_entry, provider_name=self.provider.name,
-            _base_ref=b, _key_ref=k,
+            model_entry=model_entry,
+            provider_name=self.provider.name,
+            _base_ref=b,
+            _key_ref=k,
         )
 
     def cool_down_key(self, base_ref: BaseEndpoint, key_ref: KeyConfig):

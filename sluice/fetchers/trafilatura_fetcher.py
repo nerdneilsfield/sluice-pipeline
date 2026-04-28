@@ -1,7 +1,9 @@
 import asyncio
-import httpx, trafilatura
+import httpx
+import trafilatura
 from sluice.fetchers.base import register_fetcher
-from sluice.fetchers._ssrf import guard
+from sluice.fetchers._ssrf import guard, get_final_url
+
 
 @register_fetcher("trafilatura")
 class TrafilaturaFetcher:
@@ -12,13 +14,25 @@ class TrafilaturaFetcher:
 
     async def extract(self, url: str) -> str:
         guard(url)
-        async with httpx.AsyncClient(timeout=self.timeout,
-                                      follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False) as c:
             r = await c.get(url)
+            # Manually follow redirects with SSRF guard at each hop
+            redirect_count = 0
+            while r.is_redirect:
+                redirect_count += 1
+                if redirect_count > 10:
+                    raise httpx.TooManyRedirects(f"Too many redirects for {url}")
+                location = r.headers.get("location")
+                if not location:
+                    break
+                guard(location)
+                r = await c.get(location)
             r.raise_for_status()
+            get_final_url(r)  # guards all redirect hops
             html = r.text
         md = await asyncio.to_thread(
-            trafilatura.extract, html,
+            trafilatura.extract,
+            html,
             output_format="markdown",
             include_comments=False,
             include_tables=True,

@@ -6,7 +6,8 @@ from sluice.loader import load_all
 def test_load_all(tmp_path):
     (tmp_path / "configs").mkdir()
     (tmp_path / "configs" / "pipelines").mkdir()
-    (tmp_path / "configs" / "sluice.toml").write_text(textwrap.dedent("""
+    (tmp_path / "configs" / "sluice.toml").write_text(
+        textwrap.dedent("""
         [state]
         db_path = "./data/sluice.db"
         [runtime]
@@ -28,8 +29,10 @@ def test_load_all(tmp_path):
         [fetcher.cache]
         enabled = true
         ttl = "7d"
-    """))
-    (tmp_path / "configs" / "providers.toml").write_text(textwrap.dedent("""
+    """)
+    )
+    (tmp_path / "configs" / "providers.toml").write_text(
+        textwrap.dedent("""
         [[providers]]
         name = "glm"
         type = "openai_compatible"
@@ -39,8 +42,10 @@ def test_load_all(tmp_path):
         key = [{ value = "env:K", weight = 1 }]
         [[providers.models]]
         model_name = "glm-4-flash"
-    """))
-    (tmp_path / "configs" / "pipelines" / "p1.toml").write_text(textwrap.dedent("""
+    """)
+    )
+    (tmp_path / "configs" / "pipelines" / "p1.toml").write_text(
+        textwrap.dedent("""
         id = "p1"
         window = "24h"
         [[sources]]
@@ -54,7 +59,8 @@ def test_load_all(tmp_path):
         type = "file_md"
         input = "context.markdown"
         path  = "./out/{run_date}.md"
-    """))
+    """)
+    )
     bundle = load_all(tmp_path / "configs")
     assert bundle.global_cfg.state.db_path == "./data/sluice.db"
     assert bundle.providers.providers[0].name == "glm"

@@ -5,6 +5,7 @@ from sluice.cli import app
 
 runner = CliRunner()
 
+
 def test_deploy_creates_all_pipelines(tmp_path):
     cfg = tmp_path / "configs"
     (cfg / "pipelines").mkdir(parents=True)
@@ -37,16 +38,24 @@ key=[{value="env:K", weight=1}]
 [[providers.models]]
 model_name="m"
 """)
-    (cfg / "pipelines" / "p1.toml").write_text('id="p1"\nwindow="24h"\n[[sources]]\ntype="rss"\nurl="https://x"\n[[stages]]\nname="r"\ntype="render"\ntemplate="/dev/null"\noutput_field="context.x"\n[[sinks]]\nid="s"\ntype="file_md"\ninput="context.x"\npath="/dev/null"\n')
-    (cfg / "pipelines" / "p2.toml").write_text('id="p2"\nwindow="24h"\n[[sources]]\ntype="rss"\nurl="https://y"\n[[stages]]\nname="r"\ntype="render"\ntemplate="/dev/null"\noutput_field="context.x"\n[[sinks]]\nid="s"\ntype="file_md"\ninput="context.x"\npath="/dev/null"\n')
+    (cfg / "pipelines" / "p1.toml").write_text(
+        'id="p1"\nwindow="24h"\n[[sources]]\ntype="rss"\nurl="https://x"\n[[stages]]\nname="r"\ntype="render"\ntemplate="/dev/null"\noutput_field="context.x"\n[[sinks]]\nid="s"\ntype="file_md"\ninput="context.x"\npath="/dev/null"\n'
+    )
+    (cfg / "pipelines" / "p2.toml").write_text(
+        'id="p2"\nwindow="24h"\n[[sources]]\ntype="rss"\nurl="https://y"\n[[stages]]\nname="r"\ntype="render"\ntemplate="/dev/null"\noutput_field="context.x"\n[[sinks]]\nid="s"\ntype="file_md"\ninput="context.x"\npath="/dev/null"\n'
+    )
 
-    with patch("prefect.client.schemas.schedules.CronSchedule") as mock_schedule, \
-         patch("sluice.flow.build_flow") as mock_build_flow, \
-         patch("prefect.serve") as mock_serve:
+    with (
+        patch("prefect.client.schemas.schedules.CronSchedule") as mock_schedule,
+        patch("sluice.flow.build_flow") as mock_build_flow,
+        patch("prefect.serve") as mock_serve,
+    ):
+
         def make_flow(pid):
             flow_obj = MagicMock()
             flow_obj.to_deployment = MagicMock(return_value=MagicMock(name=f"sluice-{pid}"))
             return flow_obj
+
         mock_build_flow.side_effect = make_flow
         result = runner.invoke(app, ["deploy", "--config-dir", str(cfg)])
 

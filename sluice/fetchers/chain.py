@@ -1,10 +1,17 @@
 from sluice.core.errors import AllFetchersFailed
 from sluice.state.cache import UrlCacheStore
 
+
 class FetcherChain:
-    def __init__(self, fetchers: list, *, min_chars: int,
-                 on_all_failed: str, cache: UrlCacheStore | None,
-                 ttl_seconds: int):
+    def __init__(
+        self,
+        fetchers: list,
+        *,
+        min_chars: int,
+        on_all_failed: str,
+        cache: UrlCacheStore | None,
+        ttl_seconds: int,
+    ):
         self.fetchers = fetchers
         self.min_chars = min_chars
         self.on_all_failed = on_all_failed

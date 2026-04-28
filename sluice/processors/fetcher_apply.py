@@ -1,11 +1,13 @@
 from sluice.context import PipelineContext
 from sluice.processors.dedupe import item_key
 
+
 class FetcherApplyProcessor:
     name = "fetcher_apply"
 
-    def __init__(self, *, name, chain, write_field, skip_if_field_longer_than,
-                 failures, max_retries):
+    def __init__(
+        self, *, name, chain, write_field, skip_if_field_longer_than, failures, max_retries
+    ):
         self.name = name
         self.chain = chain
         self.write_field = write_field
@@ -17,8 +19,7 @@ class FetcherApplyProcessor:
         survivors = []
         for it in ctx.items:
             existing = it.raw_summary or ""
-            if (self.skip_if_field_longer_than
-                    and len(existing) >= self.skip_if_field_longer_than):
+            if self.skip_if_field_longer_than and len(existing) >= self.skip_if_field_longer_than:
                 setattr(it, self.write_field, existing)
                 survivors.append(it)
                 continue
@@ -27,9 +28,14 @@ class FetcherApplyProcessor:
             except Exception as e:
                 if self.failures is not None:
                     await self.failures.record(
-                        it.pipeline_id, item_key(it), it,
-                        stage=self.name, error_class=type(e).__name__,
-                        error_msg=str(e), max_retries=self.max_retries)
+                        it.pipeline_id,
+                        item_key(it),
+                        it,
+                        stage=self.name,
+                        error_class=type(e).__name__,
+                        error_msg=str(e),
+                        max_retries=self.max_retries,
+                    )
                 continue
             setattr(it, self.write_field, md)
             survivors.append(it)

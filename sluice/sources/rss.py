@@ -9,9 +9,16 @@ from sluice.sources.base import register_source
 
 @register_source("rss")
 class RssSource:
-    def __init__(self, *, url: str, pipeline_id: str, source_id: str,
-                 tag: str | None = None, name: str | None = None,
-                 timeout: float = 30.0):
+    def __init__(
+        self,
+        *,
+        url: str,
+        pipeline_id: str,
+        source_id: str,
+        tag: str | None = None,
+        name: str | None = None,
+        timeout: float = 30.0,
+    ):
         self.url = url
         self.pipeline_id = pipeline_id
         self.source_id = source_id
@@ -19,8 +26,7 @@ class RssSource:
         self.name = name or source_id
         self.timeout = timeout
 
-    async def fetch(self, window_start: datetime, window_end: datetime
-                    ) -> AsyncIterator[Item]:
+    async def fetch(self, window_start: datetime, window_end: datetime) -> AsyncIterator[Item]:
         async with httpx.AsyncClient(timeout=self.timeout) as c:
             r = await c.get(self.url)
             r.raise_for_status()
@@ -41,8 +47,7 @@ class RssSource:
                 url=canonical_url(getattr(e, "link", "")),
                 title=getattr(e, "title", "") or "",
                 published_at=published,
-                raw_summary=getattr(e, "summary", None)
-                            or getattr(e, "description", None),
+                raw_summary=getattr(e, "summary", None) or getattr(e, "description", None),
                 tags=list(self.tags),
             )
 

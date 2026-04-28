@@ -2,6 +2,7 @@ import httpx
 from sluice.fetchers.base import register_fetcher
 from sluice.fetchers._ssrf import guard
 
+
 @register_fetcher("firecrawl")
 class FirecrawlFetcher:
     name = "firecrawl"
@@ -18,9 +19,11 @@ class FirecrawlFetcher:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         async with httpx.AsyncClient(timeout=self.timeout) as c:
-            r = await c.post(f"{self.base_url}/v1/scrape",
-                             headers=headers,
-                             json={"url": url, "formats": ["markdown"]})
+            r = await c.post(
+                f"{self.base_url}/v1/scrape",
+                headers=headers,
+                json={"url": url, "formats": ["markdown"]}
+            )
             r.raise_for_status()
             data = r.json()
         return data.get("data", {}).get("markdown", "") or ""

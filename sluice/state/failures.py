@@ -4,12 +4,16 @@ from dataclasses import asdict
 import aiosqlite
 from sluice.core.item import Item, Attachment
 
-def _now() -> str: return datetime.now(timezone.utc).isoformat()
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 def _to_json(it: Item) -> str:
     d = asdict(it)
     d["published_at"] = it.published_at.isoformat() if it.published_at else None
     return json.dumps(d, ensure_ascii=False)
+
 
 def _from_json(s: str) -> Item:
     d = json.loads(s)
@@ -18,13 +22,22 @@ def _from_json(s: str) -> Item:
     d["attachments"] = [Attachment(**a) for a in d.get("attachments", [])]
     return Item(**d)
 
+
 class FailureStore:
     def __init__(self, db: aiosqlite.Connection):
         self.db = db
 
-    async def record(self, pipeline_id: str, item_key: str, item: Item, *,
-                     stage: str, error_class: str, error_msg: str,
-                     max_retries: int) -> None:
+    async def record(
+        self,
+        pipeline_id: str,
+        item_key: str,
+        item: Item,
+        *,
+        stage: str,
+        error_class: str,
+        error_msg: str,
+        max_retries: int,
+    ) -> None:
         now = _now()
         await self.db.execute(
             """INSERT INTO failed_items
@@ -38,15 +51,24 @@ class FailureStore:
                  error_class = excluded.error_class,
                  error_msg = excluded.error_msg,
                  last_failed_at = excluded.last_failed_at""",
-            (pipeline_id, item_key, item.url, stage, error_class,
-             error_msg, _to_json(item), now, now, max_retries),
+            (
+                pipeline_id,
+                item_key,
+                item.url,
+                stage,
+                error_class,
+                error_msg,
+                _to_json(item),
+                now,
+                now,
+                max_retries,
+            ),
         )
         await self.db.commit()
 
     async def requeue(self, pipeline_id: str) -> list[Item]:
         async with self.db.execute(
-            "SELECT item_json FROM failed_items "
-            "WHERE pipeline_id=? AND status='failed'",
+            "SELECT item_json FROM failed_items WHERE pipeline_id=? AND status='failed'",
             (pipeline_id,),
         ) as cur:
             rows = await cur.fetchall()
@@ -54,8 +76,7 @@ class FailureStore:
 
     async def mark_resolved(self, pipeline_id: str, item_key: str) -> None:
         await self.db.execute(
-            "UPDATE failed_items SET status='resolved' "
-            "WHERE pipeline_id=? AND item_key=?",
+            "UPDATE failed_items SET status='resolved' WHERE pipeline_id=? AND item_key=?",
             (pipeline_id, item_key),
         )
         await self.db.commit()

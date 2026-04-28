@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from sluice.state.db import open_db
 from sluice.state.cache import UrlCacheStore
 
+
 @pytest.mark.asyncio
 async def test_get_set_expire(tmp_path):
     async with open_db(tmp_path / "d.db") as db:

@@ -2,12 +2,14 @@ from pathlib import Path
 from sluice.sinks.base import Sink, register_sink
 from sluice.context import PipelineContext
 
+
 @register_sink("file_md")
 class FileMdSink(Sink):
     type = "file_md"
 
-    def __init__(self, *, id: str, input: str, path: str,
-                 mode: str = "upsert", emit_on_empty: bool = False):
+    def __init__(
+        self, *, id: str, input: str, path: str, mode: str = "upsert", emit_on_empty: bool = False
+    ):
         super().__init__(id=id, mode=mode, emit_on_empty=emit_on_empty)
         self.input = input
         self.path_template = path
@@ -15,11 +17,13 @@ class FileMdSink(Sink):
     def _resolve_path(self, ctx: PipelineContext) -> Path:
         safe_pipeline_id = ctx.pipeline_id.replace("..", "_").replace("/", "_")
         safe_run_key = ctx.run_key.replace("..", "_").replace("/", "_")
-        return Path(self.path_template.format(
-            run_date=ctx.run_date,
-            pipeline_id=safe_pipeline_id,
-            run_key=safe_run_key,
-        ))
+        return Path(
+            self.path_template.format(
+                run_date=ctx.run_date,
+                pipeline_id=safe_pipeline_id,
+                run_key=safe_run_key,
+            )
+        )
 
     def _content(self, ctx: PipelineContext) -> str:
         head, _, key = self.input.partition(".")

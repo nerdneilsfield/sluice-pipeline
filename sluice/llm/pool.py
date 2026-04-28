@@ -4,6 +4,7 @@ from sluice.config import ProvidersConfig
 from sluice.llm.provider import ProviderRuntime, Endpoint, parse_model_spec
 from sluice.core.errors import ConfigError
 
+
 class ProviderPool:
     def __init__(self, cfg: ProvidersConfig, *, seed: int | None = None):
         self.runtimes = {p.name: ProviderRuntime(p) for p in cfg.providers}

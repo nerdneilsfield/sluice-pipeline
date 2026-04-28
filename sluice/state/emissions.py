@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import aiosqlite
 
+
 @dataclass
 class Emission:
     sink_id: str
@@ -9,8 +10,10 @@ class Emission:
     external_id: str
     emitted_at: str
 
+
 class EmissionStore:
-    def __init__(self, db: aiosqlite.Connection): self.db = db
+    def __init__(self, db: aiosqlite.Connection):
+        self.db = db
 
     async def lookup(self, pipeline_id, run_key, sink_id) -> Emission | None:
         async with self.db.execute(
@@ -27,7 +30,13 @@ class EmissionStore:
             "INSERT OR REPLACE INTO sink_emissions "
             "(pipeline_id, run_key, sink_id, sink_type, external_id, emitted_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (pipeline_id, run_key, sink_id, sink_type, external_id,
-             datetime.now(timezone.utc).isoformat()),
+            (
+                pipeline_id,
+                run_key,
+                sink_id,
+                sink_type,
+                external_id,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
         await self.db.commit()

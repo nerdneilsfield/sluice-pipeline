@@ -4,10 +4,12 @@ import aiosqlite
 
 MIGRATIONS = Path(__file__).parent / "migrations"
 
+
 async def current_version(db: aiosqlite.Connection) -> int:
     async with db.execute("PRAGMA user_version") as cur:
         row = await cur.fetchone()
     return row[0] if row else 0
+
 
 async def _migrate(db: aiosqlite.Connection) -> None:
     files = sorted(MIGRATIONS.glob("*.sql"))
@@ -28,6 +30,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         except Exception:
             await db.rollback()
             raise
+
 
 @asynccontextmanager
 async def open_db(path):

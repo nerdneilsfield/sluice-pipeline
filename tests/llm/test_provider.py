@@ -2,26 +2,36 @@ import pytest, random
 from sluice.config import Provider, BaseEndpoint, KeyConfig, ModelEntry
 from sluice.llm.provider import ProviderRuntime, parse_model_spec
 
+
 def make_provider():
     return Provider(
-        name="glm", type="openai_compatible",
-        base=[BaseEndpoint(url="https://a", weight=3,
-                           key=[KeyConfig(value="env:K1", weight=2),
-                                KeyConfig(value="env:K2", weight=1)]),
-              BaseEndpoint(url="https://b", weight=1,
-                           key=[KeyConfig(value="env:K3", weight=1)])],
-        models=[ModelEntry(model_name="glm-4-flash",
-                           input_price_per_1k=0.0001,
-                           output_price_per_1k=0.0001)],
+        name="glm",
+        type="openai_compatible",
+        base=[
+            BaseEndpoint(
+                url="https://a",
+                weight=3,
+                key=[KeyConfig(value="env:K1", weight=2), KeyConfig(value="env:K2", weight=1)],
+            ),
+            BaseEndpoint(url="https://b", weight=1, key=[KeyConfig(value="env:K3", weight=1)]),
+        ],
+        models=[
+            ModelEntry(
+                model_name="glm-4-flash", input_price_per_1k=0.0001, output_price_per_1k=0.0001
+            )
+        ],
     )
+
 
 def test_parse_model_spec():
     assert parse_model_spec("glm/glm-4-flash") == ("glm", "glm-4-flash")
     with pytest.raises(ValueError):
         parse_model_spec("noslash")
 
+
 def test_weighted_distribution(monkeypatch):
-    monkeypatch.setenv("K1", "v1"); monkeypatch.setenv("K2", "v2")
+    monkeypatch.setenv("K1", "v1")
+    monkeypatch.setenv("K2", "v2")
     monkeypatch.setenv("K3", "v3")
     rt = ProviderRuntime(make_provider())
     rng = random.Random(0)
@@ -32,8 +42,10 @@ def test_weighted_distribution(monkeypatch):
     ratio = counts["https://a"] / counts["https://b"]
     assert 2.5 <= ratio <= 3.5
 
+
 def test_quota_cooldown(monkeypatch):
-    monkeypatch.setenv("K1", "v1"); monkeypatch.setenv("K2", "v2")
+    monkeypatch.setenv("K1", "v1")
+    monkeypatch.setenv("K2", "v2")
     monkeypatch.setenv("K3", "v3")
     p = make_provider()
     p.base[0].key[0].quota_duration = 60

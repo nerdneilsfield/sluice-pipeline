@@ -2,6 +2,7 @@ import pytest
 from sluice.state.db import open_db
 from sluice.state.emissions import EmissionStore
 
+
 @pytest.mark.asyncio
 async def test_lookup_insert(tmp_path):
     async with open_db(tmp_path / "d.db") as db:
@@ -11,6 +12,7 @@ async def test_lookup_insert(tmp_path):
         rec = await e.lookup("p", "p/2026-04-28", "notion_main")
         assert rec.external_id == "page-abc"
         assert rec.sink_type == "notion"
+
 
 @pytest.mark.asyncio
 async def test_two_sinks_same_type_no_collision(tmp_path):

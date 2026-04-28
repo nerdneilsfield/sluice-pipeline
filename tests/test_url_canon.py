@@ -10,10 +10,7 @@ def test_strip_fragment():
 
 
 def test_strip_tracking_params():
-    assert (
-        canonical_url("https://x.com/a?utm_source=foo&id=42&fbclid=z")
-        == "https://x.com/a?id=42"
-    )
+    assert canonical_url("https://x.com/a?utm_source=foo&id=42&fbclid=z") == "https://x.com/a?id=42"
 
 
 def test_strip_all_known_trackers():

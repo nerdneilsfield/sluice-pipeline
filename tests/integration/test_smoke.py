@@ -20,14 +20,21 @@ RSS = """<?xml version='1.0'?><rss><channel>
 <guid>g-y</guid><pubDate>Mon, 28 Apr 2026 04:00:00 +0000</pubDate></item>
 </channel></rss>"""
 
-ART = "<html><body><article>" + ("This is a long article about AI. " * 40) + "</article></body></html>"
+ART = (
+    "<html><body><article>"
+    + ("This is a long article about AI. " * 40)
+    + "</article></body></html>"
+)
+
 
 @pytest.mark.asyncio
 async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
     monkeypatch.setenv("K", "v")
 
-    cfg = tmp_path / "configs"; (cfg / "pipelines").mkdir(parents=True)
-    (cfg / "sluice.toml").write_text(textwrap.dedent(f"""
+    cfg = tmp_path / "configs"
+    (cfg / "pipelines").mkdir(parents=True)
+    (cfg / "sluice.toml").write_text(
+        textwrap.dedent(f"""
         [state]
         db_path = "{tmp_path}/d.db"
         [runtime]
@@ -44,8 +51,10 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
         [fetcher.cache]
         enabled = false
         ttl = "1d"
-    """))
-    (cfg / "providers.toml").write_text(textwrap.dedent("""
+    """)
+    )
+    (cfg / "providers.toml").write_text(
+        textwrap.dedent("""
         [[providers]]
         name = "n"
         type = "openai_compatible"
@@ -57,13 +66,19 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
         model_name = "m"
         input_price_per_1k = 0.0001
         output_price_per_1k = 0.0001
-    """))
-    sp = tmp_path / "sum.md"; sp.write_text("S: {{ item.fulltext }}")
-    dp = tmp_path / "daily.md"; dp.write_text("Brief({{ items|length }})")
-    tp = tmp_path / "tpl.j2"; tp.write_text(
+    """)
+    )
+    sp = tmp_path / "sum.md"
+    sp.write_text("S: {{ item.fulltext }}")
+    dp = tmp_path / "daily.md"
+    dp.write_text("Brief({{ items|length }})")
+    tp = tmp_path / "tpl.j2"
+    tp.write_text(
         "# {{ run_date }}\\n{{ context.daily_brief }}\\n"
-        "{% for it in items %}- {{ it.summary }}\\n{% endfor %}")
-    (cfg / "pipelines" / "p.toml").write_text(textwrap.dedent(f"""
+        "{% for it in items %}- {{ it.summary }}\\n{% endfor %}"
+    )
+    (cfg / "pipelines" / "p.toml").write_text(
+        textwrap.dedent(f"""
         id = "p"
         window = "24h"
         timezone = "UTC"
@@ -104,27 +119,41 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
         type = "file_md"
         input = "context.markdown"
         path = "{tmp_path}/out_{{run_date}}.md"
-    """))
+    """)
+    )
 
     bundle = load_all(cfg)
     fake_now = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
     with respx.mock() as r:
-        r.get("https://feed.example/rss").mock(
-            return_value=httpx.Response(200, text=RSS))
+        r.get("https://feed.example/rss").mock(return_value=httpx.Response(200, text=RSS))
         r.get("https://o.example/x").mock(return_value=httpx.Response(200, text=ART))
         r.get("https://a.example/y").mock(return_value=httpx.Response(200, text=ART))
         # 2 per_item summarize calls + 1 aggregate brief
-        r.post("https://llm.example/chat/completions").mock(side_effect=[
-            httpx.Response(200, json={
-                "choices": [{"message": {"content": "Summary X"}}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 10}}),
-            httpx.Response(200, json={
-                "choices": [{"message": {"content": "Summary Y"}}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 10}}),
-            httpx.Response(200, json={
-                "choices": [{"message": {"content": "TODAY'S BRIEF"}}],
-                "usage": {"prompt_tokens": 200, "completion_tokens": 20}}),
-        ])
+        r.post("https://llm.example/chat/completions").mock(
+            side_effect=[
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "Summary X"}}],
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "Summary Y"}}],
+                        "usage": {"prompt_tokens": 100, "completion_tokens": 10},
+                    },
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [{"message": {"content": "TODAY'S BRIEF"}}],
+                        "usage": {"prompt_tokens": 200, "completion_tokens": 20},
+                    },
+                ),
+            ]
+        )
         result = await run_pipeline(bundle, pipeline_id="p", now=fake_now)
 
     assert result.status == "success" and result.items_out == 2

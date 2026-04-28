@@ -1,7 +1,11 @@
 from typing import Protocol, AsyncIterator
-from datetime import timedelta
 from dataclasses import dataclass
 from sluice.core.item import Item
+
+# Forward references avoid circular imports
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from sluice.context import PipelineContext
 
 
 class Source(Protocol):
@@ -19,7 +23,7 @@ class Fetcher(Protocol):
 class Processor(Protocol):
     name: str
 
-    async def process(self, ctx) -> "PipelineContext": ...
+    async def process(self, ctx) -> "PipelineContext": ...  # noqa: F821
 
 
 class Sink(Protocol):

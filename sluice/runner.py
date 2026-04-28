@@ -16,10 +16,14 @@ from sluice.llm.budget import RunBudget
 from sluice.window import compute_window
 from sluice.processors.dedupe import item_key
 from sluice.builders import (
-    build_sources, build_fetcher_chain, build_processors, build_sinks,
+    build_sources,
+    build_fetcher_chain,
+    build_processors,
+    build_sinks,
 )
 
 log = logging.getLogger(__name__)
+
 
 @dataclass
 class RunResult:
@@ -30,18 +34,22 @@ class RunResult:
     items_out: int = 0
     error: str | None = None
 
+
 def _resolve_db_path(global_cfg: GlobalConfig, pipe: PipelineConfig) -> str:
     return pipe.state.db_path or global_cfg.state.db_path
+
 
 def _resolve_tz(global_cfg: GlobalConfig, pipe: PipelineConfig) -> ZoneInfo:
     return ZoneInfo(pipe.timezone or global_cfg.runtime.timezone)
 
+
 def _run_key(pipe_id: str, run_date: str) -> str:
     return f"{pipe_id}/{run_date}"
 
-async def run_pipeline(bundle: ConfigBundle, *, pipeline_id: str,
-                       now: datetime | None = None,
-                       dry_run: bool = False) -> RunResult:
+
+async def run_pipeline(
+    bundle: ConfigBundle, *, pipeline_id: str, now: datetime | None = None, dry_run: bool = False
+) -> RunResult:
     pipe = bundle.pipelines[pipeline_id]
     global_cfg = bundle.global_cfg
     tz = _resolve_tz(global_cfg, pipe)
@@ -52,42 +60,46 @@ async def run_pipeline(bundle: ConfigBundle, *, pipeline_id: str,
 
     db_path = _resolve_db_path(global_cfg, pipe)
     async with open_db(db_path) as db:
-        seen = SeenStore(db); failures = FailureStore(db)
-        emissions = EmissionStore(db); cache = UrlCacheStore(db)
+        seen = SeenStore(db)
+        failures = FailureStore(db)
+        emissions = EmissionStore(db)
+        cache = UrlCacheStore(db)
         runlog = RunLog(db)
         await runlog.start(pipe.id, run_key)
 
-        budget = RunBudget(max_calls=pipe.limits.max_llm_calls_per_run,
-                           max_usd=pipe.limits.max_estimated_cost_usd)
-        pool = ProviderPool(bundle.providers)
-        chain = build_fetcher_chain(global_cfg, pipe, cache)
-
-        from sluice.config import LLMStageConfig as _LLMStageConfig
-        from sluice.builders import _model_price as _mp
-        from sluice.core.errors import ConfigError as _ConfigError
-        if pipe.limits.max_estimated_cost_usd > 0:
-            for st in pipe.stages:
-                if not isinstance(st, _LLMStageConfig):
-                    continue
-                for spec in (st.model, st.retry_model,
-                             st.fallback_model, st.fallback_model_2):
-                    if spec is None:
-                        continue
-                    ip, op = _mp(pool, spec)
-                    if ip == 0.0 and op == 0.0:
-                        raise _ConfigError(
-                            f"pipeline {pipe.id!r}: max_estimated_cost_usd "
-                            f"is set but model {spec!r} has no "
-                            f"input/output_price_per_1k in providers.toml "
-                            f"— cost cap would silently never trip. "
-                            f"Set prices or set max_estimated_cost_usd = 0 "
-                            f"to disable the USD cap explicitly."
-                        )
-
+        pool: ProviderPool | None = None
         try:
+            budget = RunBudget(
+                max_calls=pipe.limits.max_llm_calls_per_run, max_usd=pipe.limits.max_estimated_cost_usd
+            )
+            pool = ProviderPool(bundle.providers)
+            chain = build_fetcher_chain(global_cfg, pipe, cache)
+
+            from sluice.config import LLMStageConfig as _LLMStageConfig
+            from sluice.builders import _model_price as _mp
+            from sluice.core.errors import ConfigError as _ConfigError
+
+            if pipe.limits.max_estimated_cost_usd > 0:
+                for st in pipe.stages:
+                    if not isinstance(st, _LLMStageConfig):
+                        continue
+                    for spec in (st.model, st.retry_model, st.fallback_model, st.fallback_model_2):
+                        if spec is None:
+                            continue
+                        ip, op = _mp(pool, spec)
+                        if ip == 0.0 and op == 0.0:
+                            raise _ConfigError(
+                                f"pipeline {pipe.id!r}: max_estimated_cost_usd "
+                                f"is set but model {spec!r} has no "
+                                f"input/output_price_per_1k in providers.toml "
+                                f"— cost cap would silently never trip. "
+                                f"Set prices or set max_estimated_cost_usd = 0 "
+                                f"to disable the USD cap explicitly."
+                            )
+
             window_start, window_end = compute_window(
-                now=now, window=pipe.window,
-                lookback_overlap=pipe.lookback_overlap)
+                now=now, window=pipe.window, lookback_overlap=pipe.lookback_overlap
+            )
 
             sources = build_sources(pipe)
             collected = []
@@ -99,37 +111,53 @@ async def run_pipeline(bundle: ConfigBundle, *, pipeline_id: str,
             requeued_keys = {item_key(it) for it in requeue}
 
             ctx = PipelineContext(
-                pipeline_id=pipe.id, run_key=run_key, run_date=run_date,
-                items=collected, context={},
+                pipeline_id=pipe.id,
+                run_key=run_key,
+                run_date=run_date,
+                items=collected,
+                context={},
                 stats=RunStats(items_in=len(collected) + len(requeue)),
                 items_resolved_from_failures=list(requeue),
             )
 
             procs = build_processors(
-                pipe=pipe, global_cfg=global_cfg, seen=seen,
-                failures=failures, fetcher_chain=chain, llm_pool=pool,
-                budget=budget, dry_run=dry_run,
+                pipe=pipe,
+                global_cfg=global_cfg,
+                seen=seen,
+                failures=failures,
+                fetcher_chain=chain,
+                llm_pool=pool,
+                budget=budget,
+                dry_run=dry_run,
             )
 
             from sluice.processors.dedupe import DedupeProcessor
+
             cap = pipe.limits.max_items_per_run
             policy = pipe.limits.item_overflow_policy
             min_dt = datetime.min.replace(tzinfo=timezone.utc)
             requeue_pending = list(requeue)
+
+            # If there's no dedupe stage, merge requeued items before the first
+            # processor so they don't skip any stage.
+            has_dedupe = any(isinstance(p, DedupeProcessor) for p in procs)
+            if not has_dedupe and requeue_pending:
+                ctx.items.extend(requeue_pending)
+                requeue_pending = []
+
             for p in procs:
                 ctx = await p.process(ctx)
                 if isinstance(p, DedupeProcessor):
                     if len(ctx.items) > cap:
                         ctx.items.sort(
                             key=lambda i: i.published_at or min_dt,
-                            reverse=(policy == "drop_oldest"))
+                            reverse=(policy == "drop_oldest"),
+                        )
                         ctx.items = ctx.items[:cap]
-                # Merge requeued items AFTER every stage (not just after dedupe).
-                # They bypass dedupe by design; if there's no dedupe stage,
-                # they still need to enter the pipeline.
-                if requeue_pending:
-                    ctx.items.extend(requeue_pending)
-                    requeue_pending = []
+                    # Merge requeued items AFTER dedupe so they bypass it.
+                    if requeue_pending:
+                        ctx.items.extend(requeue_pending)
+                        requeue_pending = []
 
             ctx.stats.items_out = len(ctx.items)
             ctx.stats.llm_calls = budget.calls
@@ -147,18 +175,25 @@ async def run_pipeline(bundle: ConfigBundle, *, pipeline_id: str,
                     await failures.mark_resolved(pipe.id, k)
 
             await runlog.update_stats(
-                pipe.id, run_key,
-                items_in=ctx.stats.items_in, items_out=ctx.stats.items_out,
+                pipe.id,
+                run_key,
+                items_in=ctx.stats.items_in,
+                items_out=ctx.stats.items_out,
                 llm_calls=ctx.stats.llm_calls,
-                est_cost_usd=ctx.stats.est_cost_usd)
+                est_cost_usd=ctx.stats.est_cost_usd,
+            )
             await runlog.finish(pipe.id, run_key, status="success")
-            return RunResult(pipeline_id=pipe.id, run_key=run_key,
-                             status="success",
-                             items_in=ctx.stats.items_in,
-                             items_out=ctx.stats.items_out)
+            return RunResult(
+                pipeline_id=pipe.id,
+                run_key=run_key,
+                status="success",
+                items_in=ctx.stats.items_in,
+                items_out=ctx.stats.items_out,
+            )
         except Exception as e:
             log.exception("pipeline failed")
-            await runlog.finish(pipe.id, run_key, status="failed",
-                                error_msg=str(e))
-            return RunResult(pipeline_id=pipe.id, run_key=run_key,
-                             status="failed", error=str(e))
+            await runlog.finish(pipe.id, run_key, status="failed", error_msg=str(e))
+            return RunResult(pipeline_id=pipe.id, run_key=run_key, status="failed", error=str(e))
+        finally:
+            if pool is not None:
+                await pool.aclose()

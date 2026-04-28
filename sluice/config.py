@@ -1,5 +1,5 @@
-from typing import Literal, Any
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Annotated, Any, Literal, Union
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class KeyConfig(BaseModel):
@@ -40,9 +40,6 @@ class ProvidersConfig(BaseModel):
     providers: list[Provider]
 
 
-from typing import Annotated, Any, Union
-from pydantic import model_validator
-
 # ---------- Sources ----------
 class RssSourceConfig(BaseModel):
     type: Literal["rss"]
@@ -58,10 +55,23 @@ SourceConfig = Annotated[
 
 # ---------- Filter rules ----------
 FilterOp = Literal[
-    "gt", "gte", "lt", "lte", "eq",
-    "matches", "not_matches", "contains", "not_contains",
-    "in", "not_in", "min_length", "max_length",
-    "newer_than", "older_than", "exists", "not_exists",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "eq",
+    "matches",
+    "not_matches",
+    "contains",
+    "not_contains",
+    "in",
+    "not_in",
+    "min_length",
+    "max_length",
+    "newer_than",
+    "older_than",
+    "exists",
+    "not_exists",
 ]
 
 
@@ -149,11 +159,16 @@ class RenderConfig(BaseModel):
 
 StageConfig = Annotated[
     Union[
-        DedupeConfig, FetcherApplyConfig, FilterConfig,
-        FieldFilterConfig, LLMStageConfig, RenderConfig,
+        DedupeConfig,
+        FetcherApplyConfig,
+        FilterConfig,
+        FieldFilterConfig,
+        LLMStageConfig,
+        RenderConfig,
     ],
     Field(discriminator="type"),
 ]
+
 
 # ---------- Sinks ----------
 class CommonSinkFields(BaseModel):
@@ -183,6 +198,7 @@ SinkConfig = Annotated[
     Union[FileMdSinkConfig, NotionSinkConfig],
     Field(discriminator="type"),
 ]
+
 
 # ---------- Pipeline ----------
 class FetcherChainOverride(BaseModel):
@@ -254,10 +270,10 @@ class PipelineConfig(BaseModel):
     stages: list[StageConfig]
     sinks: list[SinkConfig]
     fetcher: FetcherChainOverride = Field(default_factory=FetcherChainOverride)
-    cache:   CacheOverride         = Field(default_factory=CacheOverride)
-    limits:  PipelineLimits        = Field(default_factory=PipelineLimits)
-    failures: PipelineFailures     = Field(default_factory=PipelineFailures)
-    state:   StateConfig           = Field(default_factory=StateConfig)
+    cache: CacheOverride = Field(default_factory=CacheOverride)
+    limits: PipelineLimits = Field(default_factory=PipelineLimits)
+    failures: PipelineFailures = Field(default_factory=PipelineFailures)
+    state: StateConfig = Field(default_factory=StateConfig)
 
     @model_validator(mode="after")
     def _unique_sink_ids(self):

@@ -5,6 +5,7 @@ from sluice.config import FieldOp
 
 _DC_NAMES = {f.name for f in dc_fields(Item)}
 
+
 def _truncate(it: Item, field: str, n: int):
     if "." in field:
         head, _, tail = field.partition(".")
@@ -17,6 +18,7 @@ def _truncate(it: Item, field: str, n: int):
         if isinstance(v, str):
             setattr(it, field, v[:n])
 
+
 def _drop(it: Item, field: str):
     if "." in field:
         head, _, tail = field.partition(".")
@@ -27,10 +29,13 @@ def _drop(it: Item, field: str):
     if field in _DC_NAMES:
         setattr(it, field, None)
 
+
 class FieldFilterProcessor:
     name = "field_filter"
+
     def __init__(self, *, name: str, ops: list[FieldOp]):
-        self.name = name; self.ops = ops
+        self.name = name
+        self.ops = ops
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         for it in ctx.items:

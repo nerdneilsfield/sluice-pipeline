@@ -2,6 +2,7 @@ from pathlib import Path
 from jinja2 import Template
 from sluice.context import PipelineContext
 
+
 class RenderProcessor:
     name = "render"
 

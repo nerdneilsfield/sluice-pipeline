@@ -36,6 +36,7 @@ def load_all(root: Path) -> ConfigBundle:
 
 def resolve_env(value: str) -> str:
     import os
+
     if value.startswith("env:"):
         v = os.environ.get(value[4:])
         if v is None:
