@@ -25,10 +25,11 @@ class FetcherApplyProcessor:
             try:
                 md = await self.chain.fetch(it.url)
             except Exception as e:
-                await self.failures.record(
-                    it.pipeline_id, item_key(it), it,
-                    stage=self.name, error_class=type(e).__name__,
-                    error_msg=str(e), max_retries=self.max_retries)
+                if self.failures is not None:
+                    await self.failures.record(
+                        it.pipeline_id, item_key(it), it,
+                        stage=self.name, error_class=type(e).__name__,
+                        error_msg=str(e), max_retries=self.max_retries)
                 continue
             setattr(it, self.write_field, md)
             survivors.append(it)

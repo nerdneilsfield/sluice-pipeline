@@ -56,3 +56,13 @@ async def test_records_failure_drops_item():
     ctx = await p.process(ctx)
     assert ctx.items == []
     assert fr.records and fr.records[0][1] == "AllFetchersFailed"
+
+@pytest.mark.asyncio
+async def test_dry_run_no_crash_on_fetch_failure():
+    chain = StubChain({"https://a": RuntimeError("nope")})
+    p = FetcherApplyProcessor(name="fa", chain=chain, write_field="fulltext",
+                              skip_if_field_longer_than=None,
+                              failures=None, max_retries=3)
+    ctx = PipelineContext("p","p/r","2026-04-28",[mk("https://a")],{})
+    ctx = await p.process(ctx)
+    assert ctx.items == []
