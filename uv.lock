@@ -658,6 +658,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fake-useragent"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/43/948d10bf42735709edb5ae51e23297d034086f17fc7279fef385a7acb473/fake_useragent-2.2.0.tar.gz", hash = "sha256:4e6ab6571e40cc086d788523cf9e018f618d07f9050f822ff409a4dfe17c16b2", size = 158898 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/37/b3ea9cd5558ff4cb51957caca2193981c6b0ff30bd0d2630ac62505d99d0/fake_useragent-2.2.0-py3-none-any.whl", hash = "sha256:67f35ca4d847b0d298187443aaf020413746e56acd985a611908c73dba2daa24", size = 161695 },
+]
+
+[[package]]
 name = "fakeredis"
 version = "2.35.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2420,6 +2429,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "fake-useragent" },
     { name = "feedparser" },
     { name = "httpx" },
     { name = "jinja2" },
@@ -2446,6 +2456,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "fake-useragent", specifier = ">=2.2" },
     { name = "feedparser", specifier = ">=6.0" },
     { name = "freezegun", marker = "extra == 'dev'", specifier = ">=1.5" },
     { name = "httpx", specifier = ">=0.27" },
