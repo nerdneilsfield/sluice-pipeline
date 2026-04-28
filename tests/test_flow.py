@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from sluice.flow import build_flow
 
 
@@ -11,5 +13,5 @@ async def test_flow_calls_runner():
         patch("sluice.flow.load_all", return_value=None),
     ):
         flow = build_flow("ai_news")
-        result = await flow.fn(config_dir="/tmp/x")
+        await flow.fn(config_dir="/tmp/x")
     fake_run.assert_called_once()

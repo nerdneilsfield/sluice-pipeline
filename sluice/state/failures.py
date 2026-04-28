@@ -1,8 +1,10 @@
 import json
-from datetime import datetime, timezone
 from dataclasses import asdict
+from datetime import datetime, timezone
+
 import aiosqlite
-from sluice.core.item import Item, Attachment
+
+from sluice.core.item import Attachment, Item
 
 
 def _now() -> str:

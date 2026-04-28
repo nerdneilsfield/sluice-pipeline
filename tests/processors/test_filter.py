@@ -1,8 +1,10 @@
-import pytest, re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from sluice.config import FilterRule
 from sluice.context import PipelineContext
 from sluice.core.item import Item
-from sluice.config import FilterRule
 from sluice.processors.filter import FilterProcessor
 
 

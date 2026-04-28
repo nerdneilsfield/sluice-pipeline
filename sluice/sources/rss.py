@@ -1,10 +1,12 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
+
 import feedparser
 import httpx
+
 from sluice.core.item import Item
-from sluice.url_canon import canonical_url
 from sluice.sources.base import register_source
+from sluice.url_canon import canonical_url
 
 
 @register_source("rss")

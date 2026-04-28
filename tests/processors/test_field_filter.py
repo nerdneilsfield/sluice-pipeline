@@ -1,5 +1,7 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
 from sluice.config import FieldOp
 from sluice.context import PipelineContext
 from sluice.core.item import Item

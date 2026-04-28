@@ -1,7 +1,7 @@
-from datetime import datetime, timezone
-import pytest
-from sluice.core.item import Item, Attachment, compute_item_key
 import hashlib
+from datetime import datetime, timezone
+
+from sluice.core.item import Attachment, Item, compute_item_key
 
 
 def make_item(**kw):

@@ -1,4 +1,7 @@
-import tomllib, pytest
+import tomllib
+
+import pytest
+
 from sluice.config import PipelineConfig
 
 PIPE = """

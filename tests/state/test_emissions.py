@@ -1,4 +1,5 @@
 import pytest
+
 from sluice.state.db import open_db
 from sluice.state.emissions import EmissionStore
 

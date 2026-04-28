@@ -1,6 +1,9 @@
-import pytest, httpx, respx
+import httpx
+import pytest
+import respx
+
+from sluice.fetchers._ssrf import SSRFError, guard
 from sluice.fetchers.trafilatura_fetcher import TrafilaturaFetcher
-from sluice.fetchers._ssrf import SSRFError
 
 HTML = (
     "<html><head><title>T</title></head><body>"
@@ -10,11 +13,17 @@ HTML = (
 
 
 @pytest.mark.asyncio
-async def test_extract_html():
+async def test_extract_html(monkeypatch):
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     f = TrafilaturaFetcher(timeout=10)
     with respx.mock() as r:
-        r.get("https://x/a").mock(return_value=httpx.Response(200, text=HTML))
-        md = await f.extract("https://x/a")
+        r.get("https://public.example.com/a").mock(return_value=httpx.Response(200, text=HTML))
+        md = await f.extract("https://public.example.com/a")
     assert "Hello" in md
     assert "body content" in md
 
@@ -56,3 +65,35 @@ async def test_redirect_to_private_ip_blocked(monkeypatch):
         )
         with pytest.raises(SSRFError):
             await f.extract("https://public.example.com/a")
+
+
+@pytest.mark.asyncio
+async def test_relative_redirect_stays_public(monkeypatch):
+    """Relative redirects should be resolved against the current public URL."""
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    f = TrafilaturaFetcher(timeout=10)
+    with respx.mock() as r:
+        r.get("https://public.example.com/a").mock(
+            return_value=httpx.Response(302, headers={"location": "/b"})
+        )
+        r.get("https://public.example.com/b").mock(return_value=httpx.Response(200, text=HTML))
+        md = await f.extract("https://public.example.com/a")
+
+    assert "Hello" in md
+
+
+def test_blocks_ipv4_mapped_loopback():
+    """IPv4-mapped IPv6 literals should inherit the embedded IPv4 block status."""
+    with pytest.raises(SSRFError):
+        guard("http://[::ffff:127.0.0.1]/")
+
+
+def test_blocks_non_global_address():
+    """Non-global addresses beyond RFC1918/link-local should be blocked."""
+    with pytest.raises(SSRFError):
+        guard("http://100.64.0.1/")

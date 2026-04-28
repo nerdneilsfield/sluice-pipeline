@@ -1,6 +1,7 @@
 import httpx
-from sluice.fetchers.base import register_fetcher
+
 from sluice.fetchers._ssrf import guard
+from sluice.fetchers.base import register_fetcher
 
 
 @register_fetcher("firecrawl")

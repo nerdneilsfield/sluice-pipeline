@@ -1,17 +1,20 @@
-import pytest, textwrap, httpx, respx
+import textwrap
 from datetime import datetime, timezone
-from pathlib import Path
-from sluice.loader import load_all
-from sluice.runner import run_pipeline
 
-import sluice.sources.rss  # noqa
+import httpx
+import pytest
+import respx
+
 import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.processors.dedupe  # noqa
-import sluice.processors.filter  # noqa
 import sluice.processors.fetcher_apply  # noqa
+import sluice.processors.filter  # noqa
 import sluice.processors.llm_stage  # noqa
 import sluice.processors.render  # noqa
 import sluice.sinks.file_md  # noqa
+import sluice.sources.rss  # noqa
+from sluice.loader import load_all
+from sluice.runner import run_pipeline
 
 RSS = """<?xml version='1.0'?><rss><channel>
 <item><title>OpenAI GPT-X</title><link>https://o.example/x</link>
@@ -29,7 +32,14 @@ ART = (
 
 @pytest.mark.asyncio
 async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
+    import socket
+
     monkeypatch.setenv("K", "v")
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
     cfg = tmp_path / "configs"
     (cfg / "pipelines").mkdir(parents=True)

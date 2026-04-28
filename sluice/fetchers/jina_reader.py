@@ -1,6 +1,7 @@
 import httpx
+
+from sluice.fetchers._ssrf import guard, guard_response, guarded_redirect_url
 from sluice.fetchers.base import register_fetcher
-from sluice.fetchers._ssrf import guard
 
 
 @register_fetcher("jina_reader")
@@ -25,6 +26,7 @@ class JinaReaderFetcher:
             headers["Authorization"] = f"Bearer {self.api_key}"
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=False) as c:
             r = await c.get(f"{self.base_url}/{url}", headers=headers)
+            guard_response(r)
             # Manually follow redirects with SSRF guard at each hop
             redirect_count = 0
             while r.is_redirect:
@@ -34,7 +36,8 @@ class JinaReaderFetcher:
                 location = r.headers.get("location")
                 if not location:
                     break
-                guard(location)
-                r = await c.get(location)
+                next_url = guarded_redirect_url(str(r.url), location)
+                r = await c.get(next_url, headers=headers)
+                guard_response(r)
             r.raise_for_status()
             return r.text

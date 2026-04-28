@@ -1,16 +1,13 @@
-import pytest
 from sluice.core.errors import (
-    SluiceError,
+    AllFetchersFailed,
+    AllProvidersExhausted,
+    BudgetExceeded,
     ConfigError,
     FetchError,
-    AllFetchersFailed,
     LLMError,
-    RateLimitError,
     QuotaExhausted,
-    AllProvidersExhausted,
-    StageError,
-    SinkError,
-    BudgetExceeded,
+    RateLimitError,
+    SluiceError,
 )
 
 

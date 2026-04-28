@@ -1,7 +1,8 @@
 from dataclasses import fields as dc_fields
+
+from sluice.config import FieldOp
 from sluice.context import PipelineContext
 from sluice.core.item import Item
-from sluice.config import FieldOp
 
 _DC_NAMES = {f.name for f in dc_fields(Item)}
 

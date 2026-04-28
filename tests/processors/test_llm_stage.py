@@ -1,5 +1,7 @@
-import pytest, json
 from datetime import datetime, timezone
+
+import pytest
+
 from sluice.context import PipelineContext
 from sluice.core.item import Item
 from sluice.processors.llm_stage import LLMStageProcessor
@@ -172,8 +174,8 @@ async def test_per_item_llm_failure_records_and_drops(tmp_path):
 
 @pytest.mark.asyncio
 async def test_budget_preflight_blocks_on_call_count(tmp_path):
-    from sluice.llm.budget import RunBudget
     from sluice.core.errors import BudgetExceeded
+    from sluice.llm.budget import RunBudget
 
     prompt = tmp_path / "p.md"
     prompt.write_text("x")
@@ -208,8 +210,8 @@ async def test_budget_preflight_blocks_on_call_count(tmp_path):
 
 @pytest.mark.asyncio
 async def test_budget_preflight_blocks_on_usd(tmp_path):
-    from sluice.llm.budget import RunBudget
     from sluice.core.errors import BudgetExceeded
+    from sluice.llm.budget import RunBudget
 
     prompt = tmp_path / "p.md"
     prompt.write_text("{{ item.fulltext }}")

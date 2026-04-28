@@ -1,34 +1,28 @@
-from sluice.registry import (
-    get_source,
-    get_fetcher,
-    get_processor,
-    get_sink,
-)
-from typing import cast
 from sluice.config import (
-    GlobalConfig,
-    PipelineConfig,
-    RssSourceConfig,
     DedupeConfig,
     FetcherApplyConfig,
-    FilterConfig,
     FieldFilterConfig,
-    LLMStageConfig,
-    RenderConfig,
     FileMdSinkConfig,
+    FilterConfig,
+    GlobalConfig,
+    LLMStageConfig,
     NotionSinkConfig,
-    FetcherImplConfig,
-    GlobalFetcherConfig,
+    PipelineConfig,
+    RenderConfig,
+    RssSourceConfig,
 )
-from sluice.fetchers.chain import FetcherChain
-from sluice.state.cache import UrlCacheStore
-from sluice.state.seen import SeenStore
-from sluice.state.failures import FailureStore
-from sluice.state.emissions import EmissionStore
-from sluice.llm.pool import ProviderPool
-from sluice.llm.client import LLMClient, StageLLMConfig
-from sluice.llm.provider import parse_model_spec
 from sluice.core.errors import ConfigError
+from sluice.fetchers.chain import FetcherChain
+from sluice.llm.client import LLMClient, StageLLMConfig
+from sluice.llm.pool import ProviderPool
+from sluice.llm.provider import parse_model_spec
+from sluice.registry import (
+    get_fetcher,
+    get_source,
+)
+from sluice.state.cache import UrlCacheStore
+from sluice.state.failures import FailureStore
+from sluice.state.seen import SeenStore
 
 
 def _model_price(pool: ProviderPool, model_spec: str) -> tuple[float, float]:
@@ -72,6 +66,17 @@ def _resolve_fetcher_chain_cfg(
     on_all_failed = pipe.fetcher.on_all_failed
     if on_all_failed is None:
         on_all_failed = g.on_all_failed
+    if chain is None or min_chars is None or on_all_failed is None:
+        missing = []
+        if chain is None:
+            missing.append("fetcher.chain")
+        if min_chars is None:
+            missing.append("fetcher.min_chars")
+        if on_all_failed is None:
+            missing.append("fetcher.on_all_failed")
+        raise ConfigError(
+            f"pipeline {pipe.id!r}: fetcher_apply requires configured {', '.join(missing)}"
+        )
     if "cache" in pipe.model_fields_set:
         cache_enabled = pipe.cache.enabled
         ttl_str = pipe.cache.ttl
@@ -81,13 +86,7 @@ def _resolve_fetcher_chain_cfg(
     from sluice.window import parse_duration
 
     ttl = int(parse_duration(ttl_str).total_seconds())
-    return (
-        cast(list[str], chain),
-        cast(int, min_chars),
-        cast(str, on_all_failed),
-        cache_enabled,
-        ttl,
-    )
+    return (chain, min_chars, on_all_failed, cache_enabled, ttl)
 
 
 def build_fetcher_chain(
@@ -123,10 +122,11 @@ def build_processors(
     global_cfg: GlobalConfig,
     seen: SeenStore,
     failures: FailureStore,
-    fetcher_chain: FetcherChain,
+    fetcher_chain: FetcherChain | None,
     llm_pool: ProviderPool,
     budget,
     dry_run: bool = False,
+    requeued_keys: set[str] | None = None,
 ):
     eff_failures = None if dry_run else failures
     procs = []
@@ -135,11 +135,21 @@ def build_processors(
             from sluice.processors.dedupe import DedupeProcessor
 
             procs.append(
-                DedupeProcessor(name=st.name, pipeline_id=pipe.id, seen=seen, failures=failures)
+                DedupeProcessor(
+                    name=st.name,
+                    pipeline_id=pipe.id,
+                    seen=seen,
+                    failures=failures,
+                    requeued_keys=requeued_keys,
+                )
             )
         elif isinstance(st, FetcherApplyConfig):
             from sluice.processors.fetcher_apply import FetcherApplyProcessor
 
+            if fetcher_chain is None:
+                raise ConfigError(
+                    f"pipeline {pipe.id!r}: fetcher_apply stage {st.name!r} has no fetcher chain"
+                )
             procs.append(
                 FetcherApplyProcessor(
                     name=st.name,

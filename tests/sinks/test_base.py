@@ -1,7 +1,7 @@
 import pytest
+
 from sluice.context import PipelineContext
 from sluice.sinks.base import Sink
-from sluice.core.protocols import SinkResult
 from sluice.state.db import open_db
 from sluice.state.emissions import EmissionStore
 

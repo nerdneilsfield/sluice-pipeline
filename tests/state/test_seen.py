@@ -1,8 +1,10 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
+from sluice.core.item import Item
 from sluice.state.db import open_db
 from sluice.state.seen import SeenStore
-from sluice.core.item import Item
 
 
 def make_item(key: str) -> Item:

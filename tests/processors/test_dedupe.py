@@ -1,12 +1,13 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
 from sluice.context import PipelineContext
 from sluice.core.item import Item
-from sluice.state.db import open_db
-from sluice.state.seen import SeenStore
-from sluice.state.failures import FailureStore
 from sluice.processors.dedupe import DedupeProcessor
-from sluice.core.item import compute_item_key as item_key
+from sluice.state.db import open_db
+from sluice.state.failures import FailureStore
+from sluice.state.seen import SeenStore
 
 
 def mk(guid=None, url="https://x/a", title="t"):

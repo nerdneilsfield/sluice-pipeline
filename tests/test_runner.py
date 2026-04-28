@@ -1,32 +1,33 @@
-import pytest
 import textwrap
 from datetime import datetime, timezone
 from unittest.mock import patch
-from sluice.config import (
-    GlobalConfig,
-    PipelineConfig,
-    RssSourceConfig,
-    DedupeConfig,
-    FilterConfig,
-    FilterRule,
-    RenderConfig,
-    FileMdSinkConfig,
-    StateConfig,
-    RuntimeConfig,
-    GlobalFetcherConfig,
-    FetcherImplConfig,
-    ProvidersConfig,
-)
-from sluice.core.item import Item
-from sluice.loader import ConfigBundle, load_all
-from sluice.runner import run_pipeline
 
-import sluice.sources.rss  # noqa
+import pytest
+
 import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.processors.dedupe  # noqa
 import sluice.processors.filter  # noqa
 import sluice.processors.render  # noqa
 import sluice.sinks.file_md  # noqa
+import sluice.sources.rss  # noqa
+from sluice.config import (
+    DedupeConfig,
+    FetcherImplConfig,
+    FileMdSinkConfig,
+    FilterConfig,
+    FilterRule,
+    GlobalConfig,
+    GlobalFetcherConfig,
+    PipelineConfig,
+    ProvidersConfig,
+    RenderConfig,
+    RssSourceConfig,
+    RuntimeConfig,
+    StateConfig,
+)
+from sluice.core.item import Item
+from sluice.loader import ConfigBundle, load_all
+from sluice.runner import run_pipeline
 
 
 def mk_item(guid, url="https://x/a", title="t", published_at=None):
@@ -124,7 +125,6 @@ async def test_end_to_end_no_llm(tmp_path):
 async def test_requeue_resolved_after_success(tmp_path):
     from sluice.state.db import open_db
     from sluice.state.failures import FailureStore
-    from sluice.state.seen import SeenStore
 
     db_path = tmp_path / "test.db"
     # Pre-seed a failed item
@@ -394,11 +394,14 @@ def _bootstrap_minimal(tmp_path, *, rss_text: str, cap: int = 30, extra_pipe_tom
 @pytest.mark.asyncio
 async def test_requeue_works_without_dedupe_stage(tmp_path, monkeypatch):
     """Pipeline without dedupe stage must still merge requeued items."""
-    import respx, httpx
     from datetime import datetime, timezone
+
+    import httpx
+    import respx
+
+    from sluice.core.item import Item, compute_item_key
     from sluice.state.db import open_db
     from sluice.state.failures import FailureStore
-    from sluice.core.item import Item, compute_item_key
 
     monkeypatch.setenv("K", "v")
     cfg = _bootstrap_minimal(tmp_path, rss_text="", cap=30)
@@ -444,11 +447,132 @@ async def test_requeue_works_without_dedupe_stage(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_requeued_items_pass_through_stages_before_dedupe(tmp_path, monkeypatch):
+    """Requeued items should not skip processors that appear before dedupe."""
+    import httpx
+    import respx
+
+    from sluice.core.item import Item, compute_item_key
+    from sluice.state.db import open_db
+    from sluice.state.failures import FailureStore
+
+    monkeypatch.setenv("K", "v")
+    cfg = _bootstrap_minimal(tmp_path, rss_text="", cap=30)
+    pipe_path = cfg / "pipelines" / "p.toml"
+    pipe_toml = pipe_path.read_text()
+    pipe_toml = pipe_toml.replace(
+        '[[stages]]\nname = "d"\ntype = "dedupe"\n',
+        textwrap.dedent("""
+        [[stages]]
+        name = "pre_filter"
+        type = "filter"
+        mode = "keep_if_all"
+        [[stages.rules]]
+        field = "title"
+        op = "eq"
+        value = "keep"
+
+        [[stages]]
+        name = "d"
+        type = "dedupe"
+        """),
+    )
+    pipe_path.write_text(pipe_toml)
+
+    failed_item = Item(
+        source_id="s",
+        pipeline_id="p",
+        guid="reseed",
+        url="https://x/r",
+        title="drop",
+        published_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+        raw_summary=None,
+        fulltext="x" * 200,
+    )
+    async with open_db(tmp_path / "d.db") as conn:
+        await FailureStore(conn).record(
+            "p",
+            compute_item_key(failed_item),
+            failed_item,
+            stage="summarize",
+            error_class="X",
+            error_msg="m",
+            max_retries=3,
+        )
+
+    bundle = load_all(cfg)
+    fake_now = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
+    empty_rss = '<?xml version="1.0"?><rss><channel></channel></rss>'
+    with respx.mock() as r:
+        r.get("https://feed.example/rss").mock(return_value=httpx.Response(200, text=empty_rss))
+        result = await run_pipeline(bundle, pipeline_id="p", now=fake_now)
+
+    assert result.status == "success"
+    assert result.items_out == 0
+    assert not (tmp_path / "out_2026-04-28.md").exists()
+
+    async with open_db(tmp_path / "d.db") as conn:
+        rows = await FailureStore(conn).list("p", status="failed")
+    assert len(rows) == 1
+    assert rows[0]["item_key"] == "reseed"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_without_fetcher_apply_does_not_require_fetcher_config(tmp_path):
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(tmp_path / "test.db")),
+        runtime=RuntimeConfig(timezone="UTC"),
+    )
+    pipe = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            DedupeConfig(type="dedupe", name="dedupe"),
+            RenderConfig(
+                type="render",
+                name="render",
+                template=str(template_path),
+                output_field="context.markdown",
+            ),
+        ],
+        sinks=[
+            FileMdSinkConfig(
+                id="out",
+                type="file_md",
+                input="context.markdown",
+                path=str(tmp_path / "{run_date}.md"),
+            )
+        ],
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=ProvidersConfig(providers=[]),
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+
+    fake_source = FakeSource([mk_item(guid="g1", title="keep")])
+    with patch("sluice.runner.build_sources", return_value=[fake_source]):
+        result = await run_pipeline(
+            bundle, pipeline_id="p", now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+    assert result.status == "success"
+    assert result.items_out == 1
+    assert (tmp_path / "2026-04-28.md").exists()
+
+
+@pytest.mark.asyncio
 async def test_runner_records_failure(tmp_path, monkeypatch):
     from datetime import datetime, timezone
+    from unittest.mock import patch
+
     from sluice.state.db import open_db
     from sluice.state.run_log import RunLog
-    from unittest.mock import patch
 
     monkeypatch.setenv("K", "v")
     cfg = _bootstrap_minimal(tmp_path, rss_text="")

@@ -1,5 +1,8 @@
-import pytest, random
-from sluice.config import Provider, BaseEndpoint, KeyConfig, ModelEntry
+import random
+
+import pytest
+
+from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider
 from sluice.llm.provider import ProviderRuntime, parse_model_spec
 
 

@@ -1,6 +1,8 @@
 import asyncio
 from pathlib import Path
+
 import typer
+
 from sluice.loader import load_all
 from sluice.runner import run_pipeline
 
@@ -10,14 +12,6 @@ app = typer.Typer(no_args_is_help=True)
 def _import_all():
     from sluice.sources import rss  # noqa
     from sluice.fetchers import trafilatura_fetcher, firecrawl, jina_reader  # noqa
-    from sluice.processors import (
-        dedupe,
-        filter as _f,
-        field_filter,
-        fetcher_apply,
-        llm_stage,
-        render,
-    )  # noqa
     from sluice.sinks import file_md, notion  # noqa
 
 
@@ -103,6 +97,7 @@ def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
     bundle = load_all(config_dir)
     from prefect import serve as prefect_serve
     from prefect.client.schemas.schedules import CronSchedule
+
     from sluice.flow import build_flow
 
     deployments = []

@@ -1,16 +1,13 @@
 import pytest
+
+from sluice.core.errors import ConfigError
 from sluice.registry import (
-    register_source,
+    get_processor,
+    get_source,
     register_fetcher,
     register_processor,
-    register_sink,
-    get_source,
-    get_fetcher,
-    get_processor,
-    get_sink,
-    all_processors,
+    register_source,
 )
-from sluice.core.errors import ConfigError
 
 
 def test_register_and_lookup():

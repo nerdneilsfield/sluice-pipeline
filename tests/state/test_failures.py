@@ -1,8 +1,10 @@
-import pytest, json
 from datetime import datetime, timezone
+
+import pytest
+
+from sluice.core.item import Item
 from sluice.state.db import open_db
 from sluice.state.failures import FailureStore
-from sluice.core.item import Item
 
 
 def mk(k="k1"):

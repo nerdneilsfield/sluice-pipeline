@@ -1,4 +1,4 @@
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, quote
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 TRACKING_PARAMS = {
     "utm_source",

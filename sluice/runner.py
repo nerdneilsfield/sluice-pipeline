@@ -1,27 +1,28 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
-import logging
 from typing import cast
-from sluice.config import PipelineConfig, GlobalConfig
-from sluice.context import PipelineContext, RunStats
-from sluice.loader import ConfigBundle
-from sluice.state.db import open_db
-from sluice.state.seen import SeenStore
-from sluice.state.failures import FailureStore
-from sluice.state.emissions import EmissionStore
-from sluice.state.cache import UrlCacheStore
-from sluice.state.run_log import RunLog
-from sluice.llm.pool import ProviderPool
-from sluice.llm.budget import RunBudget
-from sluice.window import compute_window
-from sluice.processors.dedupe import item_key
+from zoneinfo import ZoneInfo
+
 from sluice.builders import (
-    build_sources,
     build_fetcher_chain,
     build_processors,
     build_sinks,
+    build_sources,
 )
+from sluice.config import FetcherApplyConfig, GlobalConfig, PipelineConfig
+from sluice.context import PipelineContext, RunStats
+from sluice.llm.budget import RunBudget
+from sluice.llm.pool import ProviderPool
+from sluice.loader import ConfigBundle
+from sluice.processors.dedupe import item_key
+from sluice.state.cache import UrlCacheStore
+from sluice.state.db import open_db
+from sluice.state.emissions import EmissionStore
+from sluice.state.failures import FailureStore
+from sluice.state.run_log import RunLog
+from sluice.state.seen import SeenStore
+from sluice.window import compute_window
 
 log = logging.getLogger(__name__)
 
@@ -78,10 +79,11 @@ async def run_pipeline(
                 max_usd=pipe.limits.max_estimated_cost_usd,
             )
             pool = ProviderPool(bundle.providers)
-            chain = build_fetcher_chain(global_cfg, pipe, cache)
+            needs_fetcher_chain = any(isinstance(st, FetcherApplyConfig) for st in pipe.stages)
+            chain = build_fetcher_chain(global_cfg, pipe, cache) if needs_fetcher_chain else None
 
-            from sluice.config import LLMStageConfig as _LLMStageConfig
             from sluice.builders import _model_price as _mp
+            from sluice.config import LLMStageConfig as _LLMStageConfig
             from sluice.core.errors import ConfigError as _ConfigError
 
             if pipe.limits.max_estimated_cost_usd > 0:
@@ -114,14 +116,17 @@ async def run_pipeline(
 
             requeue = await failures.requeue(pipe.id)
             requeued_keys = {item_key(it) for it in requeue}
+            items_in = len(collected) + len(requeue)
+            if requeued_keys:
+                collected = [it for it in collected if item_key(it) not in requeued_keys]
 
             ctx = PipelineContext(
                 pipeline_id=pipe.id,
                 run_key=run_key,
                 run_date=run_date,
-                items=collected,
+                items=[*collected, *requeue],
                 context={},
-                stats=RunStats(items_in=len(collected) + len(requeue)),
+                stats=RunStats(items_in=items_in),
                 items_resolved_from_failures=list(requeue),
             )
 
@@ -134,21 +139,14 @@ async def run_pipeline(
                 llm_pool=pool,
                 budget=budget,
                 dry_run=dry_run,
+                requeued_keys=requeued_keys,
             )
-
-            from sluice.processors.dedupe import DedupeProcessor
 
             cap = pipe.limits.max_items_per_run
             policy = pipe.limits.item_overflow_policy
             min_dt = datetime.min.replace(tzinfo=timezone.utc)
-            requeue_pending = list(requeue)
 
-            # If there's no dedupe stage, merge requeued items before the first
-            # processor so they don't skip any stage.
-            has_dedupe = any(isinstance(p, DedupeProcessor) for p in procs)
-            if not has_dedupe and requeue_pending:
-                ctx.items.extend(requeue_pending)
-                requeue_pending = []
+            from sluice.processors.dedupe import DedupeProcessor
 
             for p in procs:
                 ctx = await p.process(ctx)
@@ -159,10 +157,6 @@ async def run_pipeline(
                             reverse=(policy == "drop_oldest"),
                         )
                         ctx.items = ctx.items[:cap]
-                    # Merge requeued items AFTER dedupe so they bypass it.
-                    if requeue_pending:
-                        ctx.items.extend(requeue_pending)
-                        requeue_pending = []
 
             ctx.stats.items_out = len(ctx.items)
             ctx.stats.llm_calls = budget.calls

@@ -1,7 +1,8 @@
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-import tomllib
-from sluice.config import GlobalConfig, ProvidersConfig, PipelineConfig
+
+from sluice.config import GlobalConfig, PipelineConfig, ProvidersConfig
 from sluice.core.errors import ConfigError
 
 

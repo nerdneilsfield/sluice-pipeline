@@ -1,5 +1,7 @@
-from prefect import flow
 from pathlib import Path
+
+from prefect import flow
+
 from sluice.loader import load_all
 from sluice.runner import run_pipeline
 

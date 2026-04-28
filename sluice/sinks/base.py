@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+
 from sluice.context import PipelineContext
 from sluice.core.protocols import SinkResult
-from sluice.state.emissions import EmissionStore
 from sluice.registry import register_sink as _reg
+from sluice.state.emissions import EmissionStore
 
 register_sink = _reg
 

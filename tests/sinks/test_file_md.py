@@ -1,5 +1,7 @@
-import pytest
 from pathlib import Path
+
+import pytest
+
 from sluice.context import PipelineContext
 from sluice.sinks.file_md import FileMdSink
 from sluice.state.db import open_db
@@ -51,7 +53,6 @@ async def test_is_relative_to_blocks_escape(tmp_path):
     out = tmp_path / "out" / "file.md"
     s = FileMdSink(id="local", input="context.markdown", path=str(out))
     # Bypass _resolve_path to simulate an escaping path
-    original_resolve = s._resolve_path
 
     def fake_resolve(ctx):
         return Path(tmp_path / "out" / ".." / ".." / "escape.md")

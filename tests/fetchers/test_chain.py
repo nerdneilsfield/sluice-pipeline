@@ -1,8 +1,9 @@
 import pytest
-from sluice.fetchers.chain import FetcherChain
+
 from sluice.core.errors import AllFetchersFailed
-from sluice.state.db import open_db
+from sluice.fetchers.chain import FetcherChain
 from sluice.state.cache import UrlCacheStore
+from sluice.state.db import open_db
 
 
 class FakeFetcher:

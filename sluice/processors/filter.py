@@ -1,8 +1,10 @@
-import regex
 from datetime import datetime, timezone
+
+import regex
+
+from sluice.config import FilterRule
 from sluice.context import PipelineContext
 from sluice.core.item import Item
-from sluice.config import FilterRule
 from sluice.window import parse_duration
 
 

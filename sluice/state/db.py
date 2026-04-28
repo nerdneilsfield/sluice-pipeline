@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+
 import aiosqlite
 
 MIGRATIONS = Path(__file__).parent / "migrations"

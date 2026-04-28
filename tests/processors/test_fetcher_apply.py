@@ -1,9 +1,11 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
 from sluice.context import PipelineContext
+from sluice.core.errors import AllFetchersFailed
 from sluice.core.item import Item
 from sluice.processors.fetcher_apply import FetcherApplyProcessor
-from sluice.core.errors import AllFetchersFailed
 
 
 class StubChain:

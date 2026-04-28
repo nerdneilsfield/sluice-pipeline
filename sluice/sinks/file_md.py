@@ -1,6 +1,7 @@
 from pathlib import Path
-from sluice.sinks.base import Sink, register_sink
+
 from sluice.context import PipelineContext
+from sluice.sinks.base import Sink, register_sink
 
 
 @register_sink("file_md")

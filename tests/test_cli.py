@@ -1,6 +1,7 @@
-import pytest
-from typer.testing import CliRunner
 from unittest.mock import AsyncMock, patch
+
+from typer.testing import CliRunner
+
 from sluice.cli import app
 
 runner = CliRunner()

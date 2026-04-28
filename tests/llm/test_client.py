@@ -1,8 +1,11 @@
-import pytest, httpx, respx
-from sluice.config import ProvidersConfig, Provider, BaseEndpoint, KeyConfig, ModelEntry
-from sluice.llm.pool import ProviderPool
+import httpx
+import pytest
+import respx
+
+from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider, ProvidersConfig
+from sluice.core.errors import AllProvidersExhausted
 from sluice.llm.client import LLMClient, StageLLMConfig
-from sluice.core.errors import RateLimitError, AllProvidersExhausted
+from sluice.llm.pool import ProviderPool
 
 
 def make_pool(monkeypatch):

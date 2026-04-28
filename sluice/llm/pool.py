@@ -1,8 +1,10 @@
 import random
+
 import httpx
+
 from sluice.config import ProvidersConfig
-from sluice.llm.provider import ProviderRuntime, Endpoint, parse_model_spec
 from sluice.core.errors import ConfigError
+from sluice.llm.provider import Endpoint, ProviderRuntime, parse_model_spec
 
 
 class ProviderPool:

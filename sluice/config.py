@@ -1,4 +1,5 @@
 from typing import Annotated, Any, Literal, Union
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -239,8 +240,8 @@ class RuntimeConfig(BaseModel):
 
 class GlobalFetcherConfig(BaseModel):
     chain: list[str] | None = None
-    min_chars: int | None = None
-    on_all_failed: str | None = None
+    min_chars: int = 500
+    on_all_failed: Literal["skip", "continue_empty"] = "skip"
     cache: CacheOverride = Field(default_factory=CacheOverride)
 
 

@@ -1,5 +1,6 @@
-import pytest, aiosqlite
-from sluice.state.db import open_db, current_version
+import pytest
+
+from sluice.state.db import current_version, open_db
 
 
 @pytest.mark.asyncio
@@ -25,8 +26,9 @@ async def test_idempotent_open(tmp_path):
 
 @pytest.mark.asyncio
 async def test_migration_is_atomic(tmp_path):
-    from sluice.state import db as db_module
     import aiosqlite
+
+    from sluice.state import db as db_module
 
     orig_migrations = db_module.MIGRATIONS
     fake_migrations = tmp_path / "fake_migrations"

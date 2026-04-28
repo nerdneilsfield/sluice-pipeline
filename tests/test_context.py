@@ -1,5 +1,4 @@
-from sluice.context import PipelineContext, RunStats
-from sluice.core.item import Item
+from sluice.context import PipelineContext
 
 
 def test_context_holds_items_and_dict():

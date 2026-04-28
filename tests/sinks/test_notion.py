@@ -1,5 +1,7 @@
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
 from sluice.context import PipelineContext
 from sluice.core.item import Item
 from sluice.sinks.notion import NotionSink, chunk_markdown

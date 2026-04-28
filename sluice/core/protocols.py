@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Protocol, AsyncIterator
 from dataclasses import dataclass
-from sluice.core.item import Item
+from typing import AsyncIterator, Protocol
+
 from sluice.context import PipelineContext
+from sluice.core.item import Item
 
 
 class Source(Protocol):

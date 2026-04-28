@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from datetime import datetime, timezone, timedelta
-from sluice.state.db import open_db
+
 from sluice.state.cache import UrlCacheStore
+from sluice.state.db import open_db
 
 
 @pytest.mark.asyncio

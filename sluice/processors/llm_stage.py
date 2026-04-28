@@ -1,9 +1,12 @@
-import asyncio, json
+import asyncio
+import json
 from pathlib import Path
 from typing import Callable
+
 from jinja2 import Template
+
 from sluice.context import PipelineContext
-from sluice.core.errors import StageError, BudgetExceeded
+from sluice.core.errors import BudgetExceeded, StageError
 from sluice.core.item import compute_item_key
 
 

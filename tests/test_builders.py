@@ -1,27 +1,21 @@
 import pytest
-from sluice.config import (
-    GlobalConfig,
-    FetcherImplConfig,
-    GlobalFetcherConfig,
-    PipelineConfig,
-    RssSourceConfig,
-    DedupeConfig,
-    FetcherApplyConfig,
-    FilterConfig,
-    FilterRule,
-    FieldFilterConfig,
-    FieldOp,
-    LLMStageConfig,
-    RenderConfig,
-    FileMdSinkConfig,
-)
-from sluice.builders import build_sources, build_fetcher_chain, build_processors
 
-import sluice.sources.rss  # noqa
-import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.fetchers.firecrawl  # noqa
+import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.processors.dedupe  # noqa
 import sluice.processors.filter  # noqa
+import sluice.sources.rss  # noqa
+from sluice.builders import build_fetcher_chain, build_processors, build_sources
+from sluice.config import (
+    DedupeConfig,
+    FetcherImplConfig,
+    FileMdSinkConfig,
+    FilterConfig,
+    FilterRule,
+    GlobalConfig,
+    PipelineConfig,
+    RssSourceConfig,
+)
 
 
 def test_build_rss_source():
@@ -43,8 +37,6 @@ def test_build_rss_source():
 
 @pytest.mark.asyncio
 async def test_build_fetcher_chain():
-    from sluice.state.cache import UrlCacheStore
-    from sluice.state.db import open_db
 
     g = GlobalConfig(fetchers={"trafilatura": FetcherImplConfig(type="trafilatura", timeout=5)})
     p = PipelineConfig(
@@ -63,8 +55,8 @@ async def test_build_fetcher_chain():
 @pytest.mark.asyncio
 async def test_build_processors():
     from sluice.state.db import open_db
-    from sluice.state.seen import SeenStore
     from sluice.state.failures import FailureStore
+    from sluice.state.seen import SeenStore
 
     g = GlobalConfig()
     p = PipelineConfig(

@@ -1,6 +1,7 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from typer.testing import CliRunner
+
 from sluice.cli import app
 
 runner = CliRunner()
@@ -46,9 +47,9 @@ model_name="m"
     )
 
     with (
-        patch("prefect.client.schemas.schedules.CronSchedule") as mock_schedule,
+        patch("prefect.client.schemas.schedules.CronSchedule"),
         patch("sluice.flow.build_flow") as mock_build_flow,
-        patch("prefect.serve") as mock_serve,
+        patch("prefect.serve"),
     ):
 
         def make_flow(pid):

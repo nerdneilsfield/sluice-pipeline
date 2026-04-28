@@ -1,5 +1,4 @@
-import pytest
-from sluice.config import ProvidersConfig, Provider, BaseEndpoint, KeyConfig, ModelEntry
+from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider, ProvidersConfig
 from sluice.llm.pool import ProviderPool
 
 

@@ -1,6 +1,10 @@
-import pytest, httpx, respx
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import httpx
+import pytest
+import respx
+
 from sluice.sources.rss import RssSource
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "example.xml").read_text()

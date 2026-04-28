@@ -1,7 +1,8 @@
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 from typing import Tuple
-from sluice.config import Provider, BaseEndpoint, KeyConfig, ModelEntry
+
+from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider
 
 
 def parse_model_spec(spec: str) -> Tuple[str, str]:
@@ -30,7 +31,6 @@ class ProviderRuntime:
         self._build_weights()
 
     def _build_weights(self):
-        import os
 
         self._base_weights = []
         total = 0
@@ -76,7 +76,6 @@ class ProviderRuntime:
             bi, b = 0, self.provider.base[0]
 
         # Pick key by weight, respecting cooldowns
-        ktotal = self._key_totals[bi]
         kw = self._key_weights[bi]
         # Filter out keys in cooldown
         available = []

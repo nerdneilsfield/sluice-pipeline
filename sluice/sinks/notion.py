@@ -1,8 +1,9 @@
 import asyncio
 from typing import Protocol
-from sluice.sinks.base import Sink, register_sink
+
 from sluice.context import PipelineContext
 from sluice.loader import resolve_env
+from sluice.sinks.base import Sink, register_sink
 
 
 class NotionifyAdapter(Protocol):

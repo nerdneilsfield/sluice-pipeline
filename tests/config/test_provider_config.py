@@ -1,5 +1,7 @@
-import pytest
 import tomllib
+
+import pytest
+
 from sluice.config import ProvidersConfig
 
 SAMPLE = """
