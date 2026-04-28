@@ -9,6 +9,9 @@ from sluice.core.errors import (
 )
 from sluice.llm.budget import CallCost, RunBudget, compute_cost
 from sluice.llm.pool import ProviderPool
+from sluice.logging_setup import get_logger
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -43,16 +46,27 @@ class LLMClient:
         chain = self._chain()
         for spec in chain:
             ep = self.pool.acquire(spec)
+            log.bind(model=spec, base_url=ep.base_url, timeout=self.cfg.timeout).debug(
+                "llm.call_started"
+            )
             try:
-                return await self._call(ep, messages)
+                out = await self._call(ep, messages)
+                log.bind(model=spec, cost=self.last_cost).debug("llm.call_succeeded")
+                return out
             except (RateLimitError, QuotaExhausted, httpx.NetworkError, httpx.HTTPStatusError) as e:
                 if isinstance(e, httpx.HTTPStatusError):
                     # 4xx client errors (401/403) = bad key/config → fail fast
                     if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
                         raise
+                log.bind(
+                    model=spec,
+                    error_class=type(e).__name__,
+                    error=str(e),
+                ).info("llm.call_retryable_failure")
                 if isinstance(e, QuotaExhausted):
                     self.pool.cool_down(ep)
                 continue
+        log.bind(model_chain=chain).error("llm.providers_exhausted")
         raise AllProvidersExhausted(chain)
 
     async def _call(self, ep, messages: list[dict]) -> str:

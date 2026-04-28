@@ -1,4 +1,3 @@
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, cast
@@ -15,6 +14,7 @@ from sluice.context import PipelineContext, RunStats
 from sluice.llm.budget import RunBudget
 from sluice.llm.pool import ProviderPool
 from sluice.loader import ConfigBundle
+from sluice.logging_setup import get_logger
 from sluice.pricing import model_price
 from sluice.processors.dedupe import item_key
 from sluice.state.cache import UrlCacheStore
@@ -25,7 +25,7 @@ from sluice.state.run_log import RunLog
 from sluice.state.seen import SeenStore
 from sluice.window import compute_window
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 @dataclass
@@ -74,6 +74,12 @@ async def run_pipeline(
             progress(event, **data)
 
     emit("run_started", pipeline_id=pipe.id, run_key=run_key, run_date=run_date, dry_run=dry_run)
+    log.bind(
+        pipeline_id=pipe.id,
+        run_key=run_key,
+        run_date=run_date,
+        dry_run=dry_run,
+    ).info("run.started")
     emit(
         "plan",
         sources=len(pipe.sources),
@@ -81,6 +87,12 @@ async def run_pipeline(
         sinks=0 if dry_run else len(pipe.sinks),
         total=len(pipe.sources) + len(pipe.stages) + (0 if dry_run else len(pipe.sinks)),
     )
+    log.bind(
+        pipeline_id=pipe.id,
+        sources=len(pipe.sources),
+        stages=len(pipe.stages),
+        sinks=0 if dry_run else len(pipe.sinks),
+    ).info("run.plan")
 
     db_path = _resolve_db_path(global_cfg, pipe)
     async with open_db(db_path) as db:
@@ -123,11 +135,8 @@ async def run_pipeline(
                             continue
                         ip, op = model_price(pool, spec)
                         if ip == 0.0 and op == 0.0:
-                            log.warning(
-                                "pipeline %r: fallback model %r has no pricing; "
-                                "USD preflight uses the primary model price",
-                                pipe.id,
-                                spec,
+                            log.bind(pipeline_id=pipe.id, model=spec).warning(
+                                "llm.fallback_model_missing_price"
                             )
 
             window_start, window_end = compute_window(
@@ -139,23 +148,38 @@ async def run_pipeline(
             for i, src in enumerate(sources, start=1):
                 source_name = getattr(src, "source_id", f"source_{i}")
                 emit("source_started", index=i, total=len(sources), name=source_name)
+                log.bind(
+                    pipeline_id=pipe.id,
+                    source=source_name,
+                    index=i,
+                    total=len(sources),
+                ).info("source.started")
                 before = len(collected)
                 async for it in src.fetch(window_start, window_end):
                     collected.append(it)
+                items_out = len(collected) - before
                 emit(
                     "source_done",
                     index=i,
                     total=len(sources),
                     name=source_name,
                     items_in=0,
-                    items_out=len(collected) - before,
+                    items_out=items_out,
                     total_items=len(collected),
                     advance=1,
                 )
+                log.bind(
+                    pipeline_id=pipe.id,
+                    source=source_name,
+                    items_out=items_out,
+                    total_items=len(collected),
+                ).info("source.done")
 
             requeue = await failures.requeue(pipe.id)
             requeued_keys = {item_key(it) for it in requeue}
             items_in = len(collected) + len(requeue)
+            if requeued_keys:
+                log.bind(pipeline_id=pipe.id, requeued=len(requeued_keys)).info("failures.requeued")
             if requeued_keys:
                 collected = [it for it in collected if item_key(it) not in requeued_keys]
 
@@ -190,11 +214,19 @@ async def run_pipeline(
             def apply_item_cap() -> None:
                 if len(ctx.items) <= cap:
                     return
+                before_cap = len(ctx.items)
                 ctx.items.sort(
                     key=lambda i: i.published_at or min_dt,
                     reverse=(policy == "drop_oldest"),
                 )
                 ctx.items = ctx.items[:cap]
+                log.bind(
+                    pipeline_id=pipe.id,
+                    cap=cap,
+                    policy=policy,
+                    items_in=before_cap,
+                    items_out=len(ctx.items),
+                ).info("limits.item_cap_applied")
 
             has_dedupe = any(isinstance(p, DedupeProcessor) for p in procs)
             if not has_dedupe:
@@ -203,17 +235,30 @@ async def run_pipeline(
             for p in procs:
                 before = len(ctx.items)
                 emit("processor_started", name=p.name, items_in=before)
+                log.bind(
+                    pipeline_id=pipe.id,
+                    stage=p.name,
+                    items_in=before,
+                ).info("processor.started")
                 ctx = await p.process(ctx)
                 if isinstance(p, DedupeProcessor):
                     apply_item_cap()
+                stage_details = ctx.context.get("_stage_stats", {}).get(p.name)
                 emit(
                     "processor_done",
                     name=p.name,
                     items_in=before,
                     items_out=len(ctx.items),
-                    details=ctx.context.get("_stage_stats", {}).get(p.name),
+                    details=stage_details,
                     advance=1,
                 )
+                log.bind(
+                    pipeline_id=pipe.id,
+                    stage=p.name,
+                    items_in=before,
+                    items_out=len(ctx.items),
+                    details=stage_details,
+                ).info("processor.done")
 
             ctx.stats.items_out = len(ctx.items)
             ctx.stats.llm_calls = budget.calls
@@ -223,6 +268,12 @@ async def run_pipeline(
                 sinks = build_sinks(pipe)
                 for sink in sinks:
                     emit("sink_started", id=sink.id, type=sink.type, items_in=len(ctx.items))
+                    log.bind(
+                        pipeline_id=pipe.id,
+                        sink_id=sink.id,
+                        sink_type=sink.type,
+                        items_in=len(ctx.items),
+                    ).info("sink.started")
                     emitted = await sink.emit(ctx, emissions=emissions)
                     emit(
                         "sink_done",
@@ -232,6 +283,13 @@ async def run_pipeline(
                         emitted=emitted is not None,
                         advance=1,
                     )
+                    log.bind(
+                        pipeline_id=pipe.id,
+                        sink_id=sink.id,
+                        sink_type=sink.type,
+                        items_in=len(ctx.items),
+                        emitted=emitted is not None,
+                    ).info("sink.done")
 
             if not dry_run:
                 kept = [(it, item_key(it)) for it in ctx.items]
@@ -257,6 +315,14 @@ async def run_pipeline(
                 items_in=ctx.stats.items_in,
                 items_out=ctx.stats.items_out,
             )
+            log.bind(
+                pipeline_id=pipe.id,
+                run_key=run_key,
+                items_in=ctx.stats.items_in,
+                items_out=ctx.stats.items_out,
+                llm_calls=ctx.stats.llm_calls,
+                est_cost_usd=ctx.stats.est_cost_usd,
+            ).info("run.finished")
             return RunResult(
                 pipeline_id=pipe.id,
                 run_key=run_key,
@@ -265,7 +331,7 @@ async def run_pipeline(
                 items_out=ctx.stats.items_out,
             )
         except Exception as e:
-            log.exception("pipeline failed")
+            log.bind(pipeline_id=pipe.id, run_key=run_key).exception("run.failed")
             await runlog.finish(pipe.id, run_key, status="failed", error_msg=str(e))
             emit("run_failed", status="failed", pipeline_id=pipe.id, run_key=run_key, error=str(e))
             return RunResult(pipeline_id=pipe.id, run_key=run_key, status="failed", error=str(e))

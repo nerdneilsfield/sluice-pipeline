@@ -10,6 +10,7 @@ from rich.table import Table
 from tqdm import tqdm
 
 from sluice.loader import load_all
+from sluice.logging_setup import configure_cli_logging, create_logger
 from sluice.runner import run_pipeline
 
 app = typer.Typer(no_args_is_help=True)
@@ -47,12 +48,21 @@ def run(
     pipeline_id: str,
     config_dir: Path = typer.Option("./configs", "--config-dir", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show DEBUG logs."),
+    log_file: Path | None = typer.Option(
+        None,
+        "--log-file",
+        help="Write DEBUG JSONL diagnostics to this file.",
+    ),
 ):
     """Run a pipeline once."""
+    configure_cli_logging(verbose=verbose, log_file=log_file)
+    cli_log = create_logger(verbose=verbose)
     _import_all()
+    cli_log.bind(config_dir=str(config_dir), pipeline_id=pipeline_id).info("cli.run.load_config")
     bundle = load_all(config_dir)
     if pipeline_id not in bundle.pipelines:
-        typer.echo(f"unknown pipeline: {pipeline_id}", err=True)
+        cli_log.bind(pipeline_id=pipeline_id).error("unknown pipeline")
         raise typer.Exit(2)
     progress_bar = None
     steps = []
@@ -78,6 +88,7 @@ def run(
                 progress_bar.update(data.get("advance", 1))
 
     try:
+        cli_log.bind(pipeline_id=pipeline_id, dry_run=dry_run).info("cli.run.start")
         res = asyncio.run(
             run_pipeline(bundle, pipeline_id=pipeline_id, dry_run=dry_run, progress=progress)
         )
@@ -87,6 +98,12 @@ def run(
 
     _print_step_table(steps)
     _print_run_summary(res, dry_run=dry_run)
+    cli_log.bind(
+        pipeline_id=pipeline_id,
+        status=res.status,
+        run_key=res.run_key,
+        items_out=res.items_out,
+    ).info("cli.run.done")
     raise typer.Exit(0 if res.status == "success" else 1)
 
 

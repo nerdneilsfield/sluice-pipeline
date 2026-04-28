@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -10,8 +9,9 @@ from jinja2 import Template
 from sluice.context import PipelineContext
 from sluice.core.errors import BudgetExceeded, StageError
 from sluice.core.item import compute_item_key
+from sluice.logging_setup import get_logger
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def _truncate(text: str, n: int, strategy: str) -> str:
@@ -138,6 +138,14 @@ class LLMStageProcessor:
         total_chars = sum(len(s) for s in rendered)
         projected_usd = self._project_usd(total_chars, self.model_spec)
         self._preflight(projected_calls=len(rendered), projected_usd=projected_usd)
+        log.bind(
+            stage=self.name,
+            mode=self.mode,
+            items_in=len(ctx.items),
+            prompt_chars=total_chars,
+            projected_calls=len(rendered),
+            projected_usd=projected_usd,
+        ).info("llm_stage.preflight_ok")
         sem = asyncio.Semaphore(self.workers)
 
         async def one(it, content):
@@ -181,25 +189,36 @@ class LLMStageProcessor:
             if isinstance(result, StageError):
                 raise result
             if isinstance(result, Exception):
-                log.exception("unexpected per-item LLM failure", exc_info=result)
+                log.opt(exception=result).error("unexpected per-item LLM failure")
                 continue
             if result is not None:
                 kept.append(result)
         ctx.items = kept
+        log.bind(stage=self.name, mode=self.mode, items_out=len(ctx.items)).info("llm_stage.done")
         return ctx
 
     async def _run_aggregate(self, ctx: PipelineContext):
         rendered = self.template.render(items=ctx.items, context=ctx.context)
         rendered = _truncate(rendered, self.max_input_chars, self.truncate_strategy)
-        self._preflight(
-            projected_calls=1, projected_usd=self._project_usd(len(rendered), self.model_spec)
-        )
+        projected_usd = self._project_usd(len(rendered), self.model_spec)
+        self._preflight(projected_calls=1, projected_usd=projected_usd)
+        log.bind(
+            stage=self.name,
+            mode=self.mode,
+            items_in=len(ctx.items),
+            prompt_chars=len(rendered),
+            projected_calls=1,
+            projected_usd=projected_usd,
+        ).info("llm_stage.preflight_ok")
         llm = self.llm_factory()
         out = await llm.chat([{"role": "user", "content": rendered}])
         parsed = self._parse(out)
         assert self.output_target is not None
         _, _, key = self.output_target.partition(".")
         ctx.context[key] = parsed
+        log.bind(stage=self.name, mode=self.mode, output_target=self.output_target).info(
+            "llm_stage.done"
+        )
         return ctx
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:

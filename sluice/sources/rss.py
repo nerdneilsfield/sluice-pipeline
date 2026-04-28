@@ -6,9 +6,11 @@ import httpx
 from fake_useragent import UserAgent
 
 from sluice.core.item import Attachment, Item
+from sluice.logging_setup import get_logger
 from sluice.sources.base import register_source
 from sluice.url_canon import canonical_url
 
+log = get_logger(__name__)
 _ua = UserAgent()
 _RSS_UA = (
     "Mozilla/5.0 (compatible; Sluice RSS Fetcher/1.0; "
@@ -40,19 +42,33 @@ class RssSource:
             "User-Agent": _RSS_UA,
             "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as c:
-            r = await c.get(self.url, headers=headers)
-            r.raise_for_status()
-            text = r.text
+        log.bind(source_id=self.source_id, url=self.url, timeout=self.timeout).debug(
+            "rss.fetch_started"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as c:
+                r = await c.get(self.url, headers=headers)
+                r.raise_for_status()
+                text = r.text
+        except Exception:
+            log.bind(source_id=self.source_id, url=self.url).exception("rss.fetch_failed")
+            raise
         feed = feedparser.parse(text)
+        entries = list(feed.entries)
+        skipped_future = 0
+        skipped_window = 0
+        emitted = 0
         future_cap = window_end + timedelta(hours=1)
-        for e in feed.entries:
+        for e in entries:
             published = self._parse_date(e)
             if published is not None:
                 if published > future_cap:
+                    skipped_future += 1
                     continue
                 if published < window_start or published > window_end:
+                    skipped_window += 1
                     continue
+            emitted += 1
             yield Item(
                 source_id=self.source_id,
                 pipeline_id=self.pipeline_id,
@@ -64,6 +80,14 @@ class RssSource:
                 attachments=self._attachments(e),
                 tags=list(self.tags),
             )
+        log.bind(
+            source_id=self.source_id,
+            url=self.url,
+            entries=len(entries),
+            emitted=emitted,
+            skipped_future=skipped_future,
+            skipped_window=skipped_window,
+        ).info("rss.fetch_done")
 
     @staticmethod
     def _parse_date(e) -> datetime | None:

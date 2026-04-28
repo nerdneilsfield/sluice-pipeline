@@ -1,5 +1,8 @@
 from sluice.context import PipelineContext
+from sluice.logging_setup import get_logger
 from sluice.processors.dedupe import item_key
+
+log = get_logger(__name__)
 
 
 class FetcherApplyProcessor:
@@ -49,6 +52,13 @@ class FetcherApplyProcessor:
                         error_msg=str(e),
                         max_retries=self.max_retries,
                     )
+                log.bind(
+                    stage=self.name,
+                    item_key=item_key(it),
+                    url=it.url,
+                    error_class=type(e).__name__,
+                    error=str(e),
+                ).debug("fetcher_apply.item_failed")
                 continue
             if md is None:
                 stats["empty"] += 1
@@ -59,4 +69,5 @@ class FetcherApplyProcessor:
         ctx.items = survivors
         stats["items_out"] = len(survivors)
         ctx.context.setdefault("_stage_stats", {})[self.name] = stats
+        log.bind(stage=self.name, **stats).info("fetcher_apply.done")
         return ctx
