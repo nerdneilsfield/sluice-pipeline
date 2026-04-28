@@ -13,10 +13,12 @@ class FileMdSink(Sink):
         self.path_template = path
 
     def _resolve_path(self, ctx: PipelineContext) -> Path:
+        safe_pipeline_id = ctx.pipeline_id.replace("..", "_").replace("/", "_")
+        safe_run_key = ctx.run_key.replace("/", "_")
         return Path(self.path_template.format(
             run_date=ctx.run_date,
-            pipeline_id=ctx.pipeline_id,
-            run_key=ctx.run_key.replace("/", "_"),
+            pipeline_id=safe_pipeline_id,
+            run_key=safe_run_key,
         ))
 
     def _content(self, ctx: PipelineContext) -> str:
