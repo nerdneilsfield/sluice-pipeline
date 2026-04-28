@@ -141,7 +141,9 @@ class LLMStageProcessor:
                 except Exception as e:
                     if self.failures is not None and self.pipeline_id:
                         await self.failures.record(
-                            self.pipeline_id, compute_item_key(it), it,
+                            self.pipeline_id,
+                            compute_item_key(it),
+                            it,
                             stage=self.name,
                             error_class=type(e).__name__,
                             error_msg=str(e),
@@ -150,6 +152,7 @@ class LLMStageProcessor:
                     return None
                 if parsed is None and self.on_parse_error == "skip":
                     return None
+                assert self.output_field is not None
                 _set_path(it, self.output_field, parsed)
                 return it
 
@@ -166,6 +169,7 @@ class LLMStageProcessor:
         llm = self.llm_factory()
         out = await llm.chat([{"role": "user", "content": rendered}])
         parsed = self._parse(out)
+        assert self.output_target is not None
         _, _, key = self.output_target.partition(".")
         ctx.context[key] = parsed
         return ctx

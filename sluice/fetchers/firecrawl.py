@@ -7,8 +7,7 @@ from sluice.fetchers._ssrf import guard
 class FirecrawlFetcher:
     name = "firecrawl"
 
-    def __init__(self, *, base_url: str, api_key: str | None = None,
-                 timeout: float = 60.0):
+    def __init__(self, *, base_url: str, api_key: str | None = None, timeout: float = 60.0):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
@@ -22,7 +21,7 @@ class FirecrawlFetcher:
             r = await c.post(
                 f"{self.base_url}/v1/scrape",
                 headers=headers,
-                json={"url": url, "formats": ["markdown"]}
+                json={"url": url, "formats": ["markdown"]},
             )
             r.raise_for_status()
             data = r.json()

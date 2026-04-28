@@ -52,14 +52,17 @@ def _check_host(host: str) -> None:
     except socket.gaierror as e:
         raise SSRFError(f"cannot resolve host {host}: {e}") from e
     for info in infos:
-        resolved_ip = info[4][0]
+        resolved_ip = str(info[4][0])
         if _is_blocked_ip(resolved_ip):
             raise SSRFError(f"blocked private IP resolved from {host}: {resolved_ip}")
 
 
 def guard(url: str) -> None:
     parts = urlsplit(url)
-    _check_host(parts.hostname)
+    host = parts.hostname
+    if host is None:
+        raise SSRFError("invalid URL: missing hostname")
+    _check_host(host)
 
 
 _MAX_REDIRECTS = 10

@@ -36,6 +36,7 @@ def test_blocks_domain_resolving_to_private_ip(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     with pytest.raises(SSRFError, match="blocked private IP resolved"):
         from sluice.fetchers._ssrf import guard
+
         guard("http://evil.example.com/secret")
 
 
@@ -51,9 +52,7 @@ async def test_redirect_to_private_ip_blocked(monkeypatch):
     f = TrafilaturaFetcher(timeout=10)
     with respx.mock() as r:
         r.get("https://public.example.com/a").mock(
-            return_value=httpx.Response(
-                302, headers={"location": "http://192.168.1.1/secret"}
-            )
+            return_value=httpx.Response(302, headers={"location": "http://192.168.1.1/secret"})
         )
         with pytest.raises(SSRFError):
             await f.extract("https://public.example.com/a")

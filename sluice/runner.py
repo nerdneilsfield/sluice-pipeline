@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 import logging
+from typing import cast
 from sluice.config import PipelineConfig, GlobalConfig
 from sluice.context import PipelineContext, RunStats
 from sluice.loader import ConfigBundle
@@ -36,7 +37,10 @@ class RunResult:
 
 
 def _resolve_db_path(global_cfg: GlobalConfig, pipe: PipelineConfig) -> str:
-    return pipe.state.db_path or global_cfg.state.db_path
+    db_path = pipe.state.db_path
+    if db_path is None:
+        db_path = global_cfg.state.db_path
+    return cast(str, db_path)
 
 
 def _resolve_tz(global_cfg: GlobalConfig, pipe: PipelineConfig) -> ZoneInfo:
@@ -70,7 +74,8 @@ async def run_pipeline(
         pool: ProviderPool | None = None
         try:
             budget = RunBudget(
-                max_calls=pipe.limits.max_llm_calls_per_run, max_usd=pipe.limits.max_estimated_cost_usd
+                max_calls=pipe.limits.max_llm_calls_per_run,
+                max_usd=pipe.limits.max_estimated_cost_usd,
             )
             pool = ProviderPool(bundle.providers)
             chain = build_fetcher_chain(global_cfg, pipe, cache)

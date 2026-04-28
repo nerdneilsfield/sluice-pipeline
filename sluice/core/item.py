@@ -31,7 +31,7 @@ class Item:
         cur: Any = self
         for part in path.split("."):
             if isinstance(cur, dict):
-                cur = cur.get(part, _SENTINEL)
+                cur = cur.get(part, _SENTINEL)  # type: ignore
             elif isinstance(cur, list):
                 try:
                     cur = cur[int(part)]

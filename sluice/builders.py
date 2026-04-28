@@ -4,6 +4,7 @@ from sluice.registry import (
     get_processor,
     get_sink,
 )
+from typing import cast
 from sluice.config import (
     GlobalConfig,
     PipelineConfig,
@@ -62,9 +63,15 @@ def _resolve_fetcher_chain_cfg(
     global_cfg: GlobalConfig, pipe: PipelineConfig
 ) -> tuple[list[str], int, str, bool, int]:
     g = global_cfg.fetcher
-    chain = pipe.fetcher.chain or g.chain
-    min_chars = pipe.fetcher.min_chars or g.min_chars
-    on_all_failed = pipe.fetcher.on_all_failed or g.on_all_failed
+    chain = pipe.fetcher.chain
+    if chain is None:
+        chain = g.chain
+    min_chars = pipe.fetcher.min_chars
+    if min_chars is None:
+        min_chars = g.min_chars
+    on_all_failed = pipe.fetcher.on_all_failed
+    if on_all_failed is None:
+        on_all_failed = g.on_all_failed
     if "cache" in pipe.model_fields_set:
         cache_enabled = pipe.cache.enabled
         ttl_str = pipe.cache.ttl
@@ -74,7 +81,13 @@ def _resolve_fetcher_chain_cfg(
     from sluice.window import parse_duration
 
     ttl = int(parse_duration(ttl_str).total_seconds())
-    return chain, min_chars, on_all_failed, cache_enabled, ttl
+    return (
+        cast(list[str], chain),
+        cast(int, min_chars),
+        cast(str, on_all_failed),
+        cache_enabled,
+        ttl,
+    )
 
 
 def build_fetcher_chain(

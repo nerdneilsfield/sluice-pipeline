@@ -1,11 +1,9 @@
+from __future__ import annotations
+
 from typing import Protocol, AsyncIterator
 from dataclasses import dataclass
 from sluice.core.item import Item
-
-# Forward references avoid circular imports
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from sluice.context import PipelineContext
+from sluice.context import PipelineContext
 
 
 class Source(Protocol):
@@ -23,14 +21,14 @@ class Fetcher(Protocol):
 class Processor(Protocol):
     name: str
 
-    async def process(self, ctx) -> "PipelineContext": ...  # noqa: F821
+    async def process(self, ctx) -> PipelineContext: ...
 
 
 class Sink(Protocol):
     id: str
     type: str
 
-    async def emit(self, ctx) -> "SinkResult": ...
+    async def emit(self, ctx) -> SinkResult: ...
 
 
 class LLMProvider(Protocol):
