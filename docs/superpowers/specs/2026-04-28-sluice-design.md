@@ -119,7 +119,7 @@ class Item:
     url: str                        # link to article (canonicalised: lowercased
                                     #   scheme/host, fragment stripped, common
                                     #   tracking params removed: utm_*, fbclid,
-                                    #   gclid, ref, ref_src)
+                                    #   gclid, ref, ref_src, mc_cid, mc_eid)
     # Content
     title: str
     published_at: datetime | None   # tz-aware; None if feed gave nothing
@@ -164,10 +164,15 @@ lookback_overlap = "4h"   # extra lookback to catch delayed RSS publishing
   `window_end = now`. Default overlap = `max(1h, window * 0.2)`.
 - Items with `published_at = None` are **included** in the window (RSS feeds
   occasionally omit it; better to over-include and let dedupe handle it).
+- If item-cap trimming needs to order `published_at = None`, those entries
+  sort as oldest so timestamped feed items remain stable under caps.
 - The `dedupe` processor absorbs the overlap noise: anything seen in a prior
   run is dropped.
 - "Future-dated" items (`published_at > now + 1h`) are **dropped** as feed
   errors and logged.
+- RSS feed URLs themselves are operator-controlled config and are not SSRF
+  guarded in v1. Article/fetcher URLs are guarded because they originate from
+  feed content.
 
 ## Stage Abstraction
 
@@ -311,7 +316,8 @@ Two semantically distinct cap families:
 
 ```toml
 [pipeline.limits]
-# Item-count cap — enforced after Source.fetch + dedupe, before any LLM work.
+# Item-count cap — enforced before any LLM work: after dedupe when present,
+# otherwise immediately after Source.fetch/requeue merge.
 # Excess items are dropped per item_overflow_policy.
 max_items_per_run = 50            # default tuned for Notion upsert speed
                                   # (~50 items keeps a daily upsert under
@@ -326,8 +332,10 @@ max_estimated_cost_usd = 5.0
 ```
 
 Order of enforcement:
-1. After `Source.fetch()` and `dedupe`, count remaining items. If above
-   `max_items_per_run`, apply `item_overflow_policy`.
+1. Count remaining items after `Source.fetch()` and requeue merge. If a
+   `dedupe` stage exists, enforce after dedupe; otherwise enforce before the
+   first configured processor. If above `max_items_per_run`, apply
+   `item_overflow_policy`.
 2. Before each `llm_stage`, check projected calls + cost against
    `max_llm_calls_per_run` / `max_estimated_cost_usd`. If projected total
    would exceed either cap, the run **fails** (no silent skip — skipping
@@ -474,8 +482,9 @@ id    = "notion_main"     # REQUIRED. Stable, unique within the pipeline.
                           # Used as sink_emissions.sink_id so two sinks
                           # of the same type don't collide on retry.
 type  = "..."
-emit_on_empty = false     # default: skip the sink if items list is empty
-                          # (prevents creating an empty Notion page)
+emit_on_empty = false     # default: skip only when both items is empty and
+                          # the sink input payload is missing/empty.
+                          # Aggregate outputs may still emit with no items.
 ```
 
 ### `file_md`
@@ -513,6 +522,9 @@ mode = "upsert"                        # "upsert" | "create_once" | "create_new"
                                        #   on manual re-run" is the desired
                                        #   behavior. Excluded from the
                                        #   no-duplicates idempotency tests.
+                                       #   sink_emissions keeps only the latest
+                                       #   external_id for this run/sink; audit
+                                       #   of every manual re-run page is v2.
 max_block_chars = 1900                 # Notion API caps blocks at 2000 chars.
                                        # The sink chunks long markdown lines
                                        # into multiple blocks at this size.
@@ -623,13 +635,14 @@ retry_backoff = "next_run"            # only retried on next scheduled run,
 ```
 
 Lifecycle:
-- A `status = "failed"` item is re-queued at the start of the next run
-  (before `Source.fetch`), reconstructed from `item_json`. `attempts`
-  increments per retry.
-- **Re-queued items bypass `dedupe`**: they are merged into `ctx.items`
-  *after* `dedupe` runs against the freshly-fetched RSS items. Otherwise
-  the dedupe gate (which sees `failed`/`dead_letter` rows as already-seen)
-  would immediately drop the very items we are trying to retry.
+- A `status = "failed"` item is re-queued at the start of the next run,
+  reconstructed from `item_json`, merged into `ctx.items` before processors,
+  and tracked internally as a retry key. It passes through ordinary processors
+  before `dedupe`; `dedupe` preserves retry keys even though the `failed_items`
+  row still exists.
+- `sluice failures --retry ITEM_KEY` moves a dead-letter item back to
+  `status = "failed"` and resets `attempts = 0`, allowing an intentional
+  manual retry cycle.
 - The `failed`/`dead_letter` gate inside `dedupe` only suppresses items
   freshly produced by `Source.fetch` whose key matches an existing failed
   row — preventing the RSS source from continually re-introducing them.
