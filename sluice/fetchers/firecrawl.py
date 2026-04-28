@@ -1,5 +1,6 @@
 import httpx
 from sluice.fetchers.base import register_fetcher
+from sluice.fetchers._ssrf import guard
 
 @register_fetcher("firecrawl")
 class FirecrawlFetcher:
@@ -12,6 +13,7 @@ class FirecrawlFetcher:
         self.timeout = timeout
 
     async def extract(self, url: str) -> str:
+        guard(url)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"

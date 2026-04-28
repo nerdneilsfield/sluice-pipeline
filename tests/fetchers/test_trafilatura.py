@@ -1,5 +1,6 @@
 import pytest, httpx, respx
 from sluice.fetchers.trafilatura_fetcher import TrafilaturaFetcher
+from sluice.fetchers._ssrf import SSRFError
 
 HTML = "<html><head><title>T</title></head><body>" \
        "<article><h1>Hello</h1><p>This is the body content of an article. " \
@@ -14,3 +15,9 @@ async def test_extract_html():
         md = await f.extract("https://x/a")
     assert "Hello" in md
     assert "body content" in md
+
+@pytest.mark.asyncio
+async def test_blocks_private_ip():
+    f = TrafilaturaFetcher(timeout=10)
+    with pytest.raises(SSRFError):
+        await f.extract("http://169.254.169.254/latest/meta-data/")

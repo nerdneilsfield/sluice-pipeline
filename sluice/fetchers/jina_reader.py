@@ -1,5 +1,6 @@
 import httpx
 from sluice.fetchers.base import register_fetcher
+from sluice.fetchers._ssrf import guard
 
 @register_fetcher("jina_reader")
 class JinaReaderFetcher:
@@ -12,6 +13,7 @@ class JinaReaderFetcher:
         self.timeout = timeout
 
     async def extract(self, url: str) -> str:
+        guard(url)
         headers = {}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"

@@ -1,6 +1,7 @@
 import asyncio
 import httpx, trafilatura
 from sluice.fetchers.base import register_fetcher
+from sluice.fetchers._ssrf import guard
 
 @register_fetcher("trafilatura")
 class TrafilaturaFetcher:
@@ -10,6 +11,7 @@ class TrafilaturaFetcher:
         self.timeout = timeout
 
     async def extract(self, url: str) -> str:
+        guard(url)
         async with httpx.AsyncClient(timeout=self.timeout,
                                       follow_redirects=True) as c:
             r = await c.get(url)
