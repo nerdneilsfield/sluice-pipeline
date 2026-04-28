@@ -12,6 +12,7 @@ _BLOCKED_HOSTS = {
     "::1",
 }
 
+
 class SSRFError(ValueError):
     pass
 

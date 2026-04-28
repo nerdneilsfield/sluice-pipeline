@@ -63,8 +63,7 @@ async def test_migration_allows_semicolon_inside_string_literal(tmp_path):
     fake_migrations = tmp_path / "fake_migrations"
     fake_migrations.mkdir()
     (fake_migrations / "0001_init.sql").write_text(
-        "CREATE TABLE t (value TEXT);\n"
-        "INSERT INTO t(value) VALUES ('hello; world');\n"
+        "CREATE TABLE t (value TEXT);\nINSERT INTO t(value) VALUES ('hello; world');\n"
     )
     db_module.MIGRATIONS = fake_migrations
     try:

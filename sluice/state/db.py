@@ -21,9 +21,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             continue
         sql = f.read_text()
         try:
-            await db.executescript(
-                f"BEGIN;\n{sql}\nPRAGMA user_version = {int(v)};\nCOMMIT;"
-            )
+            await db.executescript(f"BEGIN;\n{sql}\nPRAGMA user_version = {int(v)};\nCOMMIT;")
         except Exception:
             await db.rollback()
             raise
