@@ -1,5 +1,5 @@
-from typing import Literal
-from pydantic import BaseModel, Field
+from typing import Literal, Any
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class KeyConfig(BaseModel):
@@ -209,8 +209,37 @@ class PipelineFailures(BaseModel):
     retry_backoff: Literal["next_run"] = "next_run"
 
 
-class StateOverride(BaseModel):
+class StateConfig(BaseModel):
     db_path: str | None = None
+
+
+StateOverride = StateConfig
+
+
+class RuntimeConfig(BaseModel):
+    timezone: str = "Asia/Shanghai"
+    default_cron: str = "0 8 * * *"
+
+
+class GlobalFetcherConfig(BaseModel):
+    chain: list[str] | None = None
+    min_chars: int | None = None
+    on_all_failed: str | None = None
+    cache: CacheOverride = Field(default_factory=CacheOverride)
+
+
+class FetcherImplConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: str
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class GlobalConfig(BaseModel):
+    state: StateConfig = Field(default_factory=StateConfig)
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    fetcher: GlobalFetcherConfig = Field(default_factory=GlobalFetcherConfig)
+    fetchers: dict[str, FetcherImplConfig] = Field(default_factory=dict)
 
 
 class PipelineConfig(BaseModel):
@@ -228,7 +257,7 @@ class PipelineConfig(BaseModel):
     cache:   CacheOverride         = Field(default_factory=CacheOverride)
     limits:  PipelineLimits        = Field(default_factory=PipelineLimits)
     failures: PipelineFailures     = Field(default_factory=PipelineFailures)
-    state:   StateOverride         = Field(default_factory=StateOverride)
+    state:   StateConfig           = Field(default_factory=StateConfig)
 
     @model_validator(mode="after")
     def _unique_sink_ids(self):

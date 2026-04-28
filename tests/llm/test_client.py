@@ -65,3 +65,14 @@ async def test_all_exhausted_raises(monkeypatch):
         r.post("https://fb/chat/completions").mock(return_value=httpx.Response(429))
         with pytest.raises(AllProvidersExhausted):
             await LLMClient(pool, cfg).chat([{"role": "user", "content": "x"}])
+
+@pytest.mark.asyncio
+async def test_401_403_fail_fast_no_fallback(monkeypatch):
+    """4xx client errors (except 429) should fail immediately, not burn fallback quota."""
+    pool = make_pool(monkeypatch)
+    cfg = StageLLMConfig(model="p1/m1", fallback_model="p2/m2")
+    with respx.mock(assert_all_mocked=False) as r:
+        r.post("https://main/chat/completions").mock(return_value=httpx.Response(401, text="unauthorized"))
+        # fallback should NOT be called — don't register it in respx
+        with pytest.raises(httpx.HTTPStatusError):
+            await LLMClient(pool, cfg).chat([{"role": "user", "content": "x"}])

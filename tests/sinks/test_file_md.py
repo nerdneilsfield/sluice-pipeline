@@ -43,3 +43,19 @@ async def test_path_traversal_rejected(tmp_path):
     written = Path(res.external_id)
     assert str(written).startswith(str(tmp_path / "out"))
     assert ".." not in written.name
+
+@pytest.mark.asyncio
+async def test_is_relative_to_blocks_escape(tmp_path):
+    """Defense-in-depth: is_relative_to catches escape even if sanitization is bypassed."""
+    out = tmp_path / "out" / "file.md"
+    s = FileMdSink(id="local", input="context.markdown", path=str(out))
+    # Bypass _resolve_path to simulate an escaping path
+    original_resolve = s._resolve_path
+    def fake_resolve(ctx):
+        return Path(tmp_path / "out" / ".." / ".." / "escape.md")
+    s._resolve_path = fake_resolve
+    ctx = PipelineContext("p", "p/r", "2026-04-28", [object()], {"markdown": "# hi"})
+    async with open_db(tmp_path / "d.db") as db:
+        e = EmissionStore(db)
+        with pytest.raises(ValueError, match="escapes output directory"):
+            await s.emit(ctx, emissions=e)

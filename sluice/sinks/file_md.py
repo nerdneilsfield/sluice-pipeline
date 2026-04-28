@@ -14,7 +14,7 @@ class FileMdSink(Sink):
 
     def _resolve_path(self, ctx: PipelineContext) -> Path:
         safe_pipeline_id = ctx.pipeline_id.replace("..", "_").replace("/", "_")
-        safe_run_key = ctx.run_key.replace("/", "_")
+        safe_run_key = ctx.run_key.replace("..", "_").replace("/", "_")
         return Path(self.path_template.format(
             run_date=ctx.run_date,
             pipeline_id=safe_pipeline_id,
@@ -29,6 +29,11 @@ class FileMdSink(Sink):
 
     async def create(self, ctx: PipelineContext) -> str:
         p = self._resolve_path(ctx)
+        # Defensive: ensure resolved path stays under the template's parent directory
+        template_parent = Path(self.path_template).parent.resolve()
+        resolved = p.resolve()
+        if template_parent != Path(".") and not resolved.is_relative_to(template_parent):
+            raise ValueError(f"resolved path {resolved} escapes output directory {template_parent}")
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(self._content(ctx))
         return str(p)

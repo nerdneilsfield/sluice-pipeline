@@ -17,6 +17,7 @@ dependencies = [
   "typer>=0.12",
   "prefect>=3.0",
   "python-dateutil>=2.9",
+  "notionify>=0.1"
 ]
 
 [project.optional-dependencies]

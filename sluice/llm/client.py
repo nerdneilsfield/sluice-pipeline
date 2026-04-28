@@ -34,6 +34,10 @@ class LLMClient:
             try:
                 return await self._call(ep, messages)
             except (RateLimitError, QuotaExhausted, httpx.NetworkError, httpx.HTTPStatusError) as e:
+                if isinstance(e, httpx.HTTPStatusError):
+                    # 4xx client errors (401/403) = bad key/config → fail fast
+                    if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+                        raise
                 if isinstance(e, QuotaExhausted):
                     self.pool.cool_down(ep)
                 continue
