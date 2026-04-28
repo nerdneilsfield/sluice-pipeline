@@ -25,32 +25,22 @@ class FailureStore:
     async def record(self, pipeline_id: str, item_key: str, item: Item, *,
                      stage: str, error_class: str, error_msg: str,
                      max_retries: int) -> None:
-        async with self.db.execute(
-            "SELECT attempts FROM failed_items "
-            "WHERE pipeline_id=? AND item_key=?",
-            (pipeline_id, item_key),
-        ) as cur:
-            row = await cur.fetchone()
         now = _now()
-        if row is None:
-            await self.db.execute(
-                "INSERT INTO failed_items (pipeline_id, item_key, url, stage, "
-                "error_class, error_msg, attempts, status, item_json, "
-                "first_failed_at, last_failed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, 'failed', ?, ?, ?)",
-                (pipeline_id, item_key, item.url, stage, error_class,
-                 error_msg, _to_json(item), now, now),
-            )
-        else:
-            new_attempts = row[0] + 1
-            new_status = "dead_letter" if new_attempts >= max_retries else "failed"
-            await self.db.execute(
-                "UPDATE failed_items SET attempts=?, status=?, "
-                "stage=?, error_class=?, error_msg=?, last_failed_at=? "
-                "WHERE pipeline_id=? AND item_key=?",
-                (new_attempts, new_status, stage, error_class, error_msg,
-                 now, pipeline_id, item_key),
-            )
+        await self.db.execute(
+            """INSERT INTO failed_items
+               (pipeline_id, item_key, url, stage, error_class, error_msg,
+                attempts, status, item_json, first_failed_at, last_failed_at)
+               VALUES (?, ?, ?, ?, ?, ?, 1, 'failed', ?, ?, ?)
+               ON CONFLICT(pipeline_id, item_key) DO UPDATE SET
+                 attempts = attempts + 1,
+                 status = CASE WHEN attempts + 1 >= ? THEN 'dead_letter' ELSE 'failed' END,
+                 stage = excluded.stage,
+                 error_class = excluded.error_class,
+                 error_msg = excluded.error_msg,
+                 last_failed_at = excluded.last_failed_at""",
+            (pipeline_id, item_key, item.url, stage, error_class,
+             error_msg, _to_json(item), now, now, max_retries),
+        )
         await self.db.commit()
 
     async def requeue(self, pipeline_id: str) -> list[Item]:
