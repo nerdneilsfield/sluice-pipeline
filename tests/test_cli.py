@@ -58,6 +58,13 @@ def test_run_invokes_runner(tmp_path):
     assert fake.call_args.kwargs["dry_run"] is False
 
 
+def test_failures_retry_help_documents_attempt_reset():
+    res = runner.invoke(app, ["failures", "--help"])
+    assert res.exit_code == 0
+    assert "resets" in res.output
+    assert "attempts to 0" in res.output
+
+
 def test_run_passes_dry_run_flag(tmp_path):
     fake = AsyncMock(
         return_value=type(

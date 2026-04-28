@@ -10,6 +10,8 @@ app = typer.Typer(no_args_is_help=True)
 
 
 def _import_all():
+    # v1 uses explicit imports for plugin registration. Entry-points or
+    # package discovery can replace this once third-party plugins exist.
     from sluice.sources import rss  # noqa
     from sluice.fetchers import trafilatura_fetcher, firecrawl, jina_reader  # noqa
     from sluice.sinks import file_md, notion  # noqa
@@ -57,7 +59,11 @@ def run(
 def failures(
     pipeline_id: str,
     config_dir: Path = typer.Option("./configs", "--config-dir", "-c"),
-    retry: str | None = typer.Option(None, "--retry", help="item_key of a dead-letter to re-queue"),
+    retry: str | None = typer.Option(
+        None,
+        "--retry",
+        help="item_key of a dead-letter to re-queue; resets attempts to 0",
+    ),
 ):
     """List failed items, optionally re-queue one."""
     _import_all()

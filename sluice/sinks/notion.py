@@ -43,6 +43,8 @@ class DefaultNotionifyAdapter:
 
 
 def chunk_markdown(text: str, max_chars: int) -> list[str]:
+    # Kept as the v1 chunking primitive even though DefaultNotionifyAdapter
+    # currently delegates block splitting to notionify.
     if len(text) <= max_chars:
         return [text] if text else []
     chunks = []

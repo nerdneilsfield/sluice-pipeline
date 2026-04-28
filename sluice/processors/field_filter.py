@@ -39,6 +39,8 @@ class FieldFilterProcessor:
         self.ops = ops
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:
+        # v1 mutates Item instances in-place because field_filter is a final
+        # payload-shaping stage, not an audit-preserving transform.
         for it in ctx.items:
             for op in self.ops:
                 if op.op == "truncate":
