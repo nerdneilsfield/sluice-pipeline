@@ -1,4 +1,4 @@
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, quote
 
 TRACKING_PARAMS = {
     "utm_source",
@@ -19,9 +19,7 @@ def canonical_url(url: str) -> str:
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
     netloc = parts.netloc.lower()
-    query = "&".join(
-        f"{k}={v}"
-        for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if k not in TRACKING_PARAMS
-    )
+    query_pairs = parse_qsl(parts.query, keep_blank_values=True)
+    filtered = [(k, v) for k, v in query_pairs if k not in TRACKING_PARAMS]
+    query = urlencode(filtered, quote_via=quote)
     return urlunsplit((scheme, netloc, parts.path, query, ""))

@@ -23,3 +23,11 @@ def test_strip_all_known_trackers():
 
 def test_keep_path_case():
     assert canonical_url("https://X.com/Foo/Bar") == "https://x.com/Foo/Bar"
+
+
+def test_preserves_url_encoding():
+    assert canonical_url("https://x.com/a?q=hello%20world") == "https://x.com/a?q=hello%20world"
+
+
+def test_preserves_special_chars_in_values():
+    assert canonical_url("https://x.com/a?k=a%26b") == "https://x.com/a?k=a%26b"
