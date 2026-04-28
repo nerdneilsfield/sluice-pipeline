@@ -18,7 +18,7 @@ class FetcherChain:
         self.cache = cache
         self.ttl_seconds = ttl_seconds
 
-    async def fetch(self, url: str) -> str:
+    async def fetch(self, url: str) -> str | None:
         if self.cache:
             hit = await self.cache.get(url)
             if hit:
@@ -35,5 +35,5 @@ class FetcherChain:
                     await self.cache.set(url, f.name, md, self.ttl_seconds)
                 return md
         if self.on_all_failed == "continue_empty":
-            return ""
+            return None
         raise AllFetchersFailed(url, attempts)

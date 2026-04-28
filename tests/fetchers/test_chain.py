@@ -83,7 +83,7 @@ async def test_all_failed_continue_empty(tmp_path):
             [a], min_chars=500, on_all_failed="continue_empty", cache=cache, ttl_seconds=3600
         )
         out = await chain.fetch("https://x/y")
-    assert out == ""
+    assert out is None
 
 
 @pytest.mark.asyncio
