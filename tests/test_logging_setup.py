@@ -31,6 +31,24 @@ def test_verbose_enables_console_debug(capsys):
     assert "debug event" in captured.err
 
 
+def test_console_logs_include_bound_context(capsys):
+    configure_cli_logging(verbose=True)
+    get_logger("sluice.fetchers.chain").bind(
+        url="https://example.com/article",
+        fetcher="trafilatura",
+        error_class="ReadTimeout",
+        error="timed out",
+    ).debug("fetcher.attempt_failed")
+    logger.complete()
+
+    captured = capsys.readouterr()
+    assert "fetcher.attempt_failed" in captured.err
+    assert "url=https://example.com/article" in captured.err
+    assert "fetcher=trafilatura" in captured.err
+    assert "error_class=ReadTimeout" in captured.err
+    assert "error=timed out" in captured.err
+
+
 def test_third_party_debug_is_suppressed():
     configure_cli_logging(verbose=True)
     assert logging.getLogger("aiosqlite").getEffectiveLevel() == logging.WARNING

@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Mapping
 from datetime import datetime
+from json import dumps
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 
@@ -55,11 +57,88 @@ class _TqdmStderrSink:
 
 
 _CONSOLE_SINK = _TqdmStderrSink()
+_CONTEXT_SKIP_KEYS = {"component", "_console_context"}
+_CONTEXT_KEY_ORDER = [
+    "pipeline_id",
+    "run_key",
+    "run_date",
+    "source",
+    "source_id",
+    "stage",
+    "sink_id",
+    "sink_type",
+    "model",
+    "fetcher",
+    "url",
+    "items_in",
+    "items_out",
+    "total_items",
+    "entries",
+    "emitted",
+    "skipped_future",
+    "skipped_window",
+    "fetched",
+    "used_existing",
+    "empty",
+    "failed",
+    "chars",
+    "min_chars",
+    "prompt_chars",
+    "projected_calls",
+    "projected_usd",
+    "attempts",
+    "details",
+    "error_class",
+    "error",
+]
 
 
 def _write_console(message: Any) -> None:
     _CONSOLE_SINK.write(str(message))
     _CONSOLE_SINK.flush()
+
+
+def _stringify_context_value(value: Any) -> str:
+    if isinstance(value, str):
+        rendered = value
+    elif isinstance(value, Mapping | list | tuple):
+        rendered = dumps(value, ensure_ascii=False, default=str)
+    else:
+        rendered = str(value)
+    rendered = rendered.replace("\n", "\\n")
+    if len(rendered) > 180:
+        return rendered[:177] + "..."
+    return rendered
+
+
+def _format_context(extra: dict[str, Any]) -> str:
+    keys = [key for key in _CONTEXT_KEY_ORDER if key in extra]
+    keys.extend(sorted(k for k in extra if k not in _CONTEXT_SKIP_KEYS and k not in keys))
+    parts = []
+    for key in keys:
+        if key in _CONTEXT_SKIP_KEYS:
+            continue
+        value = extra.get(key)
+        if value is None:
+            continue
+        parts.append(f"{key}={_stringify_context_value(value)}")
+    if not parts:
+        return ""
+    return " | " + " ".join(parts)
+
+
+def _console_format(record: dict[str, Any]) -> str:
+    extra = record["extra"]
+    extra.setdefault("component", "sluice")
+    extra["_console_context"] = _format_context(extra)
+    return (
+        "<green>{time:HH:mm:ss.SSS}</green> "
+        "<level>{level:<8}</level> "
+        "<cyan>{extra[component]}</cyan> "
+        "<level>{message}</level>"
+        "<level>{extra[_console_context]}</level>\n"
+        "{exception}"
+    )
 
 
 class _InterceptHandler(logging.Handler):
@@ -132,17 +211,12 @@ def configure_cli_logging(*, verbose: bool = False, log_file: str | Path | None 
     logger.enable("sluice")
     console_level = "DEBUG" if verbose else "INFO"
     logger.add(
-        _write_console,
+        cast(Any, _write_console),
         level=console_level,
         colorize=True,
         backtrace=verbose,
         diagnose=verbose,
-        format=(
-            "<green>{time:HH:mm:ss.SSS}</green> "
-            "<level>{level:<8}</level> "
-            "<cyan>{extra[component]}</cyan> "
-            "<level>{message}</level>"
-        ),
+        format=cast(Any, _console_format),
     )
 
     target = str(log_file or os.environ.get("SLUICE_LOG_FILE", "")).strip()
