@@ -89,3 +89,161 @@ async def test_end_to_end_no_llm(tmp_path):
     out_file = tmp_path / "2026-04-28.md"
     assert out_file.exists()
     assert "keep" in out_file.read_text()
+
+
+@pytest.mark.asyncio
+async def test_requeue_resolved_after_success(tmp_path):
+    from sluice.state.db import open_db
+    from sluice.state.failures import FailureStore
+    from sluice.state.seen import SeenStore
+
+    db_path = tmp_path / "test.db"
+    # Pre-seed a failed item
+    async with open_db(db_path) as db:
+        failures = FailureStore(db)
+        item = mk_item(guid="requeue1", title="requeue1")
+        await failures.record("p", "requeue1", item, stage="x",
+                              error_class="E", error_msg="m", max_retries=3)
+
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(db_path)),
+        runtime=RuntimeConfig(timezone="UTC"),
+        fetcher=GlobalFetcherConfig(chain=["trafilatura"]),
+        fetchers={"trafilatura": FetcherImplConfig(type="trafilatura")},
+    )
+    pipe = PipelineConfig(
+        id="p", window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            DedupeConfig(type="dedupe", name="dedupe"),
+            RenderConfig(type="render", name="render", template=str(template_path),
+                         output_field="context.markdown"),
+        ],
+        sinks=[FileMdSinkConfig(id="out", type="file_md",
+                                input="context.markdown", path=str(tmp_path / "{run_date}.md"))],
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=ProvidersConfig(providers=[]),
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+
+    # Source returns the same item that was failed
+    fake_source = FakeSource([mk_item(guid="requeue1", title="requeue1")])
+
+    with patch("sluice.runner.build_sources", return_value=[fake_source]):
+        result = await run_pipeline(bundle, pipeline_id="p",
+                                     now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc))
+
+    assert result.status == "success"
+
+    # Verify failure is now resolved
+    async with open_db(db_path) as db:
+        failures = FailureStore(db)
+        resolved = await failures.list("p", status="resolved")
+        assert len(resolved) == 1
+        assert resolved[0]["item_key"] == "requeue1"
+
+
+@pytest.mark.asyncio
+async def test_backpressure_fires_after_dedupe(tmp_path):
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(tmp_path / "test.db")),
+        runtime=RuntimeConfig(timezone="UTC"),
+        fetcher=GlobalFetcherConfig(chain=["trafilatura"]),
+        fetchers={"trafilatura": FetcherImplConfig(type="trafilatura")},
+    )
+    from sluice.config import PipelineLimits
+    pipe = PipelineConfig(
+        id="p", window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            DedupeConfig(type="dedupe", name="dedupe"),
+            RenderConfig(type="render", name="render", template=str(template_path),
+                         output_field="context.markdown"),
+        ],
+        sinks=[FileMdSinkConfig(id="out", type="file_md",
+                                input="context.markdown", path=str(tmp_path / "{run_date}.md"))],
+        limits=PipelineLimits(max_items_per_run=1),
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=ProvidersConfig(providers=[]),
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+
+    # 3 items, but cap is 1
+    items = [
+        mk_item(guid="g1", title="a"),
+        mk_item(guid="g2", title="b"),
+        mk_item(guid="g3", title="c"),
+    ]
+    fake_source = FakeSource(items)
+
+    with patch("sluice.runner.build_sources", return_value=[fake_source]):
+        result = await run_pipeline(bundle, pipeline_id="p",
+                                     now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc))
+
+    assert result.status == "success"
+    assert result.items_out == 1
+
+
+@pytest.mark.asyncio
+async def test_dry_run_writes_nothing_external(tmp_path):
+    from sluice.state.db import open_db
+    from sluice.state.seen import SeenStore
+
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+
+    db_path = tmp_path / "test.db"
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(db_path)),
+        runtime=RuntimeConfig(timezone="UTC"),
+        fetcher=GlobalFetcherConfig(chain=["trafilatura"]),
+        fetchers={"trafilatura": FetcherImplConfig(type="trafilatura")},
+    )
+    pipe = PipelineConfig(
+        id="p", window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            DedupeConfig(type="dedupe", name="dedupe"),
+            RenderConfig(type="render", name="render", template=str(template_path),
+                         output_field="context.markdown"),
+        ],
+        sinks=[FileMdSinkConfig(id="out", type="file_md",
+                                input="context.markdown", path=str(tmp_path / "{run_date}.md"))],
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=ProvidersConfig(providers=[]),
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+
+    items = [mk_item(guid="g1", title="keep")]
+    fake_source = FakeSource(items)
+
+    with patch("sluice.runner.build_sources", return_value=[fake_source]):
+        result = await run_pipeline(bundle, pipeline_id="p", dry_run=True,
+                                     now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc))
+
+    assert result.status == "success"
+    assert result.items_out == 1
+
+    # No output file should be written
+    out_file = tmp_path / "2026-04-28.md"
+    assert not out_file.exists()
+
+    # No seen records should be written
+    async with open_db(db_path) as db:
+        seen = SeenStore(db)
+        assert not await seen.is_seen("p", "g1")
