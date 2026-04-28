@@ -68,7 +68,7 @@ def build_fetcher_chain(global_cfg: GlobalConfig, pipe: PipelineConfig,
             raise ValueError(f"fetcher {name!r} declared in chain "
                              f"but missing [fetchers.{name}]")
         cls = get_fetcher(impl.type)
-        kwargs = impl.model_dump(exclude={"type"}, exclude_none=True)
+        kwargs = impl.model_dump(exclude={"type", "extra"}, exclude_none=True)
         if kwargs.get("api_key") and kwargs["api_key"].startswith("env:"):
             from sluice.loader import resolve_env
             kwargs["api_key"] = resolve_env(kwargs["api_key"])
