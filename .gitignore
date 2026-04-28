@@ -10,3 +10,5 @@ configs/sluice.toml
 configs/providers.toml
 configs/pipelines/*.toml
 !configs/**/*.example
+
+configs_test/
