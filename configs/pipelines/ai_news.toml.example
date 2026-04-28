@@ -1,0 +1,81 @@
+id = "ai_news"
+description = "Daily AI news digest"
+enabled = true
+cron = "0 8 * * *"
+timezone = "Asia/Shanghai"
+window = "24h"
+
+[[sources]]
+type = "rss"
+url  = "https://openai.com/blog/rss"
+tag  = "ai"
+
+[[sources]]
+type = "rss"
+url  = "https://www.anthropic.com/news/rss.xml"
+tag  = "ai"
+
+[[stages]]
+name = "dedupe"
+type = "dedupe"
+
+[[stages]]
+name = "fetch_fulltext"
+type = "fetcher_apply"
+write_field = "fulltext"
+skip_if_field_longer_than = 2000
+
+[[stages]]
+name = "prefilter"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "fulltext", op = "min_length", value = 300 },
+]
+
+[[stages]]
+name = "summarize"
+type = "llm_stage"
+mode = "per_item"
+input_field  = "fulltext"
+output_field = "summary"
+prompt_file  = "prompts/summarize_zh.md"
+model          = "glm/glm-4-flash"
+fallback_model = "deepseek/deepseek-v3"
+workers     = 8
+concurrency = 4
+max_input_chars = 20000
+
+[[stages]]
+name = "daily_analysis"
+type = "llm_stage"
+mode = "aggregate"
+input_field   = "summary"
+output_target = "context.daily_brief"
+prompt_file   = "prompts/daily_brief_zh.md"
+model          = "deepseek/deepseek-v3"
+fallback_model = "openai/gpt-4o"
+
+[[stages]]
+name = "render"
+type = "render"
+template = "templates/daily.md.j2"
+output_field = "context.markdown"
+
+[[sinks]]
+id = "local"
+type = "file_md"
+input = "context.markdown"
+path  = "./out/ai_news/{run_date}.md"
+
+[[sinks]]
+id = "notion_main"
+type = "notion"
+input = "context.markdown"
+parent_id = "env:NOTION_DB_AI_NEWS"
+parent_type = "database"
+title_template = "AI 日报 · {run_date}"
+properties = { Tag = "AI", Source = "sluice" }
+mode = "upsert"
+max_block_chars = 1900
+# cover_image deferred to v1.1 (notionify v3 has no cover slot)
