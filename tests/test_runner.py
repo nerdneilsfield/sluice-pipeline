@@ -1,4 +1,5 @@
 import pytest
+import textwrap
 from datetime import datetime, timezone
 from unittest.mock import patch
 from sluice.config import (
@@ -9,7 +10,7 @@ from sluice.config import (
     ProvidersConfig,
 )
 from sluice.core.item import Item
-from sluice.loader import ConfigBundle
+from sluice.loader import ConfigBundle, load_all
 from sluice.runner import run_pipeline
 
 import sluice.sources.rss           # noqa
@@ -247,3 +248,108 @@ async def test_dry_run_writes_nothing_external(tmp_path):
     async with open_db(db_path) as db:
         seen = SeenStore(db)
         assert not await seen.is_seen("p", "g1")
+
+
+def _bootstrap_minimal(tmp_path, *, rss_text: str, cap: int = 30,
+                       extra_pipe_toml: str = ""):
+    """Helper used by regression tests. Builds a configs/ tree with:
+    state DB at tmp_path/d.db, one openai-compat provider (env K),
+    one RSS source (mocked), dedupe + render + file_md sink. No LLM stages
+    so we don't need to mock the chat endpoint."""
+    cfg = tmp_path / "configs"; (cfg / "pipelines").mkdir(parents=True)
+    (cfg / "sluice.toml").write_text(textwrap.dedent(f"""
+        [state]
+        db_path = "{tmp_path}/d.db"
+        [runtime]
+        timezone="UTC"
+        default_cron="0 8 * * *"
+        prefect_api_url="http://x"
+        [fetcher]
+        chain = ["trafilatura"]
+        min_chars = 50
+        on_all_failed = "skip"
+        [fetchers.trafilatura]
+        type = "trafilatura"
+        timeout = 5
+        [fetcher.cache]
+        enabled = false
+        ttl = "1d"
+    """))
+    (cfg / "providers.toml").write_text(textwrap.dedent("""
+        [[providers]]
+        name = "n"
+        type = "openai_compatible"
+        [[providers.base]]
+        url = "https://llm.example"
+        weight = 1
+        key = [{ value = "env:K", weight = 1 }]
+        [[providers.models]]
+        model_name = "m"
+    """))
+    tpl = tmp_path / "tpl.j2"
+    tpl.write_text("count={{ items|length }}")
+    (cfg / "pipelines" / "p.toml").write_text(textwrap.dedent(f"""
+        id = "p"
+        window = "24h"
+        timezone = "UTC"
+        [limits]
+        max_items_per_run = {cap}
+        item_overflow_policy = "drop_oldest"
+        [[sources]]
+        type = "rss"
+        url = "https://feed.example/rss"
+        [[stages]]
+        name = "d"
+        type = "dedupe"
+        [[stages]]
+        name = "r"
+        type = "render"
+        template = "{tpl}"
+        output_field = "context.markdown"
+        [[sinks]]
+        id = "out"
+        type = "file_md"
+        input = "context.markdown"
+        path  = "{tmp_path}/out_{{{{ run_date }}}}.md"
+        {extra_pipe_toml}
+    """))
+    return cfg
+
+
+@pytest.mark.asyncio
+async def test_requeue_works_without_dedupe_stage(tmp_path, monkeypatch):
+    """Pipeline without dedupe stage must still merge requeued items."""
+    import respx, httpx
+    from datetime import datetime, timezone
+    from sluice.state.db import open_db
+    from sluice.state.failures import FailureStore
+    from sluice.core.item import Item, compute_item_key
+
+    monkeypatch.setenv("K", "v")
+    cfg = _bootstrap_minimal(tmp_path, rss_text="", cap=30)
+    # Remove dedupe stage from the config
+    pipe_toml = (cfg / "pipelines" / "p.toml").read_text()
+    pipe_toml = pipe_toml.replace("[[stages]]\nname = \"d\"\ntype = \"dedupe\"\n", "")
+    (cfg / "pipelines" / "p.toml").write_text(pipe_toml)
+
+    failed_item = Item(source_id="s", pipeline_id="p", guid="reseed",
+                       url="https://x/r", title="t",
+                       published_at=datetime(2026, 4, 28, tzinfo=timezone.utc),
+                       raw_summary=None, fulltext="x" * 200)
+    async with open_db(tmp_path / "d.db") as conn:
+        await FailureStore(conn).record(
+            "p", compute_item_key(failed_item), failed_item,
+            stage="summarize", error_class="X", error_msg="m",
+            max_retries=3,
+        )
+
+    bundle = load_all(cfg)
+    fake_now = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
+    empty_rss = '<?xml version="1.0"?><rss><channel></channel></rss>'
+    with respx.mock() as r:
+        r.get("https://feed.example/rss").mock(
+            return_value=httpx.Response(200, text=empty_rss))
+        result = await run_pipeline(bundle, pipeline_id="p", now=fake_now)
+
+    assert result.status == "success"
+    assert result.items_out == 1  # requeued item must survive

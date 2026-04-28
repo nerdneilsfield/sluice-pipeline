@@ -124,9 +124,12 @@ async def run_pipeline(bundle: ConfigBundle, *, pipeline_id: str,
                             key=lambda i: i.published_at or min_dt,
                             reverse=(policy == "drop_oldest"))
                         ctx.items = ctx.items[:cap]
-                    if requeue_pending:
-                        ctx.items.extend(requeue_pending)
-                        requeue_pending = []
+                # Merge requeued items AFTER every stage (not just after dedupe).
+                # They bypass dedupe by design; if there's no dedupe stage,
+                # they still need to enter the pipeline.
+                if requeue_pending:
+                    ctx.items.extend(requeue_pending)
+                    requeue_pending = []
 
             ctx.stats.items_out = len(ctx.items)
             ctx.stats.llm_calls = budget.calls
