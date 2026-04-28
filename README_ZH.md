@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
 [![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-154%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -405,6 +405,14 @@ ttl     = "7d"
 
 内置 SSRF 防护：阻止抓取请求打到内网/loopback IP，防止恶意 feed entry 探测内网。
 
+如果你在 TUN/fake-IP 代理后面跑（比如 Clash/mihomo fake-ip 模式），公网域名
+可能会被本地 DNS 解析成 `198.18.0.0/15`。普通环境保持默认严格模式；确认是代理
+fake-ip 后再显式打开：
+
+```bash
+SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
+```
+
 </details>
 
 <details>
@@ -658,7 +666,7 @@ prefect worker start --pool default # 处理调度任务
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # 或 pip install -e '.[dev]'
-pytest                              # 154 个测试，约 7 秒
+pytest                              # 158 个测试，约 7 秒
 pytest --cov=sluice                 # 89% 覆盖率
 ruff check .
 ty check .

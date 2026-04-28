@@ -10,7 +10,7 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
 [![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-154%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -415,6 +415,15 @@ SSRF guard built in: outbound fetches are blocked from hitting
 private/loopback IPs to prevent malicious feed entries from probing
 internal networks.
 
+If you run behind a TUN/fake-IP proxy (for example Clash/mihomo fake-ip mode),
+DNS may resolve public domains to `198.18.0.0/15`. Keep the default strict
+guard for normal environments; opt in only when you know your proxy is doing
+this:
+
+```bash
+SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
+```
+
 </details>
 
 <details>
@@ -674,7 +683,7 @@ scheduling, SSRF guard.
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # or pip install -e '.[dev]'
-pytest                              # 154 tests, ~7s
+pytest                              # 158 tests, ~7s
 pytest --cov=sluice                 # 89% coverage
 ruff check .
 ty check .

@@ -97,3 +97,34 @@ def test_blocks_non_global_address():
     """Non-global addresses beyond RFC1918/link-local should be blocked."""
     with pytest.raises(SSRFError):
         guard("http://100.64.0.1/")
+
+
+def test_blocks_tun_fake_ip_resolution_by_default(monkeypatch):
+    """TUN fake-ip DNS should stay blocked unless explicitly enabled."""
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("198.18.0.174", 0))]
+
+    monkeypatch.delenv("SLUICE_SSRF_ALLOW_TUN_FAKE_IP", raising=False)
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(SSRFError, match="198.18.0.174"):
+        guard("https://public.example.com/article")
+
+
+def test_allows_tun_fake_ip_resolution_when_enabled(monkeypatch):
+    """Proxy/TUN fake-ip DNS can be allowed for domain names via opt-in env."""
+    import socket
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("198.18.0.174", 0))]
+
+    monkeypatch.setenv("SLUICE_SSRF_ALLOW_TUN_FAKE_IP", "1")
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    guard("https://public.example.com/article")
+
+
+def test_tun_fake_ip_literal_stays_blocked_when_enabled(monkeypatch):
+    monkeypatch.setenv("SLUICE_SSRF_ALLOW_TUN_FAKE_IP", "1")
+    with pytest.raises(SSRFError):
+        guard("http://198.18.0.174/")

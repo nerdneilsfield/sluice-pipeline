@@ -1,10 +1,14 @@
 import ipaddress
+import os
 import socket
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from sluice.logging_setup import get_logger
+
 _ALLOWED_SCHEMES = {"http", "https"}
+_TUN_FAKE_IP_NET = ipaddress.ip_network("198.18.0.0/15")
 _BLOCKED_HOSTS = {
     "localhost",
     "127.0.0.1",
@@ -17,11 +21,29 @@ class SSRFError(ValueError):
     pass
 
 
-def _is_blocked_ip(host: str) -> bool:
+log = get_logger(__name__)
+
+
+def _allow_tun_fake_ip() -> bool:
+    return os.environ.get("SLUICE_SSRF_ALLOW_TUN_FAKE_IP", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _is_tun_fake_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return isinstance(addr, ipaddress.IPv4Address) and addr in _TUN_FAKE_IP_NET
+
+
+def _is_blocked_ip(host: str, *, allow_tun_fake_ip: bool = False) -> bool:
     try:
         addr = ipaddress.ip_address(host)
         if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
             addr = addr.ipv4_mapped
+        if allow_tun_fake_ip and _is_tun_fake_ip(addr):
+            return False
         return not addr.is_global
     except ValueError:
         return False
@@ -42,7 +64,11 @@ def _check_host(host: str) -> None:
         raise SSRFError(f"cannot resolve host {host}: {e}") from e
     for info in infos:
         resolved_ip = str(info[4][0])
-        if _is_blocked_ip(resolved_ip):
+        allow_tun_fake_ip = _allow_tun_fake_ip()
+        if allow_tun_fake_ip and _is_tun_fake_ip(ipaddress.ip_address(resolved_ip)):
+            log.bind(host=host, resolved_ip=resolved_ip).debug("ssrf.tun_fake_ip_allowed")
+            continue
+        if _is_blocked_ip(resolved_ip, allow_tun_fake_ip=allow_tun_fake_ip):
             raise SSRFError(f"blocked private IP resolved from {host}: {resolved_ip}")
 
 
@@ -74,7 +100,7 @@ def guard_response(response: httpx.Response) -> None:
     if not remote:
         return
     remote_host = remote[0] if isinstance(remote, tuple) else remote
-    if _is_blocked_ip(str(remote_host)):
+    if _is_blocked_ip(str(remote_host), allow_tun_fake_ip=_allow_tun_fake_ip()):
         raise SSRFError(f"blocked private peer IP: {remote_host}")
 
 
