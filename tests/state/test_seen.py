@@ -25,3 +25,14 @@ async def test_filter_unseen(tmp_path):
         await s.mark_seen_batch("p", [(make_item("a"), "a")])
         unseen = await s.filter_unseen("p", ["a", "b", "c"])
         assert unseen == ["b", "c"]
+
+@pytest.mark.asyncio
+async def test_filter_unseen_large_batch(tmp_path):
+    async with open_db(tmp_path / "d.db") as db:
+        s = SeenStore(db)
+        batch = [(make_item(f"k{i}"), f"k{i}") for i in range(1000)]
+        await s.mark_seen_batch("p", batch)
+        keys = [f"k{i}" for i in range(1500)]
+        unseen = await s.filter_unseen("p", keys)
+        assert len(unseen) == 500
+        assert unseen[0] == "k1000"

@@ -23,13 +23,17 @@ class SeenStore:
                             keys: list[str]) -> list[str]:
         if not keys:
             return []
-        placeholders = ",".join("?" * len(keys))
-        async with self.db.execute(
-            f"SELECT item_key FROM seen_items "
-            f"WHERE pipeline_id=? AND item_key IN ({placeholders})",
-            (pipeline_id, *keys),
-        ) as cur:
-            seen = {row[0] for row in await cur.fetchall()}
+        seen: set[str] = set()
+        BATCH = 900
+        for i in range(0, len(keys), BATCH):
+            chunk = keys[i:i + BATCH]
+            placeholders = ",".join("?" * len(chunk))
+            async with self.db.execute(
+                f"SELECT item_key FROM seen_items "
+                f"WHERE pipeline_id=? AND item_key IN ({placeholders})",
+                (pipeline_id, *chunk),
+            ) as cur:
+                seen.update(row[0] for row in await cur.fetchall())
         return [k for k in keys if k not in seen]
 
     async def mark_seen_batch(self, pipeline_id: str,
