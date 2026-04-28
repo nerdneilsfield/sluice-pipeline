@@ -577,9 +577,9 @@ sink    local:file_md   3   emitted
 
 The console log level is INFO by default. Add `--verbose` to show Sluice DEBUG
 events such as individual fetcher attempts, cache hits, too-short pages, and
-LLM retryable failures. Third-party internals (`httpx`, `httpcore`,
-`feedparser`, `trafilatura`, `prefect`) are kept at WARNING so verbose mode
-doesn't turn into transport noise.
+LLM retryable failures. Third-party internals (`aiosqlite`, `httpx`,
+`httpcore`, `feedparser`, `trafilatura`, `prefect`) are kept at WARNING so
+verbose mode doesn't turn into transport noise.
 
 Use `--log-file` or `SLUICE_LOG_FILE` for full DEBUG JSONL diagnostics:
 

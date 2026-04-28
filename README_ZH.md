@@ -565,8 +565,8 @@ sink    local:file_md   3   emitted
 
 控制台默认是 INFO。加 `--verbose` 后会显示 Sluice 自己的 DEBUG 事件：
 单个 fetcher 尝试、cache hit、页面太短、LLM 可重试失败等。第三方库内部日志
-（`httpx`、`httpcore`、`feedparser`、`trafilatura`、`prefect`）统一压到
-WARNING，避免 verbose 模式被连接细节刷屏。
+（`aiosqlite`、`httpx`、`httpcore`、`feedparser`、`trafilatura`、`prefect`）
+统一压到 WARNING，避免 verbose 模式被连接细节刷屏。
 
 需要完整回放时，用 `--log-file` 或 `SLUICE_LOG_FILE` 写 DEBUG JSONL：
 

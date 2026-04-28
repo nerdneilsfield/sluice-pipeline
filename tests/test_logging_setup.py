@@ -33,5 +33,6 @@ def test_verbose_enables_console_debug(capsys):
 
 def test_third_party_debug_is_suppressed():
     configure_cli_logging(verbose=True)
+    assert logging.getLogger("aiosqlite").getEffectiveLevel() == logging.WARNING
     assert logging.getLogger("httpx").getEffectiveLevel() == logging.WARNING
     assert logging.getLogger("httpcore").getEffectiveLevel() == logging.WARNING

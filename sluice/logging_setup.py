@@ -12,6 +12,7 @@ from typing import Any
 from loguru import logger
 
 _THIRD_PARTY_LOGGERS = [
+    "aiosqlite",
     "httpx",
     "httpcore",
     "feedparser",
