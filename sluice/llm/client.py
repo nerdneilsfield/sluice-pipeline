@@ -17,7 +17,7 @@ class StageLLMConfig:
     retry_model: str | None = None
     fallback_model: str | None = None
     fallback_model_2: str | None = None
-    timeout: float = 60.0
+    timeout: float = 120.0
 
 
 class LLMClient:
@@ -63,7 +63,12 @@ class LLMClient:
             **ep.extra_headers,
         }
         payload = {"model": ep.model_entry.model_name, "messages": messages}
-        r = await self.pool.client.post(url, headers=headers, json=payload)
+        r = await self.pool.client.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=self.cfg.timeout,
+        )
         if r.status_code == 429:
             text = r.text.lower()
             if any(t in text for t in ep._key_ref.quota_error_tokens):

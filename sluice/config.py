@@ -47,6 +47,7 @@ class RssSourceConfig(BaseModel):
     url: str
     tag: str | None = None
     name: str | None = None
+    timeout: float = 120.0
 
 
 SourceConfig = Annotated[
@@ -135,6 +136,7 @@ class LLMStageConfig(BaseModel):
     fallback_concurrency: int | None = None
     fallback_2_workers: int | None = None
     fallback_2_concurrency: int | None = None
+    timeout: float = 120.0
     output_parser: Literal["text", "json"] = "text"
     output_schema: str | None = None
     on_parse_error: Literal["fail", "skip", "default"] = "fail"

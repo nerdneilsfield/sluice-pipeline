@@ -9,11 +9,13 @@ window = "24h"
 type = "rss"
 url  = "https://openai.com/blog/rss"
 tag  = "ai"
+timeout = 120
 
 [[sources]]
 type = "rss"
 url  = "https://www.anthropic.com/news/rss.xml"
 tag  = "ai"
+timeout = 120
 
 [[stages]]
 name = "dedupe"
@@ -44,6 +46,7 @@ model          = "glm/glm-4-flash"
 fallback_model = "deepseek/deepseek-v3"
 workers     = 8
 concurrency = 4
+timeout = 120
 max_input_chars = 20000
 
 [[stages]]
@@ -55,6 +58,7 @@ output_target = "context.daily_brief"
 prompt_file   = "prompts/daily_brief_zh.md"
 model          = "deepseek/deepseek-v3"
 fallback_model = "openai/gpt-4o"
+timeout = 120
 
 [[stages]]
 name = "render"

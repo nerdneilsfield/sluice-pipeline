@@ -17,10 +17,15 @@ ttl = "7d"
 
 [fetchers.trafilatura]
 type = "trafilatura"
-timeout = 10
+timeout = 120
 
 [fetchers.firecrawl]
 type = "firecrawl"
 base_url = "http://localhost:3002"
 api_key = "env:FC_KEY"
-timeout = 60
+timeout = 120
+
+[fetchers.jina_reader]
+type = "jina_reader"
+base_url = "https://r.jina.ai"
+timeout = 120

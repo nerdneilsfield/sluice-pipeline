@@ -37,6 +37,7 @@ def build_sources(pipe: PipelineConfig):
                     source_id=s.name or f"rss_{i}",
                     tag=s.tag,
                     name=s.name,
+                    timeout=s.timeout,
                 )
             )
     return out
@@ -165,6 +166,7 @@ def build_processors(
                 retry_model=st.retry_model,
                 fallback_model=st.fallback_model,
                 fallback_model_2=st.fallback_model_2,
+                timeout=st.timeout,
             )
             procs.append(
                 LLMStageProcessor(
