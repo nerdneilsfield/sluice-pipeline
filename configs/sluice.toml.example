@@ -1,0 +1,26 @@
+[state]
+db_path = "./data/sluice.db"
+
+[runtime]
+timezone = "Asia/Shanghai"
+default_cron = "0 8 * * *"
+prefect_api_url = "http://localhost:4200/api"
+
+[fetcher]
+chain = ["trafilatura", "firecrawl", "jina_reader"]
+min_chars = 500
+on_all_failed = "skip"
+
+[fetcher.cache]
+enabled = true
+ttl = "7d"
+
+[fetchers.trafilatura]
+type = "trafilatura"
+timeout = 10
+
+[fetchers.firecrawl]
+type = "firecrawl"
+base_url = "http://localhost:3002"
+api_key = "env:FC_KEY"
+timeout = 60

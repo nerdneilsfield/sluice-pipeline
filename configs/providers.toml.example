@@ -1,0 +1,16 @@
+[[providers]]
+name = "glm"
+type = "openai_compatible"
+
+[[providers.base]]
+url = "https://open.bigmodel.cn/api/paas/v4"
+weight = 1
+key = [
+  { value = "env:GLM_API_KEY",   weight = 3 },
+  { value = "env:GLM_API_KEY_2", weight = 1, quota_duration = 18000 },
+]
+
+[[providers.models]]
+model_name = "glm-4-flash"
+input_price_per_1k  = 0.0001
+output_price_per_1k = 0.0001
