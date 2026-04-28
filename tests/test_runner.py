@@ -353,3 +353,26 @@ async def test_requeue_works_without_dedupe_stage(tmp_path, monkeypatch):
 
     assert result.status == "success"
     assert result.items_out == 1  # requeued item must survive
+
+
+@pytest.mark.asyncio
+async def test_runner_records_failure(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from sluice.state.db import open_db
+    from sluice.state.run_log import RunLog
+    from unittest.mock import patch
+
+    monkeypatch.setenv("K", "v")
+    cfg = _bootstrap_minimal(tmp_path, rss_text="")
+    bundle = load_all(cfg)
+    fake_now = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
+
+    with patch("sluice.runner.build_sources", side_effect=RuntimeError("boom")):
+        result = await run_pipeline(bundle, pipeline_id="p", now=fake_now)
+
+    assert result.status == "failed"
+    async with open_db(tmp_path / "d.db") as conn:
+        rows = await RunLog(conn).list("p")
+    assert len(rows) == 1
+    assert rows[0]["status"] == "failed"
+    assert rows[0]["error_msg"] is not None

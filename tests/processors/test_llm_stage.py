@@ -163,3 +163,36 @@ async def test_budget_preflight_blocks_on_usd(tmp_path):
     with pytest.raises(BudgetExceeded):
         await p.process(PipelineContext("p","p/r","r", items, {}))
     assert llm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_parse_error_skip(tmp_path):
+    prompt = tmp_path / "p.md"; prompt.write_text("x")
+    llm = FakeLLM(replies=['{bad json'])
+    p = LLMStageProcessor(
+        name="x", mode="per_item",
+        input_field="fulltext", output_field="summary",
+        prompt_file=str(prompt), llm_factory=lambda: llm,
+        output_parser="json", on_parse_error="skip",
+        max_input_chars=1000, truncate_strategy="head_tail", workers=1,
+    )
+    it = mk(0); it.fulltext = "body"
+    ctx = await p.process(PipelineContext("p","p/r","2026-04-28",[it],{}))
+    assert ctx.items == []
+
+
+@pytest.mark.asyncio
+async def test_parse_error_default(tmp_path):
+    prompt = tmp_path / "p.md"; prompt.write_text("x")
+    llm = FakeLLM(replies=['{bad json'])
+    p = LLMStageProcessor(
+        name="x", mode="per_item",
+        input_field="fulltext", output_field="summary",
+        prompt_file=str(prompt), llm_factory=lambda: llm,
+        output_parser="json", on_parse_error="default",
+        on_parse_error_default={"score": 0},
+        max_input_chars=1000, truncate_strategy="head_tail", workers=1,
+    )
+    it = mk(0); it.fulltext = "body"
+    ctx = await p.process(PipelineContext("p","p/r","2026-04-28",[it],{}))
+    assert ctx.items[0].summary == {"score": 0}
