@@ -27,7 +27,7 @@ async def test_render_full_context(tmp_path):
         "# {{ pipeline_id }} {{ run_date }}\n\n"
         "{{ context.daily_brief }}\n\n"
         "{% for it in items %}- {{ it.summary }}\n{% endfor %}\n"
-        "stats: {{ stats.items_out }}/{{ stats.llm_calls }}"
+        "stats: {{ stats.items_out }}/{{ stats.get('llm_calls') }}"
     )
     items = [mk("a"), mk("b")]
     ctx = PipelineContext(

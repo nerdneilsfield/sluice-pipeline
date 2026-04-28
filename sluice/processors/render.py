@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from pathlib import Path
 
 from jinja2 import Template
@@ -20,7 +21,7 @@ class RenderProcessor:
             pipeline_id=ctx.pipeline_id,
             run_key=ctx.run_key,
             run_date=ctx.run_date,
-            stats=ctx.stats,
+            stats=asdict(ctx.stats),
         )
         head, _, key = self.output_field.partition(".")
         if head != "context":
