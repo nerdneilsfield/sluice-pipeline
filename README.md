@@ -9,8 +9,8 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 [![Python](https://img.shields.io/pypi/pyversions/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
-[![Coverage](https://img.shields.io/badge/coverage-91%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-147%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
+[![Tests](https://img.shields.io/badge/tests-154%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -62,7 +62,7 @@ Three options most people consider:
 | Swap LLM provider          | Hope the integration exists        | Hope you wrote it that way             | Edit `providers.toml`, restart                                 |
 | Cost cap per run           | Hard                               | Hand-rolled                            | One-line `max_estimated_cost_usd`                              |
 | Failure handling           | "Retry the whole workflow"         | `try: ... except: pass`                | Per-item failed_items lifecycle, dead-letter, `--retry`        |
-| Self-hosted observability  | n8n web UI (heavy)                 | `print` + grep                         | Prefect server with run history per pipeline                   |
+| Self-hosted observability  | n8n web UI (heavy)                 | `print` + grep                         | Rich progress, loguru diagnostics, Prefect run history         |
 | LLM fallback chain         | Manual branching                   | None                                   | 4-tier model chain with weighted routing + key cooldown        |
 | Idempotency                | "Did it already run?"              | "Did the script crash midway?"         | `sink_emissions` table, upsert on retry                        |
 
@@ -146,6 +146,9 @@ sluice run ai_news --dry-run
 
 # For real
 sluice run ai_news
+
+# With detailed diagnostics
+sluice run ai_news --verbose --log-file logs/ai_news.jsonl
 
 # Schedule it (registers a Prefect deployment with cron)
 sluice deploy
@@ -551,9 +554,38 @@ sluice list                                          # list configured pipelines
 sluice validate                                      # validate all TOML
 sluice run <pipeline_id>                             # run once
 sluice run <pipeline_id> --dry-run                   # no DB writes, no sink emits
+sluice run <pipeline_id> --verbose                   # include Sluice DEBUG logs
+sluice run <pipeline_id> --log-file logs/run.jsonl   # write DEBUG JSONL diagnostics
 sluice deploy                                        # register all enabled pipelines as Prefect deployments
 sluice failures <pipeline_id>                        # list failed_items
 sluice failures <pipeline_id> --retry <item_key>     # move dead-letter back to failed
+```
+
+</details>
+
+<details>
+<summary><b>🪵 Progress and logs</b></summary>
+
+`sluice run` prints a tqdm progress bar while the pipeline is running, then a
+Rich **Step Summary** table with per-source and per-stage counts:
+
+```text
+source  rss_0           -   2   total=2
+stage   fetch_fulltext  22  3   fetched=3 failed=19 AllFetchersFailed=19
+sink    local:file_md   3   emitted
+```
+
+The console log level is INFO by default. Add `--verbose` to show Sluice DEBUG
+events such as individual fetcher attempts, cache hits, too-short pages, and
+LLM retryable failures. Third-party internals (`httpx`, `httpcore`,
+`feedparser`, `trafilatura`, `prefect`) are kept at WARNING so verbose mode
+doesn't turn into transport noise.
+
+Use `--log-file` or `SLUICE_LOG_FILE` for full DEBUG JSONL diagnostics:
+
+```bash
+sluice run ai_news --log-file logs/ai_news.jsonl
+SLUICE_LOG_FILE=logs/ai_news.jsonl sluice run ai_news --verbose
 ```
 
 </details>
@@ -616,7 +648,8 @@ prefect worker start --pool default # processes scheduled runs
 ## Roadmap
 
 ✅ **v1 (now)** — RSS source, Notion sink, file_md sink, 6 processors, 4-tier
-LLM fallback, idempotent retries, dry-run, Prefect scheduling, SSRF guard.
+LLM fallback, idempotent retries, dry-run, loguru diagnostics, Prefect
+scheduling, SSRF guard.
 
 🚧 **v1.1**
 
@@ -641,8 +674,8 @@ LLM fallback, idempotent retries, dry-run, Prefect scheduling, SSRF guard.
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # or pip install -e '.[dev]'
-pytest                              # 147 tests, ~6s
-pytest --cov=sluice                 # 91% coverage
+pytest                              # 154 tests, ~7s
+pytest --cov=sluice                 # 89% coverage
 ruff check .
 ty check .
 ```
