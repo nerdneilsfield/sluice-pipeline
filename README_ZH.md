@@ -419,6 +419,95 @@ ttl     = "7d"
 </details>
 
 <details>
+<summary><b>🎚 <code>filter</code> 操作符参考</b></summary>
+
+`filter` 是便宜、确定、**不调 LLM** 的保留 / 丢弃 stage。每条规则
+`{ field, op, value }`，`field` 是 `Item.get()` 解析的点路径
+（`extras.relevance`、`tags.0`、`published_at` 都行），用四种 `mode`
+之一组合。
+
+**Mode（怎么组合）：**
+
+| `mode`           | 满足下列条件就保留这条 item            |
+| ---------------- | -------------------------------------- |
+| `keep_if_all`    | 所有规则都命中（逻辑 AND）             |
+| `keep_if_any`    | 至少一条命中（逻辑 OR）                |
+| `drop_if_all`    | 不是所有规则都命中                     |
+| `drop_if_any`    | 一条也不命中                           |
+
+**操作符（共 17 个）：**
+
+| 类别        | `op`            | 检查什么                                                              |
+| ----------- | --------------- | --------------------------------------------------------------------- |
+| 存在性      | `exists`        | 字段存在且非 None                                                     |
+|             | `not_exists`    | 字段为 None 或不存在                                                  |
+| 数值        | `gt` / `gte`    | `field > value` / `field >= value`                                    |
+|             | `lt` / `lte`    | `field < value` / `field <= value`                                    |
+|             | `eq`            | `field == value`                                                      |
+| 字符串      | `matches`       | 正则搜索（带 ReDoS 防护）                                             |
+|             | `not_matches`   | `matches` 取反                                                        |
+|             | `contains`      | 子串 / 元素是否在 field 里                                            |
+|             | `not_contains`  | `contains` 取反                                                       |
+| 集合        | `in`            | field 值在给定列表里                                                  |
+|             | `not_in`        | `in` 取反                                                             |
+| 长度        | `min_length`    | `len(field) >= value`                                                 |
+|             | `max_length`    | `len(field) <= value`                                                 |
+| 时间        | `newer_than`    | `field`（datetime）比 `now - value` 新（如 `"24h"`、`"7d"`）          |
+|             | `older_than`    | `field` 比 `now - value` 旧                                          |
+
+**实战示例：**
+
+```toml
+# 1. 喂 LLM 之前的便宜预过滤 —— 留下足够长的文章 + 砍标题里的广告
+[[stages]]
+name = "prefilter"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "fulltext", op = "min_length", value = 300 },
+  { field = "title",    op = "not_matches", value = "(?i)广告|赞助|sponsored|advertisement" },
+  { field = "published_at", op = "newer_than", value = "48h" },
+]
+
+# 2. LLM 打分 + 规则过滤组合 —— 上游 llm_stage 给相关度 0-10，
+#    `filter` 砍掉低于 6 分的。
+[[stages]]
+name = "rate_relevance"
+type = "llm_stage"
+mode = "per_item"
+input_field    = "summary"
+output_field   = "extras.relevance"
+prompt_file    = "prompts/rate.md"
+output_parser  = "json"
+model          = "openrouter/openai/gpt-4o-mini"
+
+[[stages]]
+name = "drop_irrelevant"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "extras.relevance", op = "gte", value = 6 },
+]
+
+# 3. 标签白名单 + URL 黑名单组合
+[[stages]]
+name = "scope"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "tags",       op = "contains",     value = "ai" },
+  { field = "url",        op = "not_matches",  value = "^https?://(twitter|x)\\.com/" },
+  { field = "source_id",  op = "not_in",       value = ["spammy_feed_1", "spammy_feed_2"] },
+]
+```
+
+**为什么"规则过滤 + LLM 打分"比纯 LLM 过滤好：** 打分要花 LLM token，
+所以让 `llm_stage` 算一次写到字段里，下游用便宜的规则随便组合。
+同样的 prompt 钱，下游过滤器无限组合。
+
+</details>
+
+<details>
 <summary><b>📤 Sinks（输出端）</b></summary>
 
 | `type`     | 说明                                                                      |

@@ -429,6 +429,97 @@ internal networks.
 </details>
 
 <details>
+<summary><b>🎚 <code>filter</code> operator reference</b></summary>
+
+`filter` is a cheap, deterministic, **no-LLM** keep/drop stage. Each rule
+is `{ field, op, value }` where `field` is a dot-path resolved through
+`Item.get()` (so `extras.relevance`, `tags.0`, `published_at` all work).
+Combine rules with one of four `mode`s.
+
+**Modes:**
+
+| `mode`           | Keep this item if…                       |
+| ---------------- | ----------------------------------------- |
+| `keep_if_all`    | every rule matches (logical AND)         |
+| `keep_if_any`    | at least one rule matches (logical OR)   |
+| `drop_if_all`    | NOT all rules match                       |
+| `drop_if_any`    | NOT any rule matches                      |
+
+**Operators (17 total):**
+
+| Category    | `op`            | What it checks                                                       |
+| ----------- | --------------- | -------------------------------------------------------------------- |
+| Existence   | `exists`        | field is present and not None                                        |
+|             | `not_exists`    | field is None or missing                                             |
+| Numeric     | `gt` / `gte`    | `field > value` / `field >= value`                                   |
+|             | `lt` / `lte`    | `field < value` / `field <= value`                                   |
+|             | `eq`            | `field == value`                                                     |
+| String      | `matches`       | regex search (ReDoS-guarded)                                         |
+|             | `not_matches`   | inverse of `matches`                                                 |
+|             | `contains`      | substring / element membership in field                              |
+|             | `not_contains`  | inverse of `contains`                                                |
+| Membership  | `in`            | field value is in the given list                                     |
+|             | `not_in`        | inverse of `in`                                                      |
+| Length      | `min_length`    | `len(field) >= value`                                                |
+|             | `max_length`    | `len(field) <= value`                                                |
+| Time        | `newer_than`    | `field` (datetime) is newer than `now - value` (e.g. `"24h"`, `"7d"`) |
+|             | `older_than`    | `field` is older than `now - value`                                  |
+
+**Worked examples:**
+
+```toml
+# 1. Pre-LLM cheap prefilter — keep articles long enough to summarize
+#    and drop obvious ad/sponsored junk by title.
+[[stages]]
+name = "prefilter"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "fulltext", op = "min_length", value = 300 },
+  { field = "title",    op = "not_matches", value = "(?i)sponsored|advertisement|广告|赞助" },
+  { field = "published_at", op = "newer_than", value = "48h" },
+]
+
+# 2. LLM-driven filter — upstream llm_stage scores relevance 0-10,
+#    then `filter` drops anything below 6.
+[[stages]]
+name = "rate_relevance"
+type = "llm_stage"
+mode = "per_item"
+input_field    = "summary"
+output_field   = "extras.relevance"
+prompt_file    = "prompts/rate.md"
+output_parser  = "json"
+model          = "openrouter/openai/gpt-4o-mini"
+
+[[stages]]
+name = "drop_irrelevant"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "extras.relevance", op = "gte", value = 6 },
+]
+
+# 3. Tag whitelist + URL blacklist combo
+[[stages]]
+name = "scope"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "tags",       op = "contains",     value = "ai" },
+  { field = "url",        op = "not_matches",  value = "^https?://(twitter|x)\\.com/" },
+  { field = "source_id",  op = "not_in",       value = ["spammy_feed_1", "spammy_feed_2"] },
+]
+```
+
+**Why "rule-based filter + LLM scorer" beats pure LLM filtering:** scoring
+costs LLM tokens, so do it once via `llm_stage`, write the score into a
+field, and let cheap deterministic rules fan it out. Same prompt money,
+unlimited filter combinations downstream.
+
+</details>
+
+<details>
 <summary><b>📤 Sinks</b></summary>
 
 | `type`     | Description                                                  |
