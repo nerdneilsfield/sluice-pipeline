@@ -1,12 +1,19 @@
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
+from typing import Sequence
 
 import typer
+from rich.console import Console
+from rich.table import Table
+from tqdm import tqdm
 
 from sluice.loader import load_all
 from sluice.runner import run_pipeline
 
 app = typer.Typer(no_args_is_help=True)
+console = Console()
 
 
 def _import_all():
@@ -47,12 +54,100 @@ def run(
     if pipeline_id not in bundle.pipelines:
         typer.echo(f"unknown pipeline: {pipeline_id}", err=True)
         raise typer.Exit(2)
-    res = asyncio.run(run_pipeline(bundle, pipeline_id=pipeline_id, dry_run=dry_run))
-    typer.echo(
-        f"{res.status}\t{res.run_key}\titems_out={res.items_out}"
-        + (f"\terror={res.error}" if res.error else "")
-    )
+    progress_bar = None
+    steps = []
+
+    def progress(event: str, **data):
+        nonlocal progress_bar
+        if event == "plan":
+            total = max(1, data["total"])
+            progress_bar = tqdm(
+                total=total,
+                unit="step",
+                desc="starting",
+                dynamic_ncols=True,
+                disable=not console.is_terminal,
+            )
+            return
+        if event in {"source_started", "processor_started", "sink_started"} and progress_bar:
+            progress_bar.set_description(_event_label(event, data))
+            return
+        if event in {"source_done", "processor_done", "sink_done"}:
+            steps.append(_step_row(event, data))
+            if progress_bar:
+                progress_bar.update(data.get("advance", 1))
+
+    try:
+        res = asyncio.run(
+            run_pipeline(bundle, pipeline_id=pipeline_id, dry_run=dry_run, progress=progress)
+        )
+    finally:
+        if progress_bar:
+            progress_bar.close()
+
+    _print_step_table(steps)
+    _print_run_summary(res, dry_run=dry_run)
     raise typer.Exit(0 if res.status == "success" else 1)
+
+
+def _event_label(event: str, data: dict) -> str:
+    if event == "source_started":
+        return f"rss {data.get('index')}/{data.get('total')}: {data.get('name')}"
+    if event == "processor_started":
+        return f"stage: {data.get('name')} ({data.get('items_in')} in)"
+    if event == "sink_started":
+        return f"sink: {data.get('id')} ({data.get('items_in')} in)"
+    return event
+
+
+def _step_row(event: str, data: dict) -> tuple[str, str, str, str]:
+    if event == "source_done":
+        return (
+            "source",
+            str(data.get("name")),
+            "-",
+            str(data.get("items_out", 0)),
+        )
+    if event == "processor_done":
+        return (
+            "stage",
+            str(data.get("name")),
+            str(data.get("items_in", 0)),
+            str(data.get("items_out", 0)),
+        )
+    return (
+        "sink",
+        f"{data.get('id')}:{data.get('type')}",
+        str(data.get("items_in", 0)),
+        "emitted" if data.get("emitted") else "skipped",
+    )
+
+
+def _print_step_table(steps: Sequence[tuple[str, str, str, str]]) -> None:
+    if not steps:
+        return
+    table = Table(title="Step Summary")
+    table.add_column("kind")
+    table.add_column("name")
+    table.add_column("in", justify="right")
+    table.add_column("out", justify="right")
+    for row in steps:
+        table.add_row(*row)
+    console.print(table)
+
+
+def _print_run_summary(res, *, dry_run: bool) -> None:
+    table = Table(title="Run Summary")
+    table.add_column("metric")
+    table.add_column("value")
+    table.add_row("status", str(res.status))
+    table.add_row("run_key", str(res.run_key))
+    table.add_row("items_in", str(getattr(res, "items_in", "")))
+    table.add_row("items_out", str(getattr(res, "items_out", "")))
+    table.add_row("dry_run", str(dry_run))
+    if getattr(res, "error", None):
+        table.add_row("error", str(res.error))
+    console.print(table)
 
 
 @app.command()

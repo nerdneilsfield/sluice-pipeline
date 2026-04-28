@@ -20,6 +20,8 @@ dependencies = [
   "regex>=2024.0",
   "notionify>=0.1",
   "fake-useragent>=2.2",
+  "rich>=13.0",
+  "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]

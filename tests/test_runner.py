@@ -709,6 +709,66 @@ async def test_pipeline_without_fetcher_apply_does_not_require_fetcher_config(tm
 
 
 @pytest.mark.asyncio
+async def test_run_pipeline_emits_progress_events(tmp_path):
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(tmp_path / "test.db")),
+        runtime=RuntimeConfig(timezone="UTC"),
+    )
+    pipe = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            RenderConfig(
+                type="render",
+                name="render",
+                template=str(template_path),
+                output_field="context.markdown",
+            ),
+        ],
+        sinks=[
+            FileMdSinkConfig(
+                id="out",
+                type="file_md",
+                input="context.markdown",
+                path=str(tmp_path / "{run_date}.md"),
+            )
+        ],
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=ProvidersConfig(providers=[]),
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+    events = []
+
+    with patch("sluice.runner.build_sources", return_value=[FakeSource([mk_item("g1")])]):
+        result = await run_pipeline(
+            bundle,
+            pipeline_id="p",
+            now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc),
+            progress=lambda event, **data: events.append((event, data)),
+        )
+
+    assert result.status == "success"
+    names = [event for event, _ in events]
+    assert names[:2] == ["run_started", "plan"]
+    assert "source_started" in names
+    assert "processor_started" in names
+    assert "sink_done" in names
+    assert names[-1] == "run_finished"
+    source_done = next(data for event, data in events if event == "source_done")
+    assert source_done["items_out"] == 1
+    processor_done = next(data for event, data in events if event == "processor_done")
+    assert processor_done["items_in"] == 1
+    assert processor_done["items_out"] == 1
+
+
+@pytest.mark.asyncio
 async def test_runner_records_failure(tmp_path, monkeypatch):
     from datetime import datetime, timezone
     from unittest.mock import patch

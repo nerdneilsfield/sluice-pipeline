@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import cast
+from typing import Callable, cast
 from zoneinfo import ZoneInfo
 
 from sluice.builders import (
@@ -54,7 +54,12 @@ def _run_key(pipe_id: str, run_date: str) -> str:
 
 
 async def run_pipeline(
-    bundle: ConfigBundle, *, pipeline_id: str, now: datetime | None = None, dry_run: bool = False
+    bundle: ConfigBundle,
+    *,
+    pipeline_id: str,
+    now: datetime | None = None,
+    dry_run: bool = False,
+    progress: Callable[..., None] | None = None,
 ) -> RunResult:
     pipe = bundle.pipelines[pipeline_id]
     global_cfg = bundle.global_cfg
@@ -63,6 +68,19 @@ async def run_pipeline(
     local_now = now.astimezone(tz)
     run_date = local_now.date().isoformat()
     run_key = _run_key(pipe.id, run_date)
+
+    def emit(event: str, **data) -> None:
+        if progress is not None:
+            progress(event, **data)
+
+    emit("run_started", pipeline_id=pipe.id, run_key=run_key, run_date=run_date, dry_run=dry_run)
+    emit(
+        "plan",
+        sources=len(pipe.sources),
+        stages=len(pipe.stages),
+        sinks=0 if dry_run else len(pipe.sinks),
+        total=len(pipe.sources) + len(pipe.stages) + (0 if dry_run else len(pipe.sinks)),
+    )
 
     db_path = _resolve_db_path(global_cfg, pipe)
     async with open_db(db_path) as db:
@@ -118,9 +136,22 @@ async def run_pipeline(
 
             sources = build_sources(pipe)
             collected = []
-            for src in sources:
+            for i, src in enumerate(sources, start=1):
+                source_name = getattr(src, "source_id", f"source_{i}")
+                emit("source_started", index=i, total=len(sources), name=source_name)
+                before = len(collected)
                 async for it in src.fetch(window_start, window_end):
                     collected.append(it)
+                emit(
+                    "source_done",
+                    index=i,
+                    total=len(sources),
+                    name=source_name,
+                    items_in=0,
+                    items_out=len(collected) - before,
+                    total_items=len(collected),
+                    advance=1,
+                )
 
             requeue = await failures.requeue(pipe.id)
             requeued_keys = {item_key(it) for it in requeue}
@@ -170,17 +201,36 @@ async def run_pipeline(
                 apply_item_cap()
 
             for p in procs:
+                before = len(ctx.items)
+                emit("processor_started", name=p.name, items_in=before)
                 ctx = await p.process(ctx)
                 if isinstance(p, DedupeProcessor):
                     apply_item_cap()
+                emit(
+                    "processor_done",
+                    name=p.name,
+                    items_in=before,
+                    items_out=len(ctx.items),
+                    advance=1,
+                )
 
             ctx.stats.items_out = len(ctx.items)
             ctx.stats.llm_calls = budget.calls
             ctx.stats.est_cost_usd = budget.spent_usd
 
             if not dry_run:
-                for sink in build_sinks(pipe):
-                    await sink.emit(ctx, emissions=emissions)
+                sinks = build_sinks(pipe)
+                for sink in sinks:
+                    emit("sink_started", id=sink.id, type=sink.type, items_in=len(ctx.items))
+                    emitted = await sink.emit(ctx, emissions=emissions)
+                    emit(
+                        "sink_done",
+                        id=sink.id,
+                        type=sink.type,
+                        items_in=len(ctx.items),
+                        emitted=emitted is not None,
+                        advance=1,
+                    )
 
             if not dry_run:
                 kept = [(it, item_key(it)) for it in ctx.items]
@@ -198,6 +248,14 @@ async def run_pipeline(
                 est_cost_usd=ctx.stats.est_cost_usd,
             )
             await runlog.finish(pipe.id, run_key, status="success")
+            emit(
+                "run_finished",
+                status="success",
+                pipeline_id=pipe.id,
+                run_key=run_key,
+                items_in=ctx.stats.items_in,
+                items_out=ctx.stats.items_out,
+            )
             return RunResult(
                 pipeline_id=pipe.id,
                 run_key=run_key,
@@ -208,6 +266,7 @@ async def run_pipeline(
         except Exception as e:
             log.exception("pipeline failed")
             await runlog.finish(pipe.id, run_key, status="failed", error_msg=str(e))
+            emit("run_failed", status="failed", pipeline_id=pipe.id, run_key=run_key, error=str(e))
             return RunResult(pipeline_id=pipe.id, run_key=run_key, status="failed", error=str(e))
         finally:
             if pool is not None:

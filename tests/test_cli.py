@@ -55,7 +55,10 @@ def test_run_invokes_runner(tmp_path):
         res = runner.invoke(app, ["run", "p", "--config-dir", str(tmp_path)])
     assert res.exit_code == 0
     assert "success" in res.output
+    assert "Run Summary" in res.output
+    assert "items_out" in res.output
     assert fake.call_args.kwargs["dry_run"] is False
+    assert callable(fake.call_args.kwargs["progress"])
 
 
 def test_failures_retry_help_documents_attempt_reset():
