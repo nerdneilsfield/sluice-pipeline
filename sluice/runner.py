@@ -211,6 +211,7 @@ async def run_pipeline(
                     name=p.name,
                     items_in=before,
                     items_out=len(ctx.items),
+                    details=ctx.context.get("_stage_stats", {}).get(p.name),
                     advance=1,
                 )
 

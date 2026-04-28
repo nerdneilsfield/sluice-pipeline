@@ -23,10 +23,14 @@ class FetchError(SluiceError):
 
 
 class AllFetchersFailed(FetchError):
-    def __init__(self, url: str, attempts: list[str]):
-        super().__init__(f"all fetchers failed for {url}: tried {attempts}")
+    def __init__(self, url: str, attempts: list[str], details: list[str] | None = None):
+        message = f"all fetchers failed for {url}: tried {attempts}"
+        if details:
+            message = f"{message}; details: {details}"
+        super().__init__(message)
         self.url = url
         self.attempts = attempts
+        self.details = details or []
 
 
 class LLMError(SluiceError):

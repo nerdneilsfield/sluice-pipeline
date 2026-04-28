@@ -24,16 +24,20 @@ class FetcherChain:
             if hit:
                 return hit.markdown
         attempts: list[str] = []
+        details: list[str] = []
         for f in self.fetchers:
             attempts.append(f.name)
             try:
                 md = await f.extract(url)
-            except Exception:
+            except Exception as e:
+                details.append(f"{f.name}: {type(e).__name__}: {e}")
                 continue
             if md and len(md) >= self.min_chars:
                 if self.cache:
                     await self.cache.set(url, f.name, md, self.ttl_seconds)
                 return md
+            length = len(md) if md else 0
+            details.append(f"{f.name}: too_short({length}<{self.min_chars})")
         if self.on_all_failed == "continue_empty":
             return None
-        raise AllFetchersFailed(url, attempts)
+        raise AllFetchersFailed(url, attempts, details)

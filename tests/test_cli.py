@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
 
-from sluice.cli import app
+from sluice.cli import _step_row, app
 
 runner = CliRunner()
 
@@ -79,3 +79,28 @@ def test_run_passes_dry_run_flag(tmp_path):
         res = runner.invoke(app, ["run", "p", "--config-dir", str(tmp_path), "--dry-run"])
     assert res.exit_code == 0
     assert fake.call_args.kwargs["dry_run"] is True
+
+
+def test_step_row_includes_processor_details():
+    row = _step_row(
+        "processor_done",
+        {
+            "name": "fetch_fulltext",
+            "items_in": 22,
+            "items_out": 3,
+            "details": {
+                "fetched": 3,
+                "used_existing": 0,
+                "empty": 0,
+                "failed": 19,
+                "errors": {"AllFetchersFailed": 19},
+            },
+        },
+    )
+    assert row == (
+        "stage",
+        "fetch_fulltext",
+        "22",
+        "3",
+        "fetched=3 failed=19 AllFetchersFailed=19",
+    )

@@ -70,8 +70,24 @@ async def test_all_failed_skip(tmp_path):
         chain = FetcherChain(
             [a, b], min_chars=500, on_all_failed="skip", cache=cache, ttl_seconds=3600
         )
-        with pytest.raises(AllFetchersFailed):
+        with pytest.raises(AllFetchersFailed) as exc:
             await chain.fetch("https://x/y")
+    assert exc.value.attempts == ["a", "b"]
+    assert exc.value.details == ["a: too_short(1<500)", "b: too_short(1<500)"]
+    assert "too_short" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_all_failed_records_exception_details(tmp_path):
+    async with open_db(tmp_path / "d.db") as db:
+        cache = UrlCacheStore(db)
+        a = FakeFetcher("a", raise_exc=RuntimeError("nope"))
+        chain = FetcherChain(
+            [a], min_chars=500, on_all_failed="skip", cache=cache, ttl_seconds=3600
+        )
+        with pytest.raises(AllFetchersFailed) as exc:
+            await chain.fetch("https://x/y")
+    assert exc.value.details == ["a: RuntimeError: nope"]
 
 
 @pytest.mark.asyncio

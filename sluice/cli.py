@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import typer
 from rich.console import Console
@@ -100,13 +100,14 @@ def _event_label(event: str, data: dict) -> str:
     return event
 
 
-def _step_row(event: str, data: dict) -> tuple[str, str, str, str]:
+def _step_row(event: str, data: dict) -> tuple[str, str, str, str, str]:
     if event == "source_done":
         return (
             "source",
             str(data.get("name")),
             "-",
             str(data.get("items_out", 0)),
+            f"total={data.get('total_items', 0)}",
         )
     if event == "processor_done":
         return (
@@ -114,16 +115,32 @@ def _step_row(event: str, data: dict) -> tuple[str, str, str, str]:
             str(data.get("name")),
             str(data.get("items_in", 0)),
             str(data.get("items_out", 0)),
+            _format_details(data.get("details")),
         )
     return (
         "sink",
         f"{data.get('id')}:{data.get('type')}",
         str(data.get("items_in", 0)),
         "emitted" if data.get("emitted") else "skipped",
+        "",
     )
 
 
-def _print_step_table(steps: Sequence[tuple[str, str, str, str]]) -> None:
+def _format_details(details: Any) -> str:
+    if not isinstance(details, dict):
+        return ""
+    parts = []
+    for key in ("fetched", "used_existing", "empty", "failed"):
+        value = details.get(key)
+        if value:
+            parts.append(f"{key}={value}")
+    errors = details.get("errors")
+    if isinstance(errors, dict):
+        parts.extend(f"{k}={v}" for k, v in sorted(errors.items()) if v)
+    return " ".join(parts)
+
+
+def _print_step_table(steps: Sequence[tuple[str, str, str, str, str]]) -> None:
     if not steps:
         return
     table = Table(title="Step Summary")
@@ -131,6 +148,7 @@ def _print_step_table(steps: Sequence[tuple[str, str, str, str]]) -> None:
     table.add_column("name")
     table.add_column("in", justify="right")
     table.add_column("out", justify="right")
+    table.add_column("details")
     for row in steps:
         table.add_row(*row)
     console.print(table)

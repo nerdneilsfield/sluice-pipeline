@@ -17,15 +17,28 @@ class FetcherApplyProcessor:
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         survivors = []
+        stats = {
+            "items_in": len(ctx.items),
+            "items_out": 0,
+            "fetched": 0,
+            "used_existing": 0,
+            "empty": 0,
+            "failed": 0,
+            "errors": {},
+        }
         for it in ctx.items:
             existing = it.raw_summary or ""
             if self.skip_if_field_longer_than and len(existing) >= self.skip_if_field_longer_than:
                 setattr(it, self.write_field, existing)
                 survivors.append(it)
+                stats["used_existing"] += 1
                 continue
             try:
                 md = await self.chain.fetch(it.url)
             except Exception as e:
+                stats["failed"] += 1
+                errors = stats["errors"]
+                errors[type(e).__name__] = errors.get(type(e).__name__, 0) + 1
                 if self.failures is not None:
                     await self.failures.record(
                         it.pipeline_id,
@@ -37,7 +50,13 @@ class FetcherApplyProcessor:
                         max_retries=self.max_retries,
                     )
                 continue
+            if md is None:
+                stats["empty"] += 1
+            else:
+                stats["fetched"] += 1
             setattr(it, self.write_field, md)
             survivors.append(it)
         ctx.items = survivors
+        stats["items_out"] = len(survivors)
+        ctx.context.setdefault("_stage_stats", {})[self.name] = stats
         return ctx

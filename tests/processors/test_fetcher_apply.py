@@ -89,6 +89,52 @@ async def test_records_failure_drops_item():
     ctx = await p.process(ctx)
     assert ctx.items == []
     assert fr.records and fr.records[0][1] == "AllFetchersFailed"
+    assert ctx.context["_stage_stats"]["fa"] == {
+        "items_in": 1,
+        "items_out": 0,
+        "fetched": 0,
+        "used_existing": 0,
+        "empty": 0,
+        "failed": 1,
+        "errors": {"AllFetchersFailed": 1},
+    }
+
+
+@pytest.mark.asyncio
+async def test_records_fetcher_apply_stats_for_mixed_outcomes():
+    chain = StubChain(
+        {
+            "https://a": "x" * 1000,
+            "https://b": RuntimeError("boom"),
+            "https://c": None,
+        }
+    )
+    p = FetcherApplyProcessor(
+        name="fetch_fulltext",
+        chain=chain,
+        write_field="fulltext",
+        skip_if_field_longer_than=10,
+        failures=FailRecorder(),
+        max_retries=3,
+    )
+    items = [
+        mk("https://a"),
+        mk("https://b"),
+        mk("https://c"),
+        mk("https://d", raw_summary="already long enough"),
+    ]
+    ctx = PipelineContext("p", "p/r", "2026-04-28", items, {})
+    ctx = await p.process(ctx)
+    assert [it.url for it in ctx.items] == ["https://a", "https://c", "https://d"]
+    assert ctx.context["_stage_stats"]["fetch_fulltext"] == {
+        "items_in": 4,
+        "items_out": 3,
+        "fetched": 1,
+        "used_existing": 1,
+        "empty": 1,
+        "failed": 1,
+        "errors": {"RuntimeError": 1},
+    }
 
 
 @pytest.mark.asyncio
