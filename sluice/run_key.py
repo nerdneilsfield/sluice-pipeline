@@ -49,12 +49,13 @@ def validate_template(
     tz = ZoneInfo(timezone_name)
     base = base.astimezone(tz) if base is not None else datetime.now(tz=tz)
     it = croniter(cron, base)
-    prev = it.get_next(datetime)
+    seen: set[str] = set()
     for _ in range(48):
         nxt = it.get_next(datetime)
-        if render_run_key(template, "p", prev) == render_run_key(template, "p", nxt):
+        key = render_run_key(template, "p", nxt)
+        if key in seen:
             raise ConfigError(
                 f"run_key_template {template!r} does not vary with schedule "
-                f"cadence {cron!r}; adjacent runs would collide in sink_emissions"
+                f"cadence {cron!r}; runs would collide in sink_emissions"
             )
-        prev = nxt
+        seen.add(key)

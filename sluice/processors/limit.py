@@ -26,12 +26,16 @@ class LimitProcessor:
 
     def _sort_key(self, item: Item):
         val = item.get(self.sort_by, _MISSING)
-        if val is _MISSING:
+        if val is _MISSING or val is None:
             if self.sort_missing == "first":
                 return (0, 0)
             return (2, 0)
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            num = 0.0
         direction = -1 if self.sort_order == "desc" else 1
-        return (1, val * direction)
+        return (1, num * direction)
 
     def _sorted(self, items: list[Item]) -> list[Item]:
         return sorted(items, key=self._sort_key)
@@ -39,11 +43,11 @@ class LimitProcessor:
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         items = list(ctx.items)
         if self.sort_missing == "drop":
-            items = [it for it in items if it.get(self.sort_by, _MISSING) is not _MISSING]
+            items = [it for it in items if it.get(self.sort_by, _MISSING) not in (_MISSING, None)]
         if self.group_by is not None:
             groups: dict[str, list[Item]] = defaultdict(list)
             for it in items:
-                key = it.get(self.group_by, "")
+                key = it.get(self.group_by, "") or ""
                 groups[str(key)].append(it)
             limited: list[Item] = []
             for grp_items in groups.values():

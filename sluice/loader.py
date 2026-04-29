@@ -32,6 +32,8 @@ def load_all(root: Path) -> ConfigBundle:
             if cfg.id in pipelines:
                 raise ConfigError(f"duplicate pipeline id {cfg.id} in {f}")
             pipelines[cfg.id] = cfg
+    for pipe in pipelines.values():
+        _validate_run_key_template(global_cfg, pipe)
     return ConfigBundle(global_cfg, providers, pipelines, root)
 
 
@@ -44,3 +46,11 @@ def resolve_env(value: str) -> str:
             raise ConfigError(f"env var {value[4:]} not set")
         return v
     return value
+
+
+def _validate_run_key_template(global_cfg: GlobalConfig, pipe: PipelineConfig) -> None:
+    from sluice.run_key import validate_template
+
+    cron = pipe.cron or global_cfg.runtime.default_cron
+    tz = pipe.timezone or global_cfg.runtime.timezone
+    validate_template(pipe.run_key_template, cron, tz)
