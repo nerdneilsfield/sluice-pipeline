@@ -104,10 +104,40 @@ class FilterConfig(BaseModel):
     rules: list[FilterRule]
 
 
-class FieldOp(BaseModel):
-    op: Literal["truncate", "drop"]
+class FieldOpTruncate(BaseModel):
+    op: Literal["truncate"]
     field: str
     n: int | None = None
+
+
+class FieldOpDrop(BaseModel):
+    op: Literal["drop"]
+    field: str
+
+
+class FieldOpLower(BaseModel):
+    op: Literal["lower"]
+    field: str
+
+
+class FieldOpStrip(BaseModel):
+    op: Literal["strip"]
+    field: str
+    chars: str | None = None
+
+
+class FieldOpRegexReplace(BaseModel):
+    op: Literal["regex_replace"]
+    field: str
+    pattern: str
+    replacement: str
+    count: int = 0
+
+
+FieldOp = Annotated[
+    Union[FieldOpTruncate, FieldOpDrop, FieldOpLower, FieldOpStrip, FieldOpRegexReplace],
+    Field(discriminator="op"),
+]
 
 
 class FieldFilterConfig(BaseModel):

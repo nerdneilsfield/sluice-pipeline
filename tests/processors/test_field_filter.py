@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sluice.config import FieldOp
+from sluice.config import FieldOpDrop, FieldOpTruncate
 from sluice.context import PipelineContext
 from sluice.core.item import Item
 from sluice.processors.field_filter import FieldFilterProcessor
@@ -25,7 +25,9 @@ def mk(**kw):
 
 @pytest.mark.asyncio
 async def test_truncate_dataclass_field():
-    p = FieldFilterProcessor(name="ff", ops=[FieldOp(op="truncate", field="fulltext", n=50)])
+    p = FieldFilterProcessor(
+        name="ff", ops=[FieldOpTruncate(op="truncate", field="fulltext", n=50)]
+    )
     ctx = PipelineContext("p", "p/r", "2026-04-28", [mk()], {})
     ctx = await p.process(ctx)
     assert len(ctx.items[0].fulltext) == 50
@@ -35,13 +37,13 @@ async def test_truncate_dataclass_field():
 async def test_drop_extras_field():
     it = mk()
     it.extras["junk"] = "x"
-    p = FieldFilterProcessor(name="ff", ops=[FieldOp(op="drop", field="extras.junk")])
+    p = FieldFilterProcessor(name="ff", ops=[FieldOpDrop(op="drop", field="extras.junk")])
     ctx = await p.process(PipelineContext("p", "p/r", "2026-04-28", [it], {}))
     assert "junk" not in ctx.items[0].extras
 
 
 @pytest.mark.asyncio
 async def test_drop_dataclass_field_sets_none():
-    p = FieldFilterProcessor(name="ff", ops=[FieldOp(op="drop", field="raw_summary")])
+    p = FieldFilterProcessor(name="ff", ops=[FieldOpDrop(op="drop", field="raw_summary")])
     ctx = await p.process(PipelineContext("p", "p/r", "2026-04-28", [mk()], {}))
     assert ctx.items[0].raw_summary is None
