@@ -65,7 +65,11 @@ def _check_host(host: str) -> None:
     for info in infos:
         resolved_ip = str(info[4][0])
         allow_tun_fake_ip = _allow_tun_fake_ip()
-        if allow_tun_fake_ip and _is_tun_fake_ip(ipaddress.ip_address(resolved_ip)):
+        try:
+            addr = ipaddress.ip_address(resolved_ip)
+        except ValueError:
+            continue
+        if allow_tun_fake_ip and _is_tun_fake_ip(addr):
             log.bind(host=host, resolved_ip=resolved_ip).debug("ssrf.tun_fake_ip_allowed")
             continue
         if _is_blocked_ip(resolved_ip, allow_tun_fake_ip=allow_tun_fake_ip):

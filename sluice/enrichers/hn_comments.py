@@ -46,6 +46,9 @@ class HnCommentsEnricher:
             self._buckets[host] = _HostBucket(self._delay)
         return self._buckets[host]
 
+    async def close(self):
+        await self._client.aclose()
+
     async def enrich(self, item: Item) -> str | None:
         m = self._pattern.search(item.url)
         if not m:

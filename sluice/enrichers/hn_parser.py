@@ -1,9 +1,7 @@
 from bs4 import BeautifulSoup
 
-from sluice.core.errors import ConfigError
 
-
-class EnricherParseError(ConfigError):
+class EnricherParseError(RuntimeError):
     pass
 
 

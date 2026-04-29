@@ -28,15 +28,6 @@ def _make_register(reg: dict[str, type], kind: str):
     return deco
 
 
-def _make_get(reg: dict[str, type], kind: str):
-    def get(name: str):
-        if name not in reg:
-            raise ConfigError(f"unknown {kind}: {name!r}")
-        return reg[name]
-
-    return get
-
-
 def _make_lazy_register(lazy_reg: dict[str, str], reg: dict[str, type], kind: str):
     def register(name: str, dotted_path: str):
         if name in reg or name in lazy_reg:
@@ -92,20 +83,32 @@ get_enricher = _make_get_with_lazy(_ENRICHERS, _LAZY_ENRICHERS, "enricher")
 
 
 def all_processors() -> dict[str, type]:
+    _flush_lazy(_LAZY_PROCESSORS, _PROCESSORS, "processor")
     return dict(_PROCESSORS)
 
 
 def all_fetchers() -> dict[str, type]:
+    _flush_lazy(_LAZY_FETCHERS, _FETCHERS, "fetcher")
     return dict(_FETCHERS)
 
 
 def all_sources() -> dict[str, type]:
+    _flush_lazy(_LAZY_SOURCES, _SOURCES, "source")
     return dict(_SOURCES)
 
 
 def all_sinks() -> dict[str, type]:
+    _flush_lazy(_LAZY_SINKS, _SINKS, "sink")
     return dict(_SINKS)
 
 
 def all_enrichers() -> dict[str, type]:
+    _flush_lazy(_LAZY_ENRICHERS, _ENRICHERS, "enricher")
     return dict(_ENRICHERS)
+
+
+def _flush_lazy(lazy_reg: dict[str, str], reg: dict[str, type], kind: str):
+    for name, dotted_path in list(lazy_reg.items()):
+        cls = _resolve_lazy(name, dotted_path, kind)
+        reg[name] = cls
+        del lazy_reg[name]

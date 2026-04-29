@@ -292,10 +292,16 @@ def gc(
     else:
         db_path = cfg.state.db_path
         att_dir = cfg.state.attachment_dir
+    if not db_path:
+        typer.echo("no state.db_path configured", err=True)
+        raise typer.Exit(2)
+    if not att_dir:
+        typer.echo("no state.attachment_dir configured", err=True)
+        raise typer.Exit(2)
     cutoff_iso = (datetime.now(timezone.utc) - parse_duration(older_than)).isoformat(
         timespec="seconds"
     )
-    selected = set(tables.split(","))
+    selected = set(t.strip() for t in tables.split(","))
 
     async def _run():
         async with open_db(db_path) as db:
@@ -380,6 +386,9 @@ def stats(
         db_path = _resolve_db_path(cfg, bundle.pipelines[pipeline])
     else:
         db_path = cfg.state.db_path
+    if not db_path:
+        typer.echo("no state.db_path configured", err=True)
+        raise typer.Exit(2)
     sql = (
         "SELECT pipeline_id, COUNT(*) AS runs, "
         " 100.0 * SUM(CASE status WHEN 'success' THEN 1 ELSE 0 END)/COUNT(*) AS success_pct, "
@@ -424,6 +433,9 @@ def metrics_server(
 
     bundle = load_all(Path(config_dir))
     cfg = bundle.global_cfg
+    if not cfg.state.db_path:
+        typer.echo("no state.db_path configured", err=True)
+        raise typer.Exit(2)
     overrides = [
         pid
         for pid, p in bundle.pipelines.items()
@@ -462,6 +474,9 @@ def deliveries(
         typer.echo(f"unknown pipeline: {pipeline_id}", err=True)
         raise typer.Exit(2)
     db_path = _resolve_db_path(cfg, bundle.pipelines[pipeline_id])
+    if not db_path:
+        typer.echo("no state.db_path configured", err=True)
+        raise typer.Exit(2)
     since_cutoff = (datetime.now(timezone.utc) - parse_duration(since)).isoformat(
         timespec="seconds"
     )

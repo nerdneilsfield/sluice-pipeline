@@ -23,6 +23,8 @@ class LimitProcessor:
     def __post_init__(self):
         if self.group_by is not None and self.per_group_max is None:
             raise ConfigError("per_group_max is required when group_by is set")
+        if self.group_by is None and self.per_group_max is not None:
+            raise ConfigError("per_group_max requires group_by to be set")
 
     def _sort_key(self, item: Item):
         val = item.get(self.sort_by, _MISSING)
@@ -47,7 +49,9 @@ class LimitProcessor:
         if self.group_by is not None:
             groups: dict[str, list[Item]] = defaultdict(list)
             for it in items:
-                key = it.get(self.group_by, "") or ""
+                key = it.get(self.group_by, _MISSING)
+                if key is _MISSING:
+                    key = ""
                 groups[str(key)].append(it)
             limited: list[Item] = []
             for grp_items in groups.values():

@@ -58,7 +58,10 @@ class DeliveryLog:
                     await db.commit()
                     return
             except aiosqlite.OperationalError as exc:
-                if "locked" not in str(exc).lower():
+                is_locked = getattr(exc, "sqlite_errorcode", None) in (5, 6) or any(
+                    kw in str(exc).lower() for kw in ("locked", "busy")
+                )
+                if not is_locked:
                     raise
                 last_exc = exc
         logger.error(

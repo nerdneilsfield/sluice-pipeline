@@ -73,17 +73,32 @@ def _strip(it: Item, field: str, chars: str | None):
 
 
 def _regex_replace(it: Item, field: str, pattern: str, replacement: str, count: int):
-    compiled = regex.compile(pattern)
+    try:
+        compiled = regex.compile(pattern)
+    except regex.error as exc:
+        raise ConfigError(f"invalid regex pattern {pattern!r}: {exc}") from exc
     if "." in field:
         head, _, tail = field.partition(".")
         bucket = getattr(it, head, None)
         if isinstance(bucket, dict) and tail in bucket and isinstance(bucket[tail], str):
-            bucket[tail] = compiled.sub(replacement, bucket[tail], count=count or 0, timeout=2.0)
+            try:
+                bucket[tail] = compiled.sub(
+                    replacement, bucket[tail], count=count or 0, timeout=2.0
+                )
+            except regex.TimeoutError:
+                raise ConfigError(
+                    f"regex_replace timed out on field {field!r} with pattern {pattern!r}"
+                )
         return
     if field in _DC_NAMES:
         v = getattr(it, field)
         if isinstance(v, str):
-            setattr(it, field, compiled.sub(replacement, v, count=count or 0, timeout=2.0))
+            try:
+                setattr(it, field, compiled.sub(replacement, v, count=count or 0, timeout=2.0))
+            except regex.TimeoutError:
+                raise ConfigError(
+                    f"regex_replace timed out on field {field!r} with pattern {pattern!r}"
+                )
 
 
 class FieldFilterProcessor:
@@ -97,7 +112,8 @@ class FieldFilterProcessor:
         for it in ctx.items:
             for op in self.ops:
                 if op.op == "truncate":
-                    _truncate(it, op.field, op.n or 0)
+                    if op.n is not None:
+                        _truncate(it, op.field, op.n)
                 elif op.op == "drop":
                     _drop(it, op.field)
                 elif op.op == "lower":

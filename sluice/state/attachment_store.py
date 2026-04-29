@@ -95,6 +95,10 @@ class AttachmentStore:
                 except Exception:
                     from loguru import logger as _log
 
+                    try:
+                        await self._db.rollback()
+                    except Exception:
+                        pass
                     cur = await self._db.execute(
                         "SELECT 1 FROM attachment_mirror WHERE url_hash = ?",
                         (url_hash,),
@@ -112,11 +116,11 @@ class AttachmentStore:
             await self._db.rollback()
             if tmp_path.exists():
                 tmp_path.unlink()
-            cur = await self._db.execute(
+            async with self._db.execute(
                 "SELECT local_path FROM attachment_mirror WHERE url_hash = ?",
                 (url_hash,),
-            )
-            row = await cur.fetchone()
+            ) as cur2:
+                row = await cur2.fetchone()
             if row is None:
                 return await self._put_bytes_once(
                     url=url,
@@ -127,6 +131,7 @@ class AttachmentStore:
                 )
             existing_path = row[0]
             if not (self._base / existing_path).is_file():
+                await self._db.execute("BEGIN")
                 await self._db.execute(
                     "DELETE FROM attachment_mirror WHERE url_hash = ?",
                     (url_hash,),
@@ -145,7 +150,7 @@ class AttachmentStore:
             )
             await self._db.commit()
             return existing_path
-        except BaseException:
+        except Exception:
             try:
                 await self._db.rollback()
             except Exception:

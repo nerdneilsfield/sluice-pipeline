@@ -96,7 +96,7 @@ async def gc_attachments(
             (_now_iso(), "attachment_mirror", n, criteria),
         )
         await db.commit()
-    except BaseException:
+    except Exception:
         await db.rollback()
         raise
 

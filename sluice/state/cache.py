@@ -56,7 +56,7 @@ class UrlCacheStore:
         await self._maybe_evict()
 
     async def _maybe_evict(self) -> None:
-        self._puts_until_check -= 1
+        self._puts_until_check = max(0, self._puts_until_check - 1)
         if self._puts_until_check > 0:
             return
         self._puts_until_check = self._check_every_n

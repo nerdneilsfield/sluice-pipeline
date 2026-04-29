@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
@@ -46,7 +46,10 @@ def validate_template(
                 f"run_key_template uses unknown variable {{{name}}}; "
                 f"allowed: {sorted(ALLOWED_VARS)}"
             )
-    tz = ZoneInfo(timezone_name)
+    try:
+        tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigError(f"unknown timezone: {timezone_name!r}") from exc
     base = base.astimezone(tz) if base is not None else datetime.now(tz=tz)
     it = croniter(cron, base)
     seen: set[str] = set()

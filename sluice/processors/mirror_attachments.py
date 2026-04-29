@@ -37,7 +37,12 @@ class MirrorAttachmentsProcessor:
         self._on_failure = on_failure
         self._rewrite = list(rewrite_fields)
         self._prefix = attachment_url_prefix
+        self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=30.0)
+
+    async def aclose(self):
+        if self._owns_client:
+            await self._client.aclose()
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         for item in ctx.items:
@@ -57,7 +62,11 @@ class MirrorAttachmentsProcessor:
                 if resp.is_redirect:
                     location = resp.headers.get("location")
                     if not location:
-                        break
+                        if self._on_failure == "fail":
+                            raise httpx.HTTPError(
+                                f"redirect without Location header from {current}"
+                            )
+                        return None
                     next_url = httpx.URL(current).join(location).human_repr()
                     guard(next_url)
                     current = next_url
@@ -68,7 +77,7 @@ class MirrorAttachmentsProcessor:
                 if self._on_failure == "fail":
                     raise httpx.HTTPError("too many redirects")
                 return None
-        except (httpx.HTTPError, SSRFError):
+        except (httpx.HTTPError, httpx.InvalidURL, SSRFError):
             if self._on_failure == "fail":
                 raise
             return None

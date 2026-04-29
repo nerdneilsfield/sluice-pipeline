@@ -77,7 +77,13 @@ class EnrichProcessor:
             res = _truncate_head_tail(res, self._max)
             set_dotpath(item, self._output_field, res)
 
-        await asyncio.gather(*(one(it) for it in ctx.items))
+        try:
+            await asyncio.gather(*(one(it) for it in ctx.items))
+        finally:
+            if hasattr(self._enricher, "close") and asyncio.iscoroutinefunction(
+                self._enricher.close
+            ):
+                await self._enricher.close()
         return ctx
 
 

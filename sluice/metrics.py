@@ -14,12 +14,17 @@ class SluiceCollector:
         self._path = db_path
 
     def collect(self):
-        with sqlite3.connect(self._path) as conn:
-            yield from self._run_total(conn)
-            yield from self._run_duration(conn)
-            yield from self._items_counters(conn)
-            yield from self._llm_counters(conn)
-            yield from self._failed_items_gauge(conn)
+        conn = sqlite3.connect(self._path)
+        try:
+            results = list(self._run_total(conn))
+            results.extend(self._run_duration(conn))
+            results.extend(self._items_counters(conn))
+            results.extend(self._llm_counters(conn))
+            results.extend(self._failed_items_gauge(conn))
+            results.extend(self._url_cache_rows(conn))
+        finally:
+            conn.close()
+        yield from results
 
     def _run_total(self, conn):
         m = CounterMetricFamily(
@@ -95,4 +100,15 @@ class SluiceCollector:
             "GROUP BY pipeline_id, status"
         ):
             g.add_metric([pid, status], n)
+        yield g
+
+    def _url_cache_rows(self, conn):
+        g = GaugeMetricFamily(
+            "sluice_url_cache_rows",
+            "Total rows in url_cache table",
+            labels=[],
+        )
+        cur = conn.execute("SELECT COUNT(*) FROM url_cache")
+        n = cur.fetchone()[0]
+        g.add_metric([], n)
         yield g

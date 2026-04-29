@@ -51,8 +51,9 @@ class FetcherApplyProcessor:
                 stats["failed"] += 1
                 errors = stats["errors"]
                 errors[type(e).__name__] = errors.get(type(e).__name__, 0) + 1
-                if self.on_all_failed == "use_raw_summary" and it.raw_summary:
-                    setattr(it, self.write_field, it.raw_summary)
+                raw_summary_stripped = it.raw_summary.strip() if it.raw_summary is not None else ""
+                if self.on_all_failed == "use_raw_summary" and raw_summary_stripped:
+                    setattr(it, self.write_field, raw_summary_stripped)
                     survivors.append(it)
                     stats.setdefault("fallback_used", 0)
                     stats["fallback_used"] += 1
@@ -60,7 +61,7 @@ class FetcherApplyProcessor:
                 if self.failures is not None:
                     error_class = type(e).__name__
                     error_msg = str(e)
-                    if self.on_all_failed == "use_raw_summary" and not it.raw_summary:
+                    if self.on_all_failed == "use_raw_summary" and not raw_summary_stripped:
                         error_class = "FetcherChainExhaustedNoFallback"
                         error_msg = "all fetchers failed and raw_summary is empty"
                     await self.failures.record(
