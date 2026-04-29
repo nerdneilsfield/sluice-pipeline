@@ -94,32 +94,16 @@ async def test_default_adapter_creates_database_page_with_typed_properties():
             assert (method, path) == ("GET", "/databases/db-123")
             return {"properties": schema}
 
-    class FakePages:
+    class FakeClient:
         def __init__(self):
+            self._transport = FakeTransport()
             self.created = None
 
-        def create(self, *, parent, properties, children):
-            self.created = {
-                "parent": parent,
-                "properties": properties,
-                "children": children,
-            }
-            return {"id": "page-1"}
+        def create_page_with_markdown(self, **kwargs):
+            self.created = kwargs
+            return SimpleNamespace(page_id="page-1")
 
-    fake_pages = FakePages()
-    fake_client = SimpleNamespace(
-        _transport=FakeTransport(),
-        _converter=SimpleNamespace(
-            convert=lambda markdown: SimpleNamespace(
-                blocks=[{"type": "paragraph"}],
-                warnings=[],
-            )
-        ),
-        _pages=fake_pages,
-        _blocks=SimpleNamespace(append_children=lambda page_id, batch: None),
-        _process_images=lambda conversion: 0,
-        _emit_conversion_metrics=lambda conversion: None,
-    )
+    fake_client = FakeClient()
     adapter = object.__new__(DefaultNotionifyAdapter)
     adapter._client = fake_client
 
@@ -132,14 +116,68 @@ async def test_default_adapter_creates_database_page_with_typed_properties():
     )
 
     assert page_id == "page-1"
-    assert fake_pages.created == {
-        "parent": {"database_id": "db-123"},
+    assert fake_client.created == {
+        "parent_id": "db-123",
+        "parent_type": "database",
+        "title": "AI Daily",
+        "markdown": "hello",
+        "title_from_h1": False,
         "properties": {
-            "Name": {"title": [{"text": {"content": "AI Daily"}}]},
             "Tag": {"multi_select": [{"name": "AI"}]},
             "Source": {"select": {"name": "sluice"}},
         },
-        "children": [{"type": "paragraph"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_default_adapter_uses_data_source_schema_for_new_notion_api():
+    schema = {
+        "Name": {"type": "title"},
+        "Tag": {"type": "multi_select"},
+        "Source": {"type": "select"},
+    }
+
+    class FakeTransport:
+        def request(self, method, path):
+            assert method == "GET"
+            if path == "/databases/db-123":
+                return {"data_sources": [{"id": "ds-456", "name": "default"}]}
+            if path == "/data_sources/ds-456":
+                return {"properties": schema}
+            raise AssertionError(path)
+
+    class FakeClient:
+        def __init__(self):
+            self._transport = FakeTransport()
+            self.created = None
+
+        def create_page_with_markdown(self, **kwargs):
+            self.created = kwargs
+            return SimpleNamespace(page_id="page-1")
+
+    fake_client = FakeClient()
+    adapter = object.__new__(DefaultNotionifyAdapter)
+    adapter._client = fake_client
+
+    page_id = await adapter.create_page(
+        parent_id="db-123",
+        parent_type="database",
+        title="AI Daily",
+        properties={"Tag": "AI", "Source": "sluice"},
+        markdown="hello",
+    )
+
+    assert page_id == "page-1"
+    assert fake_client.created == {
+        "parent_id": "db-123",
+        "parent_type": "database",
+        "title": "AI Daily",
+        "markdown": "hello",
+        "title_from_h1": False,
+        "properties": {
+            "Tag": {"multi_select": [{"name": "AI"}]},
+            "Source": {"select": {"name": "sluice"}},
+        },
     }
 
 

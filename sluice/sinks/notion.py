@@ -1,5 +1,4 @@
 import asyncio
-from collections.abc import Mapping
 from typing import Any, Protocol
 
 from sluice.context import PipelineContext
@@ -42,56 +41,37 @@ class DefaultNotionifyAdapter:
 
         self._client = NotionifyClient(token=token)
 
+    def _database(self, database_id: str) -> dict[str, Any]:
+        return self._client._transport.request("GET", f"/databases/{database_id}")
+
+    def _data_source(self, data_source_id: str) -> dict[str, Any]:
+        return self._client._transport.request("GET", f"/data_sources/{data_source_id}")
+
     def _database_properties(self, database_id: str) -> dict[str, Any]:
-        database = self._client._transport.request("GET", f"/databases/{database_id}")
-        return database.get("properties", {})
+        database = self._database(database_id)
+        properties = database.get("properties")
+        if properties:
+            return properties
 
-    def _create_database_page_with_markdown(
-        self,
-        *,
-        parent_id: str,
-        title: str,
-        properties: dict[str, Any],
-        markdown: str,
-    ) -> str:
-        from notionify.utils.chunk import chunk_children
+        data_sources = database.get("data_sources") or []
+        if data_sources:
+            data_source_id = data_sources[0]["id"]
+            data_source = self._data_source(data_source_id)
+            properties = data_source.get("properties", {})
+            log.bind(
+                sink_type="notion",
+                parent_type="database",
+                data_source_id=data_source_id,
+                property_names=list(properties),
+            ).debug("notion.data_source_schema_loaded")
+            return properties
 
-        schema = self._database_properties(parent_id)
-        notion_properties = normalize_database_properties(properties, schema)
-        title_property = _title_property_name(schema)
-        notion_properties.setdefault(title_property, {"title": _rich_text(title)})
-
-        conversion = self._client._converter.convert(markdown)
-        blocks = conversion.blocks
-        self._client._process_images(conversion)
-        self._client._emit_conversion_metrics(conversion)
-
-        batches = chunk_children(blocks)
-        page_response = self._client._pages.create(
-            parent={"database_id": parent_id},
-            properties=notion_properties,
-            children=batches[0] if batches else [],
-        )
-        page_id = page_response["id"]
-        for batch in batches[1:]:
-            self._client._blocks.append_children(page_id, batch)
-        log.bind(
-            sink_type="notion",
-            parent_type="database",
-            property_names=list(notion_properties),
-            blocks=len(blocks),
-        ).debug("notion.page_created")
-        return page_id
+        return {}
 
     async def create_page(self, *, parent_id, parent_type, title, properties, markdown):
-        if parent_type == "database":
-            return await asyncio.to_thread(
-                self._create_database_page_with_markdown,
-                parent_id=parent_id,
-                title=title,
-                properties=properties or {},
-                markdown=markdown,
-            )
+        if parent_type == "database" and properties:
+            schema = await asyncio.to_thread(self._database_properties, parent_id)
+            properties = normalize_database_properties(properties, schema)
         result = await asyncio.to_thread(
             self._client.create_page_with_markdown,
             parent_id=parent_id,
@@ -179,13 +159,6 @@ def _normalize_database_property_value(value: Any, schema_entry: dict[str, Any])
 
 def _is_explicit_notion_property_value(value: Any) -> bool:
     return isinstance(value, dict) and bool(_NOTION_PROPERTY_VALUE_KEYS & value.keys())
-
-
-def _title_property_name(schema: Mapping[str, Any]) -> str:
-    for name, entry in schema.items():
-        if isinstance(entry, Mapping) and entry.get("type") == "title":
-            return name
-    return "title"
 
 
 def _rich_text(value: Any) -> list[dict[str, Any]]:
