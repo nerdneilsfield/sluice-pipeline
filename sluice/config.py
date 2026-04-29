@@ -211,9 +211,22 @@ class MirrorAttachmentsStage(BaseModel):
     rewrite_fields: list[str] = []
 
 
+class EnrichStage(BaseModel):
+    type: Literal["enrich"]
+    name: str
+    enricher: str
+    output_field: str
+    on_failure: Literal["skip", "fail"] = "skip"
+    cache: bool = True
+    max_chars: int = 8000
+    concurrency: int = 4
+    config: dict = Field(default_factory=dict)
+
+
 StageConfig = Annotated[
     Union[
         DedupeConfig,
+        EnrichStage,
         FetcherApplyConfig,
         FilterConfig,
         FieldFilterConfig,

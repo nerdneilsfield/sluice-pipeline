@@ -1,5 +1,6 @@
 from sluice.config import (
     DedupeConfig,
+    EnrichStage,
     FetcherApplyConfig,
     FieldFilterConfig,
     FileMdSinkConfig,
@@ -19,6 +20,7 @@ from sluice.llm.client import LLMClient, StageLLMConfig
 from sluice.llm.pool import ProviderPool
 from sluice.pricing import model_price
 from sluice.registry import (
+    get_enricher,
     get_fetcher,
     get_source,
 )
@@ -237,6 +239,23 @@ def build_processors(
                     on_failure=st.on_failure,
                     rewrite_fields=st.rewrite_fields,
                     attachment_url_prefix=att_prefix,
+                )
+            )
+        elif isinstance(st, EnrichStage):
+            from sluice.processors.enrich import EnrichProcessor
+
+            enricher_cls = get_enricher(st.enricher)
+            enricher = enricher_cls(**st.config)
+            procs.append(
+                EnrichProcessor(
+                    name=st.name,
+                    enricher=enricher,
+                    output_field=st.output_field,
+                    on_failure=st.on_failure,
+                    max_chars=st.max_chars,
+                    concurrency=st.concurrency,
+                    failures=eff_failures,
+                    max_retries=pipe.failures.max_retries,
                 )
             )
         else:
