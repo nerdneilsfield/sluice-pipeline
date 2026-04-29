@@ -1,0 +1,9 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>{{ pipeline_id }} · {{ run_date }}</title>
+{% if style_block %}<style>{{ style_block }}</style>{% endif %}
+</head>
+<body>
+{{ body_html | safe }}
+{% if footer %}<hr><p>{{ footer }}</p>{% endif %}
+</body></html>

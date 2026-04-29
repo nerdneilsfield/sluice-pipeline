@@ -1,0 +1,15 @@
+{
+  "schema": "2.0",
+  "header": {"title": {"tag": "plain_text", "content": "{{ pipeline_id }} · {{ run_date }}"}},
+  "body": {
+    "elements": [
+      {
+        "tag": "div",
+        "text": {
+          "tag": "post",
+          "content": {{ body_post_array | tojson }}
+        }
+      }
+    ]
+  }
+}
