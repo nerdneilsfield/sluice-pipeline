@@ -80,3 +80,31 @@ async def test_use_raw_summary_with_empty_raw_records_failure():
     assert out.items == []
     assert failures.rows
     assert failures.rows[0]["error_class"] == "FetcherChainExhaustedNoFallback"
+
+
+@pytest.mark.asyncio
+async def test_use_raw_summary_with_whitespace_only_raw_records_failure():
+    item = Item(
+        source_id="s",
+        pipeline_id="p",
+        guid="g3",
+        url="http://x",
+        title="t",
+        published_at=None,
+        raw_summary="   \n  \t  ",  # Only whitespace
+    )
+    ctx = make_ctx(items=[item])
+    failures = _RecordingFailures()
+    proc = FetcherApplyProcessor(
+        name="fa",
+        chain=_AllFailChain(),
+        write_field="fulltext",
+        skip_if_field_longer_than=None,
+        failures=failures,
+        max_retries=3,
+        on_all_failed="use_raw_summary",
+    )
+    out = await proc.process(ctx)
+    assert out.items == []
+    assert failures.rows
+    assert failures.rows[0]["error_class"] == "FetcherChainExhaustedNoFallback"

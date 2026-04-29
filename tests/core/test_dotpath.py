@@ -35,3 +35,9 @@ def test_set_dotpath_unsupported_path_raises():
     it = _item()
     with pytest.raises(ConfigError):
         set_dotpath(it, "a.b.c", "val")
+
+
+def test_set_dotpath_invalid_attribute_raises():
+    it = _item()
+    with pytest.raises(ConfigError, match="no attribute"):
+        set_dotpath(it, "nonexistent_field", "val")

@@ -108,3 +108,14 @@ async def test_per_group_max_required_when_group_by_set():
             sort_by="extras.relevance",
             group_by="source_id",
         )
+
+
+@pytest.mark.asyncio
+async def test_per_group_max_requires_group_by():
+    with pytest.raises(ConfigError):
+        LimitProcessor(
+            name="L",
+            top_n=10,
+            sort_by="extras.relevance",
+            per_group_max=5,
+        )

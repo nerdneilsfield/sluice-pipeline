@@ -6,7 +6,7 @@ from sluice.core.item import Item
 from sluice.sinks._markdown_ast import parse_markdown
 from sluice.sinks._telegram_render import _escape as _escape_markdown_v2
 from sluice.sinks._telegram_render import render_to_markdown_v2
-from sluice.sinks.telegram import TelegramSink
+from sluice.sinks.telegram import TelegramSink, _safe_truncate
 from sluice.state.db import open_db
 from sluice.state.delivery_log import DeliveryLog
 from sluice.state.emissions import EmissionStore
@@ -16,6 +16,13 @@ from tests.conftest import make_ctx
 def test_markdown_v2_escape():
     assert _escape_markdown_v2("hello.world!") == "hello\\.world\\!"
     assert _escape_markdown_v2("a*b_c") == "a\\*b\\_c"
+
+
+def test_safe_truncate_does_not_split_escape():
+    text = "ab\\*cd"
+    assert _safe_truncate(text, 4) == "ab…"
+    assert _safe_truncate("plain", 10) == "plain"
+    assert _safe_truncate("toolong_" * 100, 10).endswith("…")
 
 
 def test_render_link_preserved():
