@@ -86,6 +86,8 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
     tp.write_text(
         "# {{ run_date }}\\n{{ context.daily_brief }}\\n"
         "{% for it in items %}- {{ it.summary }}\\n{% endfor %}"
+        "stats={{ stats.items_out }}/{{ stats.llm_calls }}/"
+        "{{ '%.6f'|format(stats.est_cost_usd) }}\\n"
     )
     (cfg / "pipelines" / "p.toml").write_text(
         textwrap.dedent(f"""
@@ -170,3 +172,4 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
     out = (tmp_path / "out_2026-04-28.md").read_text()
     assert "TODAY'S BRIEF" in out
     assert "Summary X" in out and "Summary Y" in out
+    assert "stats=2/3/0.000044" in out

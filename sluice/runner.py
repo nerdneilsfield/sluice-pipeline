@@ -211,6 +211,11 @@ async def run_pipeline(
 
             from sluice.processors.dedupe import DedupeProcessor
 
+            def sync_run_stats() -> None:
+                ctx.stats.items_out = len(ctx.items)
+                ctx.stats.llm_calls = budget.calls
+                ctx.stats.est_cost_usd = budget.spent_usd
+
             def apply_item_cap() -> None:
                 if len(ctx.items) <= cap:
                     return
@@ -231,8 +236,10 @@ async def run_pipeline(
             has_dedupe = any(isinstance(p, DedupeProcessor) for p in procs)
             if not has_dedupe:
                 apply_item_cap()
+            sync_run_stats()
 
             for p in procs:
+                sync_run_stats()
                 before = len(ctx.items)
                 emit("processor_started", name=p.name, items_in=before)
                 log.bind(
@@ -243,6 +250,7 @@ async def run_pipeline(
                 ctx = await p.process(ctx)
                 if isinstance(p, DedupeProcessor):
                     apply_item_cap()
+                sync_run_stats()
                 stage_details = ctx.context.get("_stage_stats", {}).get(p.name)
                 emit(
                     "processor_done",
@@ -260,9 +268,7 @@ async def run_pipeline(
                     details=stage_details,
                 ).info("processor.done")
 
-            ctx.stats.items_out = len(ctx.items)
-            ctx.stats.llm_calls = budget.calls
-            ctx.stats.est_cost_usd = budget.spent_usd
+            sync_run_stats()
 
             if not dry_run:
                 sinks = build_sinks(pipe)
