@@ -7,6 +7,7 @@ from sluice.config import (
     GlobalConfig,
     LimitStage,
     LLMStageConfig,
+    MirrorAttachmentsStage,
     NotionSinkConfig,
     PipelineConfig,
     RenderConfig,
@@ -118,6 +119,7 @@ def build_processors(
     budget,
     dry_run: bool = False,
     requeued_keys: set[str] | None = None,
+    db=None,
 ):
     eff_failures = None if dry_run else failures
     procs = []
@@ -212,6 +214,30 @@ def build_processors(
 
             procs.append(
                 RenderProcessor(name=st.name, template=st.template, output_field=st.output_field)
+            )
+        elif isinstance(st, MirrorAttachmentsStage):
+            from pathlib import Path
+
+            from sluice.processors.mirror_attachments import MirrorAttachmentsProcessor
+            from sluice.state.attachment_store import AttachmentStore
+
+            if db is None:
+                raise ConfigError(f"pipeline {pipe.id!r}: mirror_attachments stage requires db")
+            att_dir = global_cfg.state.attachment_dir or "./data/attachments"
+            prefix_val = global_cfg.state.attachment_url_prefix
+            att_prefix = prefix_val if prefix_val is not None else ""
+            store = AttachmentStore(db=db, base_dir=Path(att_dir))
+            procs.append(
+                MirrorAttachmentsProcessor(
+                    name=st.name,
+                    store=store,
+                    pipeline_id=pipe.id,
+                    mime_prefixes=st.mime_prefixes,
+                    max_bytes=st.max_bytes,
+                    on_failure=st.on_failure,
+                    rewrite_fields=st.rewrite_fields,
+                    attachment_url_prefix=att_prefix,
+                )
             )
         else:
             raise ValueError(f"unknown stage type: {type(st).__name__}")

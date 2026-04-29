@@ -201,6 +201,16 @@ class LimitStage(BaseModel):
     per_group_max: int | None = None
 
 
+class MirrorAttachmentsStage(BaseModel):
+    type: Literal["mirror_attachments"]
+    name: str
+    mime_prefixes: list[str] = ["image/"]
+    max_bytes: int = 10_000_000
+    ttl: str = "180d"
+    on_failure: Literal["skip", "fail", "drop_attachment"] = "skip"
+    rewrite_fields: list[str] = []
+
+
 StageConfig = Annotated[
     Union[
         DedupeConfig,
@@ -209,6 +219,7 @@ StageConfig = Annotated[
         FieldFilterConfig,
         LLMStageConfig,
         LimitStage,
+        MirrorAttachmentsStage,
         RenderConfig,
     ],
     Field(discriminator="type"),
@@ -272,6 +283,8 @@ class PipelineFailures(BaseModel):
 
 class StateConfig(BaseModel):
     db_path: str | None = None
+    attachment_dir: str | None = None
+    attachment_url_prefix: str | None = None
 
 
 StateOverride = StateConfig
