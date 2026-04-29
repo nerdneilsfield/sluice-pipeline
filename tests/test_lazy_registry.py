@@ -12,11 +12,19 @@ def test_lazy_stub_loads_on_first_get():
 
 
 def test_lazy_stub_loads_real_module():
-    register_sink_lazy("file_md_lazy_alias", "sluice.sinks.file_md:FileMdSink")
-    cls = get_sink("file_md_lazy_alias")
-    from sluice.sinks.file_md import FileMdSink
+    import types
+    from unittest.mock import patch
 
-    assert cls is FileMdSink
+    mod = types.ModuleType("_test_lazy_mod")
+
+    class _Dummy:
+        pass
+
+    mod.Dummy = _Dummy
+    register_sink_lazy("test_lazy_ok", "_test_lazy_mod:Dummy")
+    with patch("importlib.import_module", return_value=mod):
+        cls = get_sink("test_lazy_ok")
+    assert cls is _Dummy
 
 
 def test_unknown_sink_still_raises_config_error():

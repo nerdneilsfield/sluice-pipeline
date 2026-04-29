@@ -12,10 +12,7 @@ from sluice.url_canon import canonical_url
 
 log = get_logger(__name__)
 _ua = UserAgent()
-_RSS_UA = (
-    "Mozilla/5.0 (compatible; Sluice RSS Fetcher/1.0; "
-    "+https://github.com/sluice/sluice)"
-)
+_RSS_UA = "Mozilla/5.0 (compatible; Sluice RSS Fetcher/1.0; +https://github.com/sluice/sluice)"
 
 
 @register_source("rss")

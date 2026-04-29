@@ -1,9 +1,11 @@
 import tomllib
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parent.parent
+
 
 def test_pyproject_has_v1_1_extras():
-    data = tomllib.loads(Path("pyproject.toml").read_text())
+    data = tomllib.loads((_ROOT / "pyproject.toml").read_text())
     extras = data["project"]["optional-dependencies"]
     assert "telegram" in extras
     assert "feishu" in extras
@@ -22,7 +24,7 @@ def test_pyproject_has_v1_1_extras():
 
 
 def test_pyproject_aiofiles_and_croniter_in_core():
-    data = tomllib.loads(Path("pyproject.toml").read_text())
+    data = tomllib.loads((_ROOT / "pyproject.toml").read_text())
     deps = data["project"]["dependencies"]
     assert any(d.startswith("aiofiles") for d in deps)
     assert any(d.startswith("croniter") for d in deps)
