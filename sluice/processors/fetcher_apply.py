@@ -54,7 +54,8 @@ class FetcherApplyProcessor:
                 if self.on_all_failed == "use_raw_summary" and it.raw_summary:
                     setattr(it, self.write_field, it.raw_summary)
                     survivors.append(it)
-                    stats["fetched"] += 1
+                    stats.setdefault("fallback_used", 0)
+                    stats["fallback_used"] += 1
                     continue
                 if self.failures is not None:
                     error_class = type(e).__name__

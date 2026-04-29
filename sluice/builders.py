@@ -148,7 +148,7 @@ def build_processors(
                     skip_if_field_longer_than=st.skip_if_field_longer_than,
                     failures=eff_failures,
                     max_retries=pipe.failures.max_retries,
-                    on_all_failed=global_cfg.fetcher.on_all_failed,
+                    on_all_failed=fetcher_chain.on_all_failed,
                 )
             )
         elif isinstance(st, FilterConfig):

@@ -60,8 +60,8 @@ class UrlCacheStore:
         if self._puts_until_check > 0:
             return
         self._puts_until_check = self._check_every_n
-        cur = await self.db.execute("SELECT COUNT(*) FROM url_cache")
-        n = (await cur.fetchone())[0]
+        async with self.db.execute("SELECT COUNT(*) FROM url_cache") as cur:
+            n = (await cur.fetchone())[0]
         threshold = int(self._max_rows * 1.1)
         if n <= threshold:
             return
