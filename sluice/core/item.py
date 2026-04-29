@@ -8,6 +8,7 @@ _SENTINEL = object()
 @dataclass
 class Attachment:
     url: str
+    local_path: str | None = None
     mime_type: str | None = None
     length: int | None = None
 
