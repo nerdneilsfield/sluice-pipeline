@@ -54,3 +54,19 @@ def _validate_run_key_template(global_cfg: GlobalConfig, pipe: PipelineConfig) -
     cron = pipe.cron or global_cfg.runtime.default_cron
     tz = pipe.timezone or global_cfg.runtime.timezone
     validate_template(pipe.run_key_template, cron, tz)
+
+
+def validate_pipeline_attachment_email_compat(
+    sinks,
+    stages,
+    attachment_url_prefix: str,
+) -> None:
+    has_email = any(s.get("type") == "email" for s in sinks)
+    has_mirror = any(st.get("type") == "mirror_attachments" for st in stages)
+    if has_email and has_mirror and not attachment_url_prefix.startswith(("http://", "https://")):
+        raise ConfigError(
+            f"email sink with mirror_attachments requires "
+            f"attachment_url_prefix to be http(s):// (current: "
+            f"{attachment_url_prefix!r}); local/file:// paths cannot be "
+            f"loaded by email clients."
+        )
