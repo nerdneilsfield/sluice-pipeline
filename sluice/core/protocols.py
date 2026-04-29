@@ -44,3 +44,9 @@ class SinkResult:
     sink_type: str
     external_id: str
     created: bool
+
+
+class Enricher(Protocol):
+    name: str
+
+    async def enrich(self, item: Item) -> str | None: ...
