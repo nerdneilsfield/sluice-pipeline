@@ -20,11 +20,18 @@ async def _aiosmtplib_send(
     recipient: str,
 ) -> str:
     smtp = aiosmtplib.SMTP(hostname=host, port=port, start_tls=starttls)
-    await smtp.connect()
-    if username:
-        await smtp.login(username, password)
-    await smtp.send_message(message, recipients=[recipient])
-    await smtp.quit()
+    try:
+        await smtp.connect()
+        if username:
+            await smtp.login(username, password)
+        await smtp.send_message(message, recipients=[recipient])
+        await smtp.quit()
+    except Exception:
+        try:
+            await smtp.quit()
+        except Exception:
+            pass
+        raise
     return message["Message-ID"] or "no-id"
 
 
@@ -72,7 +79,6 @@ class EmailSink(PushSinkBase):
         self._html_tmpl = Template(html_template_str)
         self._style_block = style_block
         self._policy = recipient_failure_policy
-        self._attach_run_log = attach_run_log
 
     @property
     def fail_fast(self) -> bool:

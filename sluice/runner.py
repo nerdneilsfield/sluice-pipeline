@@ -245,6 +245,8 @@ async def run_pipeline(
                     items_in=before,
                 ).info("processor.started")
                 ctx = await p.process(ctx)
+                if hasattr(p, "aclose"):
+                    await p.aclose()
                 if isinstance(p, DedupeProcessor):
                     apply_item_cap()
                 sync_run_stats()
@@ -278,6 +280,8 @@ async def run_pipeline(
                         items_in=len(ctx.items),
                     ).info("sink.started")
                     emitted = await sink.emit(ctx, emissions=emissions)
+                    if hasattr(sink, "aclose"):
+                        await sink.aclose()
                     emit(
                         "sink_done",
                         id=sink.id,

@@ -57,6 +57,14 @@ class PushSinkBase(Sink):
         if not batch:
             if not self.emit_on_empty:
                 return None
+            await emissions.insert(
+                ctx.pipeline_id,
+                ctx.run_key,
+                self.id,
+                self.type,
+                None,
+            )
+            return SinkResult(self.id, self.type, None, created=False)
         first_external_id: str | None = None
         any_success = False
         last_exc: Exception | None = None
@@ -95,6 +103,14 @@ class PushSinkBase(Sink):
                     error_msg=str(exc),
                 )
                 if self.fail_fast:
+                    if any_success:
+                        await emissions.insert(
+                            ctx.pipeline_id,
+                            ctx.run_key,
+                            self.id,
+                            self.type,
+                            first_external_id,
+                        )
                     raise
         if not any_success:
             raise RuntimeError(f"{self.type} sink {self.id}: all sends failed") from last_exc

@@ -20,6 +20,15 @@ def _estimate_size(toks):
     return len(render_to_markdown_v2(toks))
 
 
+def _safe_truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    cut = limit - 1
+    if cut > 0 and text[cut - 1] == "\\":
+        cut -= 1
+    return text[:cut] + "…"
+
+
 class TelegramSink(PushSinkBase):
     type = "telegram"
 
@@ -52,7 +61,12 @@ class TelegramSink(PushSinkBase):
         self._lpd = link_preview_disabled
         self._too_long = on_message_too_long
         self._delay = between_messages_delay_seconds
+        self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=30.0)
+
+    async def aclose(self):
+        if self._owns_client:
+            await self._client.aclose()
 
     def _render_payload(self, md: str, footer: str | None = None) -> str:
         toks = parse_markdown(md)
@@ -62,7 +76,7 @@ class TelegramSink(PushSinkBase):
         if len(text) <= _TG_MAX:
             return text
         if self._too_long == "truncate":
-            return text[: _TG_MAX - len("…")] + "…"
+            return _safe_truncate(text, _TG_MAX)
         if self._too_long == "fail":
             raise RuntimeError(f"telegram message exceeds {_TG_MAX} chars")
         return text
@@ -85,16 +99,24 @@ class TelegramSink(PushSinkBase):
             text = self._render_payload(md, footer)
             if len(text) > _TG_MAX and self._too_long == "split_more":
                 toks = parse_markdown(md)
-                chunks = split_tokens(toks, _TG_MAX - len(footer) - 8, _estimate_size)
+                footer_escaped = _escape_markdown_v2(footer) if footer else ""
+                suffix_template = f" ({1}/{999})"
+                max_suffix_len = len(_escape_markdown_v2(suffix_template))
+                chunk_budget = _TG_MAX - max(8, len(footer_escaped) + max_suffix_len + 2)
+                if chunk_budget < 200:
+                    chunk_budget = _TG_MAX - max_suffix_len - 2
+                    footer_escaped = ""
+                chunks = split_tokens(toks, chunk_budget, _estimate_size)
                 total = len(chunks)
                 for i, c in enumerate(chunks, start=1):
                     body = render_to_markdown_v2(c)
-                    chunk_footer = (
-                        _escape_markdown_v2(f"{footer} ({i}/{total})")
-                        if footer
-                        else _escape_markdown_v2(f"({i}/{total})")
-                    )
-                    out.append(PushBatchItem(kind="chunk", payload=body + "\n" + chunk_footer))
+                    chunk_suffix = _escape_markdown_v2(f"({i}/{total})")
+                    if footer_escaped:
+                        chunk_suffix = _escape_markdown_v2(footer) + " " + chunk_suffix
+                    payload = body + "\n" + chunk_suffix
+                    if len(payload) > _TG_MAX:
+                        payload = _safe_truncate(payload, _TG_MAX)
+                    out.append(PushBatchItem(kind="chunk", payload=payload))
             else:
                 out.append(PushBatchItem(kind="item", payload=text))
         return out

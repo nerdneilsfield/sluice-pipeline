@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import time
+import uuid
 
 import httpx
 from jinja2 import Template
@@ -13,8 +14,6 @@ from sluice.core.errors import ConfigError
 from sluice.sinks._feishu_render import render_to_post_array
 from sluice.sinks._markdown_ast import parse_markdown
 from sluice.sinks._push_base import PushBatchItem, PushSinkBase
-
-_FEISHU_MAX = 30000
 
 
 def _sign(secret: str, ts: int) -> str:
@@ -53,7 +52,6 @@ class FeishuSink(PushSinkBase):
         )
         self._url = webhook_url
         self._secret = secret
-        self._brief_input = brief_input
         self._items_input = items_input
         self._tmpl = Template(items_template_str)
         self._split = split
@@ -61,7 +59,12 @@ class FeishuSink(PushSinkBase):
         self._too_long = on_message_too_long
         self._card_tmpl = Template(card_template_str) if card_template_str else None
         self._delay = between_messages_delay_seconds
+        self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=30.0)
+
+    async def aclose(self):
+        if self._owns_client:
+            await self._client.aclose()
 
     def _build_payload_post(self, md: str) -> dict:
         toks = parse_markdown(md)
@@ -81,6 +84,8 @@ class FeishuSink(PushSinkBase):
         return {"msg_type": "text", "content": {"text": "".join(out)}}
 
     def _build_payload_card(self, md: str, ctx: PipelineContext) -> dict:
+        if self._card_tmpl is None:
+            raise ConfigError("feishu interactive mode requires a non-empty card_template")
         toks = parse_markdown(md)
         arr = render_to_post_array(toks)
         rendered = self._card_tmpl.render(
@@ -118,4 +123,4 @@ class FeishuSink(PushSinkBase):
             raise RuntimeError(f"feishu webhook error: {data}")
         if self._delay > 0:
             await asyncio.sleep(self._delay)
-        return f"feishu:{int(time.time())}"
+        return f"feishu:{uuid.uuid4().hex[:12]}"
