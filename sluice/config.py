@@ -190,6 +190,17 @@ class RenderConfig(BaseModel):
     output_field: str
 
 
+class LimitStage(BaseModel):
+    type: Literal["limit"]
+    name: str
+    top_n: int
+    sort_by: str
+    sort_order: Literal["desc", "asc"] = "desc"
+    sort_missing: Literal["first", "last", "drop"] = "last"
+    group_by: str | None = None
+    per_group_max: int | None = None
+
+
 StageConfig = Annotated[
     Union[
         DedupeConfig,
@@ -197,6 +208,7 @@ StageConfig = Annotated[
         FilterConfig,
         FieldFilterConfig,
         LLMStageConfig,
+        LimitStage,
         RenderConfig,
     ],
     Field(discriminator="type"),
@@ -299,6 +311,7 @@ class PipelineConfig(BaseModel):
     timezone: str | None = None
     window: str = "24h"
     lookback_overlap: str | None = None
+    run_key_template: str = "{pipeline_id}/{run_date}"
     sources: list[SourceConfig]
     stages: list[StageConfig]
     sinks: list[SinkConfig]

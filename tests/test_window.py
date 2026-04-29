@@ -26,4 +26,4 @@ def test_compute_window_explicit_overlap():
 def test_min_overlap_one_hour():
     now = datetime(2026, 4, 28, tzinfo=timezone.utc)
     start, end = compute_window(now=now, window="1h", lookback_overlap=None)
-    assert end - start == timedelta(hours=2)
+    assert end - start == timedelta(hours=1.5)

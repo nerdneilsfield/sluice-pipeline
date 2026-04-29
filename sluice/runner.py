@@ -17,6 +17,7 @@ from sluice.loader import ConfigBundle
 from sluice.logging_setup import get_logger
 from sluice.pricing import model_price
 from sluice.processors.dedupe import item_key
+from sluice.run_key import render_run_key
 from sluice.state.cache import UrlCacheStore
 from sluice.state.db import open_db
 from sluice.state.emissions import EmissionStore
@@ -49,10 +50,6 @@ def _resolve_tz(global_cfg: GlobalConfig, pipe: PipelineConfig) -> ZoneInfo:
     return ZoneInfo(pipe.timezone or global_cfg.runtime.timezone)
 
 
-def _run_key(pipe_id: str, run_date: str) -> str:
-    return f"{pipe_id}/{run_date}"
-
-
 async def run_pipeline(
     bundle: ConfigBundle,
     *,
@@ -67,7 +64,7 @@ async def run_pipeline(
     now = now or datetime.now(timezone.utc)
     local_now = now.astimezone(tz)
     run_date = local_now.date().isoformat()
-    run_key = _run_key(pipe.id, run_date)
+    run_key = render_run_key(pipe.run_key_template, pipe.id, local_now)
 
     def emit(event: str, **data) -> None:
         if progress is not None:
