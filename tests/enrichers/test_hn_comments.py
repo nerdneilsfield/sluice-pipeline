@@ -54,7 +54,7 @@ async def test_per_host_token_bucket_serializes(monkeypatch):
     times = []
 
     async def run():
-        await bucket.acquire("h")
+        await bucket.acquire()
         times.append(time.monotonic())
 
     await asyncio.gather(run(), run(), run())

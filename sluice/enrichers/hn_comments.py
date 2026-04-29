@@ -14,7 +14,7 @@ class _HostBucket:
         self._lock = asyncio.Lock()
         self._last = 0.0
 
-    async def acquire(self, host: str):
+    async def acquire(self):
         async with self._lock:
             now = time.monotonic()
             wait = max(0.0, self._last + self._delay - now)
@@ -52,7 +52,7 @@ class HnCommentsEnricher:
             return None
         item_id = m.group(1)
         target = f"{self._base}/stories/{item_id}"
-        await self._bucket_for(httpx.URL(target).host).acquire("")
+        await self._bucket_for(httpx.URL(target).host).acquire()
         resp = await self._client.get(target)
         resp.raise_for_status()
         return parse_hn_thread(resp.text, top_n=self._top)

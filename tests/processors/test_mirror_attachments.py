@@ -28,7 +28,8 @@ def _item_with_attach(url, **extras):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_mirrors_attachment_url_relative_mode(tmp_path):
+@patch("sluice.processors.mirror_attachments.guard")
+async def test_mirrors_attachment_url_relative_mode(_mock_guard, tmp_path):
     respx.get("https://example.com/a.jpg").mock(
         return_value=Response(200, content=b"\xff\xd8\xff", headers={"content-type": "image/jpeg"})
     )
@@ -47,8 +48,7 @@ async def test_mirrors_attachment_url_relative_mode(tmp_path):
             attachment_url_prefix="",
         )
         item = _item_with_attach("https://example.com/a.jpg")
-        with patch("sluice.processors.mirror_attachments.guard"):
-            out = await proc.process(make_ctx(items=[item]))
+        out = await proc.process(make_ctx(items=[item]))
         a = out.items[0].attachments[0]
         assert a.local_path is not None
         assert a.url == a.local_path
@@ -57,7 +57,8 @@ async def test_mirrors_attachment_url_relative_mode(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_rewrite_fields_extras(tmp_path):
+@patch("sluice.processors.mirror_attachments.guard")
+async def test_rewrite_fields_extras(_mock_guard, tmp_path):
     respx.get("https://x/cover.png").mock(
         return_value=Response(
             200, content=b"\x89PNG\r\n\x1a\n", headers={"content-type": "image/png"}
@@ -88,14 +89,14 @@ async def test_rewrite_fields_extras(tmp_path):
             attachments=[],
         )
         item.extras["cover_image"] = "https://x/cover.png"
-        with patch("sluice.processors.mirror_attachments.guard"):
-            out = await proc.process(make_ctx(items=[item]))
+        out = await proc.process(make_ctx(items=[item]))
         assert out.items[0].extras["cover_image"].startswith("https://cdn/x/")
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_oversize_skipped_or_failed(tmp_path):
+@patch("sluice.processors.mirror_attachments.guard")
+async def test_oversize_skipped_or_failed(_mock_guard, tmp_path):
     respx.get("https://big/x.jpg").mock(
         return_value=Response(200, content=b"\x00" * 5000, headers={"content-type": "image/jpeg"})
     )
@@ -114,6 +115,26 @@ async def test_oversize_skipped_or_failed(tmp_path):
             attachment_url_prefix="",
         )
         item = _item_with_attach("https://big/x.jpg")
-        with patch("sluice.processors.mirror_attachments.guard"):
-            out = await proc.process(make_ctx(items=[item]))
+        out = await proc.process(make_ctx(items=[item]))
+        assert out.items[0].attachments == []
+
+
+@pytest.mark.asyncio
+async def test_ssrf_private_ip_blocked(tmp_path):
+    base = tmp_path / "att"
+    base.mkdir()
+    async with open_db(tmp_path / "s.db") as db:
+        store = AttachmentStore(db, base_dir=base)
+        proc = MirrorAttachmentsProcessor(
+            name="mi",
+            store=store,
+            pipeline_id="p",
+            mime_prefixes=["image/"],
+            max_bytes=10_000,
+            on_failure="drop_attachment",
+            rewrite_fields=[],
+            attachment_url_prefix="",
+        )
+        item = _item_with_attach("http://192.168.1.1/secret.jpg")
+        out = await proc.process(make_ctx(items=[item]))
         assert out.items[0].attachments == []
