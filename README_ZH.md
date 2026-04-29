@@ -8,8 +8,8 @@
 [![Python](https://img.shields.io/pypi/pyversions/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
-[![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
+[![Tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -43,6 +43,22 @@ RSS ───▶── │   源头   │──▶│  阶段   │──▶│ 
 - [路线图](#路线图)
 - [本地开发](#本地开发)
 - [License](#license)
+
+---
+
+## V1.1 新特性
+
+- **推送渠道 Sink**：Telegram（MarkdownV2）、飞书（post/text/interactive）、邮件（fail_fast/best_effort）——均带 `sink_delivery_log` 审计日志。
+- **附件镜像**：`mirror_attachments` 阶段将图片/文件下载到本地磁盘，支持 `file://`、`https://` 或相对 URL 前缀。
+- **Enricher 协议 + hn_comments**：可插拔的富化器为条目补充外部数据（通过 hckrnws.com 抓取 HN 评论线程）。
+- **子日流水线**：`run_key_template` 支持 `{run_hour}`、`{run_minute}`、`{run_iso}`、`{run_epoch}`，适用于小于 24 小时的 cron 间隔。
+- **`limit` 阶段**：`sort_by` / `group_by` / `per_group_max` 限制输出数量。
+- **`field_filter` 操作**：新增 `lower`、`strip`、`regex_replace`，与已有的 `truncate` / `drop` 并列。
+- **抓取器回退**：`on_all_failed = "use_raw_summary"` 在所有抓取器失败时回退到 RSS 原始摘要。
+- **URL 缓存容量上限**：可配置 `max_rows`，LRU 式淘汰。
+- **GC 命令**：`sluice gc` 回收 `failed_items`、`url_cache`、`attachment_mirror` 的空间 + 孤立文件清理。
+- **指标监控**：自定义 Prometheus 采集器 + `sluice stats` + `sluice metrics-server` + `sluice deliveries` 审计查看器。
+- **懒加载注册**：插件通过懒加载桩注册，`pip install sluice`（不带 extras）仍然可用。
 
 ---
 

@@ -9,8 +9,8 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 [![Python](https://img.shields.io/pypi/pyversions/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
-[![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
+[![Tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -45,6 +45,22 @@ RSS ───▶── │  Source  │──▶│ Stages  │──▶│  Ren
 - [Roadmap](#roadmap)
 - [Development](#development)
 - [License](#license)
+
+---
+
+## What's new in V1.1
+
+- **Push-channel sinks**: Telegram (MarkdownV2), Feishu (post/text/interactive), Email (fail_fast/best_effort) — all with `sink_delivery_log` audit trail.
+- **Attachment mirroring**: `mirror_attachments` stage downloads images/files to local disk with `file://`, `https://`, or relative URL prefix.
+- **Enricher protocol + hn_comments**: pluggable enrichers that augment items with external data (HN comment threads via hckrnws.com).
+- **Sub-daily pipelines**: `run_key_template` with `{run_hour}`, `{run_minute}`, `{run_iso}`, `{run_epoch}` for cron intervals under 24h.
+- **`limit` stage**: `sort_by` / `group_by` / `per_group_max` for capping output.
+- **`field_filter` ops**: `lower`, `strip`, `regex_replace` in addition to existing `truncate` / `drop`.
+- **Fetcher fallback**: `on_all_failed = "use_raw_summary"` falls back to raw RSS summary when all fetchers fail.
+- **URL cache size cap**: configurable `max_rows` with LRU-style eviction.
+- **GC command**: `sluice gc` reclaims space from `failed_items`, `url_cache`, `attachment_mirror` + orphan file sweep.
+- **Metrics**: custom Prometheus collector + `sluice stats` + `sluice metrics-server` + `sluice deliveries` audit viewer.
+- **Lazy registry**: plugins register via lazy stubs so `pip install sluice` (no extras) keeps working.
 
 ---
 
