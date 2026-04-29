@@ -1,8 +1,8 @@
 import re
 from datetime import datetime, timedelta
 
-_DUR_RE = re.compile(r"^(\d+)([smhd])$")
-_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
+_DUR_RE = re.compile(r"^(\d+)(ms|s|m|h|d)$")
+_UNITS = {"ms": "milliseconds", "s": "seconds", "m": "minutes", "h": "hours", "d": "days"}
 
 
 def parse_duration(s: str) -> timedelta:
