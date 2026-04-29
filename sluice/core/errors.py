@@ -33,6 +33,12 @@ class AllFetchersFailed(FetchError):
         self.details = details or []
 
 
+class PluginExtraMissingError(ConfigError):
+    """Raised when a registered plugin's optional dependency is not installed."""
+
+    pass
+
+
 class LLMError(SluiceError):
     pass
 
