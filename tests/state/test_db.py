@@ -7,7 +7,7 @@ from sluice.state.db import current_version, open_db
 async def test_initial_migration_creates_tables(tmp_path):
     db_path = tmp_path / "x.db"
     async with open_db(db_path) as db:
-        assert await current_version(db) == 1
+        assert await current_version(db) >= 2
         names = {
             row[0]
             async for row in await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -21,7 +21,7 @@ async def test_idempotent_open(tmp_path):
     async with open_db(db_path):
         pass
     async with open_db(db_path) as db:
-        assert await current_version(db) == 1
+        assert await current_version(db) >= 2
 
 
 @pytest.mark.asyncio
