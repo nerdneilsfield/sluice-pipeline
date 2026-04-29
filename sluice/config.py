@@ -207,7 +207,7 @@ SinkConfig = Annotated[
 class FetcherChainOverride(BaseModel):
     chain: list[str] | None = None
     min_chars: int | None = None
-    on_all_failed: Literal["skip", "continue_empty"] | None = None
+    on_all_failed: Literal["skip", "continue_empty", "use_raw_summary"] | None = None
 
 
 class CacheOverride(BaseModel):
@@ -243,7 +243,7 @@ class RuntimeConfig(BaseModel):
 class GlobalFetcherConfig(BaseModel):
     chain: list[str] | None = None
     min_chars: int = 500
-    on_all_failed: Literal["skip", "continue_empty"] = "skip"
+    on_all_failed: Literal["skip", "continue_empty", "use_raw_summary"] = "skip"
     cache: CacheOverride = Field(default_factory=CacheOverride)
 
 

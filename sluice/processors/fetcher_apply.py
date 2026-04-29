@@ -9,7 +9,15 @@ class FetcherApplyProcessor:
     name = "fetcher_apply"
 
     def __init__(
-        self, *, name, chain, write_field, skip_if_field_longer_than, failures, max_retries
+        self,
+        *,
+        name,
+        chain,
+        write_field,
+        skip_if_field_longer_than,
+        failures,
+        max_retries,
+        on_all_failed="skip",
     ):
         self.name = name
         self.chain = chain
@@ -17,6 +25,7 @@ class FetcherApplyProcessor:
         self.skip_if_field_longer_than = skip_if_field_longer_than
         self.failures = failures
         self.max_retries = max_retries
+        self.on_all_failed = on_all_failed
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         survivors = []
@@ -42,14 +51,24 @@ class FetcherApplyProcessor:
                 stats["failed"] += 1
                 errors = stats["errors"]
                 errors[type(e).__name__] = errors.get(type(e).__name__, 0) + 1
+                if self.on_all_failed == "use_raw_summary" and it.raw_summary:
+                    setattr(it, self.write_field, it.raw_summary)
+                    survivors.append(it)
+                    stats["fetched"] += 1
+                    continue
                 if self.failures is not None:
+                    error_class = type(e).__name__
+                    error_msg = str(e)
+                    if self.on_all_failed == "use_raw_summary" and not it.raw_summary:
+                        error_class = "FetcherChainExhaustedNoFallback"
+                        error_msg = "all fetchers failed and raw_summary is empty"
                     await self.failures.record(
                         it.pipeline_id,
                         item_key(it),
                         it,
                         stage=self.name,
-                        error_class=type(e).__name__,
-                        error_msg=str(e),
+                        error_class=error_class,
+                        error_msg=error_msg,
                         max_retries=self.max_retries,
                     )
                 log.bind(
