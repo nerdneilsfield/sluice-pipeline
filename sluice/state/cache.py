@@ -17,8 +17,16 @@ class CachedExtraction:
 
 
 class UrlCacheStore:
-    def __init__(self, db: aiosqlite.Connection):
+    def __init__(
+        self,
+        db: aiosqlite.Connection,
+        max_rows: int = 50000,
+        check_every_n: int = 256,
+    ):
         self.db = db
+        self._max_rows = max_rows
+        self._check_every_n = check_every_n
+        self._puts_until_check = check_every_n
 
     async def get(self, url: str) -> CachedExtraction | None:
         now = datetime.now(timezone.utc).isoformat()
@@ -43,5 +51,25 @@ class UrlCacheStore:
                 now.isoformat(),
                 (now + timedelta(seconds=ttl_seconds)).isoformat(),
             ),
+        )
+        await self.db.commit()
+        await self._maybe_evict()
+
+    async def _maybe_evict(self) -> None:
+        self._puts_until_check -= 1
+        if self._puts_until_check > 0:
+            return
+        self._puts_until_check = self._check_every_n
+        cur = await self.db.execute("SELECT COUNT(*) FROM url_cache")
+        n = (await cur.fetchone())[0]
+        threshold = int(self._max_rows * 1.1)
+        if n <= threshold:
+            return
+        excess = n - self._max_rows
+        await self.db.execute(
+            "DELETE FROM url_cache WHERE url_hash IN ("
+            "  SELECT url_hash FROM url_cache "
+            "  ORDER BY fetched_at ASC LIMIT ?)",
+            (excess,),
         )
         await self.db.commit()
