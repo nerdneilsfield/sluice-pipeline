@@ -49,7 +49,7 @@ model_name="m"
     with (
         patch("prefect.client.schemas.schedules.CronSchedule"),
         patch("sluice.flow.build_flow") as mock_build_flow,
-        patch("prefect.serve"),
+        patch("sluice.cli.prefect_serve"),
     ):
 
         def make_flow(pid):

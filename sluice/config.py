@@ -322,11 +322,25 @@ class FetcherImplConfig(BaseModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class GCSchedule(BaseModel):
+    enabled: bool = False
+    cron: str = "0 3 * * *"
+
+
+class GCConfig(BaseModel):
+    failed_items_older_than: str = "90d"
+    url_cache_max_rows: int = 50000
+    url_cache_keep_expired: str = "7d"
+    attachment_unreferenced_after: str = "30d"
+    schedule: GCSchedule = Field(default_factory=GCSchedule)
+
+
 class GlobalConfig(BaseModel):
     state: StateConfig = Field(default_factory=StateConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     fetcher: GlobalFetcherConfig = Field(default_factory=GlobalFetcherConfig)
     fetchers: dict[str, FetcherImplConfig] = Field(default_factory=dict)
+    gc: GCConfig = Field(default_factory=GCConfig)
 
 
 class PipelineConfig(BaseModel):

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
 import typer
+from prefect import serve as prefect_serve
+from prefect.client.schemas.schedules import CronSchedule
 from rich.console import Console
 from rich.table import Table
 from tqdm import tqdm
@@ -12,6 +15,7 @@ from tqdm import tqdm
 from sluice.loader import load_all
 from sluice.logging_setup import configure_cli_logging, create_logger
 from sluice.runner import run_pipeline
+from sluice.window import parse_duration
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -231,8 +235,6 @@ def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
     """Register all enabled pipelines as Prefect deployments."""
     _import_all()
     bundle = load_all(config_dir)
-    from prefect import serve as prefect_serve
-    from prefect.client.schemas.schedules import CronSchedule
 
     from sluice.flow import build_flow
 
@@ -250,8 +252,236 @@ def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
         )
         deployments.append(dep)
 
+    if bundle.global_cfg.gc.schedule.enabled:
+        from sluice.gc_flow import sluice_gc_flow
+
+        gc_dep = sluice_gc_flow.to_deployment(
+            name="sluice-gc",
+            schedule=CronSchedule(
+                cron=bundle.global_cfg.gc.schedule.cron,
+                timezone=bundle.global_cfg.runtime.timezone,
+            ),
+            parameters={"config_dir": str(config_dir.resolve())},
+        )
+        deployments.append(gc_dep)
+
     if deployments:
         prefect_serve(*deployments)
+
+
+@app.command()
+def gc(
+    config_dir: str = typer.Option("./configs", "--config-dir"),
+    older_than: str = typer.Option("90d", help="threshold for failed_items"),
+    pipeline: str | None = typer.Option(None),
+    tables: str = typer.Option("failed_items,url_cache,attachment_mirror"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+):
+    """Reclaim space from state tables."""
+    from sluice.gc import gc_attachments, gc_failed_items, gc_url_cache
+    from sluice.state.db import open_db
+
+    bundle = load_all(Path(config_dir))
+    cfg = bundle.global_cfg
+    if pipeline:
+        if pipeline not in bundle.pipelines:
+            typer.echo(f"unknown pipeline: {pipeline}", err=True)
+            raise typer.Exit(2)
+        db_path = bundle.pipelines[pipeline].state.db_path or cfg.state.db_path
+        att_dir = bundle.pipelines[pipeline].state.attachment_dir or cfg.state.attachment_dir
+    else:
+        db_path = cfg.state.db_path
+        att_dir = cfg.state.attachment_dir
+    cutoff_iso = (datetime.now(timezone.utc) - parse_duration(older_than)).isoformat(
+        timespec="seconds"
+    )
+    selected = set(tables.split(","))
+
+    async def _run():
+        async with open_db(db_path) as db:
+            if "failed_items" in selected:
+                if dry_run:
+                    sql = (
+                        "SELECT COUNT(*) FROM failed_items "
+                        "WHERE status IN ('resolved','dead_letter') "
+                        "AND last_failed_at < ?"
+                    )
+                    args = [cutoff_iso]
+                    if pipeline:
+                        sql += " AND pipeline_id = ?"
+                        args.append(pipeline)
+                    cur = await db.execute(sql, args)
+                    n = (await cur.fetchone())[0]
+                else:
+                    n = await gc_failed_items(db, older_than_iso=cutoff_iso, pipeline=pipeline)
+                typer.echo(f"failed_items: {n} {'(would delete)' if dry_run else 'deleted'}")
+            if "url_cache" in selected:
+                keep_cutoff = (
+                    datetime.now(timezone.utc) - parse_duration(cfg.gc.url_cache_keep_expired)
+                ).isoformat(timespec="seconds")
+                if dry_run:
+                    cur = await db.execute(
+                        "SELECT COUNT(*) FROM url_cache WHERE expires_at < ?", (keep_cutoff,)
+                    )
+                    n_expired = (await cur.fetchone())[0]
+                    cur = await db.execute(
+                        "SELECT COUNT(*) FROM url_cache WHERE expires_at >= ?", (keep_cutoff,)
+                    )
+                    remaining = (await cur.fetchone())[0]
+                    n_size = max(0, remaining - cfg.gc.url_cache_max_rows)
+                    n = n_expired + n_size
+                else:
+                    n = await gc_url_cache(
+                        db, max_rows=cfg.gc.url_cache_max_rows, keep_expired_iso=keep_cutoff
+                    )
+                typer.echo(f"url_cache: {n} {'(would delete)' if dry_run else 'deleted'}")
+            if "attachment_mirror" in selected:
+                a_cutoff = (
+                    datetime.now(timezone.utc)
+                    - parse_duration(cfg.gc.attachment_unreferenced_after)
+                ).isoformat(timespec="seconds")
+                if dry_run:
+                    sql = "SELECT COUNT(*) FROM attachment_mirror WHERE last_referenced_at < ?"
+                    args = [a_cutoff]
+                    if pipeline:
+                        sql += " AND pipeline_id = ?"
+                        args.append(pipeline)
+                    cur = await db.execute(sql, args)
+                    n = (await cur.fetchone())[0]
+                else:
+                    n = await gc_attachments(
+                        db, base_dir=Path(att_dir), older_than_iso=a_cutoff, pipeline=pipeline
+                    )
+                typer.echo(f"attachment_mirror: {n} {'(would delete)' if dry_run else 'deleted'}")
+
+    asyncio.run(_run())
+
+
+@app.command()
+def stats(
+    pipeline: str | None = typer.Argument(None),
+    config_dir: str = typer.Option("./configs", "--config-dir"),
+    since: str = typer.Option("7d"),
+    format: str = typer.Option("table"),
+):
+    """Print run statistics from run_log."""
+    import json
+    import sqlite3
+
+    from sluice.runner import _resolve_db_path
+
+    cutoff = (datetime.now(timezone.utc) - parse_duration(since)).isoformat()
+    bundle = load_all(Path(config_dir))
+    cfg = bundle.global_cfg
+    if pipeline:
+        if pipeline not in bundle.pipelines:
+            typer.echo(f"unknown pipeline: {pipeline}", err=True)
+            raise typer.Exit(2)
+        db_path = _resolve_db_path(cfg, bundle.pipelines[pipeline])
+    else:
+        db_path = cfg.state.db_path
+    sql = (
+        "SELECT pipeline_id, COUNT(*) AS runs, "
+        " 100.0 * SUM(CASE status WHEN 'success' THEN 1 ELSE 0 END)/COUNT(*) AS success_pct, "
+        " AVG(items_in), AVG(items_out), SUM(llm_calls), SUM(est_cost_usd) "
+        "FROM run_log WHERE started_at >= ?"
+    )
+    args = [cutoff]
+    if pipeline:
+        sql += " AND pipeline_id = ?"
+        args.append(pipeline)
+    sql += " GROUP BY pipeline_id"
+    with sqlite3.connect(db_path) as c:
+        rows = c.execute(sql, args).fetchall()
+    if format == "json":
+        keys = [
+            "pipeline_id",
+            "runs",
+            "success_pct",
+            "avg_items_in",
+            "avg_items_out",
+            "llm_calls",
+            "cost_usd",
+        ]
+        typer.echo(json.dumps([dict(zip(keys, r)) for r in rows], indent=2))
+    else:
+        for r in rows:
+            typer.echo(" | ".join(str(x) for x in r))
+
+
+@app.command("metrics-server")
+def metrics_server(
+    host: str = "0.0.0.0",
+    port: int = 9090,
+    config_dir: str = typer.Option("./configs", "--config-dir"),
+):
+    """Start Prometheus exposition server."""
+    import time
+
+    from prometheus_client import REGISTRY, start_http_server
+
+    from sluice.metrics import SluiceCollector
+
+    bundle = load_all(Path(config_dir))
+    cfg = bundle.global_cfg
+    overrides = [
+        pid
+        for pid, p in bundle.pipelines.items()
+        if p.state.db_path is not None and p.state.db_path != cfg.state.db_path
+    ]
+    if overrides:
+        typer.echo(
+            f"WARNING: pipelines {overrides} override state.db_path; "
+            f"their metrics will NOT be exposed by this server "
+            f"(global DB only).",
+            err=True,
+        )
+    REGISTRY.register(SluiceCollector(cfg.state.db_path))
+    start_http_server(port, addr=host)
+    typer.echo(f"metrics: http://{host}:{port}/metrics")
+    while True:
+        time.sleep(3600)
+
+
+@app.command()
+def deliveries(
+    pipeline_id: str,
+    config_dir: str = typer.Option("./configs", "--config-dir"),
+    run: str | None = typer.Option(None, "--run"),
+    status: str | None = typer.Option(None, "--status"),
+    since: str = typer.Option("7d"),
+):
+    """List delivery audit trail for a pipeline."""
+    import sqlite3
+
+    from sluice.runner import _resolve_db_path
+
+    bundle = load_all(Path(config_dir))
+    cfg = bundle.global_cfg
+    if pipeline_id not in bundle.pipelines:
+        typer.echo(f"unknown pipeline: {pipeline_id}", err=True)
+        raise typer.Exit(2)
+    db_path = _resolve_db_path(cfg, bundle.pipelines[pipeline_id])
+    since_cutoff = (datetime.now(timezone.utc) - parse_duration(since)).isoformat(
+        timespec="seconds"
+    )
+    sql = (
+        "SELECT attempt_at, sink_id, sink_type, ordinal, message_kind, "
+        " recipient, status, error_msg "
+        "FROM sink_delivery_log "
+        "WHERE pipeline_id = ? AND attempt_at >= ?"
+    )
+    args = [pipeline_id, since_cutoff]
+    if run:
+        sql += " AND run_key = ?"
+        args.append(run)
+    if status:
+        sql += " AND status = ?"
+        args.append(status)
+    sql += " ORDER BY attempt_at DESC LIMIT 200"
+    with sqlite3.connect(db_path) as c:
+        for row in c.execute(sql, args):
+            typer.echo(" | ".join(str(x) if x is not None else "-" for x in row))
 
 
 if __name__ == "__main__":
