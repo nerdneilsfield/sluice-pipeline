@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
 [![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -133,6 +133,7 @@ type = "notion"
 input          = "context.markdown"
 parent_id      = "env:NOTION_DB_AI_NEWS"
 parent_type    = "database"
+token          = "env:NOTION_TOKEN"
 title_template = "AI 日报 · {run_date}"
 ```
 
@@ -358,6 +359,7 @@ type           = "notion"
 input          = "context.markdown"
 parent_id      = "env:NOTION_DB_AI_NEWS"
 parent_type    = "database"
+token          = "env:NOTION_TOKEN"
 title_template = "AI 日报 · {run_date}"
 properties     = { Tag = "AI", Source = "sluice" }
 mode           = "upsert"          # upsert | create_once | create_new
@@ -534,6 +536,11 @@ rules = [
 | `create_once` | 第一次创建，之后 no-op。                                                    |
 | `create_new`  | 永远新建（故意非幂等，用于"每次都发一份新页面"）。                          |
 
+当 parent 是 database 时，`properties` 可以写友好的 TOML 简写，比如
+`{ Tag = "AI", Source = "sluice" }`；sluice 会读取数据库 schema，把它们展开成
+Notion API 需要的 `select`、`multi_select`、`rich_text`、`url`、`date` 等结构。
+如果你已经写了完整 Notion property dict，则会原样透传。
+
 > **v2 计划：** email（HTML 邮件订阅）、GitHub repo 推送、webhook。
 
 </details>
@@ -666,7 +673,7 @@ prefect worker start --pool default # 处理调度任务
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # 或 pip install -e '.[dev]'
-pytest                              # 158 个测试，约 7 秒
+pytest                              # 160 个测试，约 9 秒
 pytest --cov=sluice                 # 89% 覆盖率
 ruff check .
 ty check .

@@ -10,7 +10,7 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
 [![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Tests](https://img.shields.io/badge/tests-160%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -135,6 +135,7 @@ type = "notion"
 input          = "context.markdown"
 parent_id      = "env:NOTION_DB_AI_NEWS"
 parent_type    = "database"
+token          = "env:NOTION_TOKEN"
 title_template = "AI Daily · {run_date}"
 ```
 
@@ -365,6 +366,7 @@ type           = "notion"
 input          = "context.markdown"
 parent_id      = "env:NOTION_DB_AI_NEWS"
 parent_type    = "database"
+token          = "env:NOTION_TOKEN"
 title_template = "AI Daily · {run_date}"
 properties     = { Tag = "AI", Source = "sluice" }
 mode           = "upsert"          # upsert | create_once | create_new
@@ -547,6 +549,12 @@ unlimited filter combinations downstream.
 | `create_once` | First run creates; later runs no-op.                                          |
 | `create_new`  | Always create a new page (intentional non-idempotent for "publish each rerun"). |
 
+For database parents, `properties` may use friendly TOML values such as
+`{ Tag = "AI", Source = "sluice" }`; sluice reads the database schema and
+expands them to the Notion API shape for `select`, `multi_select`,
+`rich_text`, `url`, `date`, and similar property types. Fully explicit Notion
+property dictionaries are passed through unchanged.
+
 > **Coming in v2:** email (HTML newsletter), GitHub repo push, webhook.
 
 </details>
@@ -683,7 +691,7 @@ scheduling, SSRF guard.
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # or pip install -e '.[dev]'
-pytest                              # 158 tests, ~7s
+pytest                              # 160 tests, ~9s
 pytest --cov=sluice                 # 89% coverage
 ruff check .
 ty check .

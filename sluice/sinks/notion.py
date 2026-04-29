@@ -1,9 +1,26 @@
 import asyncio
-from typing import Protocol
+from typing import Any, Protocol
 
 from sluice.context import PipelineContext
 from sluice.loader import resolve_env
 from sluice.sinks.base import Sink, register_sink
+
+_NOTION_PROPERTY_VALUE_KEYS = {
+    "checkbox",
+    "date",
+    "email",
+    "files",
+    "multi_select",
+    "number",
+    "people",
+    "phone_number",
+    "relation",
+    "rich_text",
+    "select",
+    "status",
+    "title",
+    "url",
+}
 
 
 class NotionifyAdapter(Protocol):
@@ -20,7 +37,14 @@ class DefaultNotionifyAdapter:
 
         self._client = NotionifyClient(token=token)
 
+    def _database_properties(self, database_id: str) -> dict[str, Any]:
+        database = self._client._transport.request("GET", f"/databases/{database_id}")
+        return database.get("properties", {})
+
     async def create_page(self, *, parent_id, parent_type, title, properties, markdown):
+        if parent_type == "database" and properties:
+            schema = await asyncio.to_thread(self._database_properties, parent_id)
+            properties = normalize_database_properties(properties, schema)
         result = await asyncio.to_thread(
             self._client.create_page_with_markdown,
             parent_id=parent_id,
@@ -53,6 +77,69 @@ def chunk_markdown(text: str, max_chars: int) -> list[str]:
         chunks.append(text[i : i + max_chars])
         i += max_chars
     return chunks
+
+
+def normalize_database_properties(
+    properties: dict[str, Any], schema: dict[str, Any]
+) -> dict[str, Any]:
+    """Expand friendly TOML values into Notion database property values."""
+
+    return {
+        name: _normalize_database_property_value(value, schema.get(name, {}))
+        for name, value in properties.items()
+    }
+
+
+def _normalize_database_property_value(value: Any, schema_entry: dict[str, Any]) -> Any:
+    if _is_explicit_notion_property_value(value):
+        return value
+    property_type = schema_entry.get("type")
+    if property_type == "title":
+        return {"title": _rich_text(value)}
+    if property_type == "rich_text":
+        return {"rich_text": _rich_text(value)}
+    if property_type == "select":
+        return {"select": None if value is None else {"name": str(value)}}
+    if property_type == "multi_select":
+        return {"multi_select": _multi_select(value)}
+    if property_type == "status":
+        return {"status": None if value is None else {"name": str(value)}}
+    if property_type == "url":
+        return {"url": None if value is None else str(value)}
+    if property_type == "email":
+        return {"email": None if value is None else str(value)}
+    if property_type == "phone_number":
+        return {"phone_number": None if value is None else str(value)}
+    if property_type == "number":
+        return {"number": value}
+    if property_type == "checkbox":
+        return {"checkbox": bool(value)}
+    if property_type == "date":
+        return {"date": value if isinstance(value, dict) else {"start": str(value)}}
+    return value
+
+
+def _is_explicit_notion_property_value(value: Any) -> bool:
+    return isinstance(value, dict) and bool(_NOTION_PROPERTY_VALUE_KEYS & value.keys())
+
+
+def _rich_text(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return value
+    return [{"text": {"content": "" if value is None else str(value)}}]
+
+
+def _multi_select(value: Any) -> list[dict[str, str]]:
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    out = []
+    for item in values:
+        if isinstance(item, dict):
+            out.append(item)
+        else:
+            out.append({"name": str(item)})
+    return out
 
 
 @register_sink("notion")

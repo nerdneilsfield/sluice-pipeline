@@ -4,7 +4,11 @@ import pytest
 
 from sluice.context import PipelineContext
 from sluice.core.item import Item
-from sluice.sinks.notion import NotionSink, chunk_markdown
+from sluice.sinks.notion import (
+    NotionSink,
+    chunk_markdown,
+    normalize_database_properties,
+)
 from sluice.state.db import open_db
 from sluice.state.emissions import EmissionStore
 
@@ -31,6 +35,42 @@ def test_chunk_markdown_respects_limit():
 
 def test_chunk_markdown_keeps_short():
     assert chunk_markdown("short", 1900) == ["short"]
+
+
+def test_normalize_database_properties_uses_schema_types():
+    schema = {
+        "Tag": {"type": "multi_select"},
+        "Source": {"type": "select"},
+        "Summary": {"type": "rich_text"},
+        "URL": {"type": "url"},
+        "Published": {"type": "date"},
+        "Reviewed": {"type": "checkbox"},
+    }
+    props = normalize_database_properties(
+        {
+            "Tag": "AI",
+            "Source": "sluice",
+            "Summary": "daily digest",
+            "URL": "https://example.com",
+            "Published": "2026-04-29",
+            "Reviewed": True,
+        },
+        schema,
+    )
+    assert props == {
+        "Tag": {"multi_select": [{"name": "AI"}]},
+        "Source": {"select": {"name": "sluice"}},
+        "Summary": {"rich_text": [{"text": {"content": "daily digest"}}]},
+        "URL": {"url": "https://example.com"},
+        "Published": {"date": {"start": "2026-04-29"}},
+        "Reviewed": {"checkbox": True},
+    }
+
+
+def test_normalize_database_properties_preserves_explicit_notion_values():
+    schema = {"Tag": {"type": "multi_select"}}
+    explicit = {"Tag": {"multi_select": [{"name": "AI"}, {"name": "Infra"}]}}
+    assert normalize_database_properties(explicit, schema) == explicit
 
 
 def mk(s):

@@ -504,6 +504,7 @@ type        = "notion"
 input       = "context.markdown"
 parent_id   = "env:NOTION_DB_AI_NEWS"
 parent_type = "database"               # "database" | "page"
+token       = "env:NOTION_TOKEN"
 title_template = "AI 新闻日报 · {run_date}"
 properties = { Tag = "AI", Source = "sluice" }
 mode = "upsert"                        # "upsert" | "create_once" | "create_new"
