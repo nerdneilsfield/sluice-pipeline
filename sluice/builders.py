@@ -5,6 +5,7 @@ from sluice.config import (
     FileMdSinkConfig,
     FilterConfig,
     GlobalConfig,
+    LimitStage,
     LLMStageConfig,
     NotionSinkConfig,
     PipelineConfig,
@@ -190,6 +191,20 @@ def build_processors(
                     max_retries=pipe.failures.max_retries,
                     model_spec=st.model,
                     price_lookup=lambda spec, pool=llm_pool: model_price(pool, spec),
+                )
+            )
+        elif isinstance(st, LimitStage):
+            from sluice.processors.limit import LimitProcessor
+
+            procs.append(
+                LimitProcessor(
+                    name=st.name,
+                    top_n=st.top_n,
+                    sort_by=st.sort_by,
+                    sort_order=st.sort_order,
+                    sort_missing=st.sort_missing,
+                    group_by=st.group_by,
+                    per_group_max=st.per_group_max,
                 )
             )
         elif isinstance(st, RenderConfig):
