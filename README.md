@@ -10,7 +10,7 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
 [![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Tests](https://img.shields.io/badge/tests-257%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -184,8 +184,8 @@ The water-gate metaphor maps directly onto the codebase. Five plugin
 | ------------- | --------------------------------------- | --------------------------------------------------------------------------- |
 | `Source`      | Bring items into the stream             | `rss`                                                                       |
 | `Fetcher`     | Hydrate an article URL → markdown       | `trafilatura`, `firecrawl`, `jina_reader`                                   |
-| `Processor`   | Transform the stream                    | `dedupe`, `fetcher_apply`, `filter`, `field_filter`, `llm_stage`, `render`  |
-| `Sink`        | Push items downstream                   | `file_md`, `notion`                                                         |
+| `Processor`   | Transform the stream                    | `dedupe`, `fetcher_apply`, `filter`, `field_filter`, `llm_stage`, `render`, `limit`, `enrich`, `mirror_attachments`  |
+| `Sink`        | Push items downstream                   | `file_md`, `notion`, `telegram`, `feishu`, `email`                                                         |
 | `LLMProvider` | Talk to an OpenAI-compatible endpoint   | weighted base/key pool with 4-tier fallback chain                           |
 
 > Every plugin registers itself with a single decorator. Adding a new source
@@ -445,16 +445,19 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 </details>
 
 <details>
-<summary><b>⚙️ Processors (the six stage types)</b></summary>
+<summary><b>⚙️ Processors (the nine stage types)</b></summary>
 
-| `type`           | Purpose                                                                       |
-| ---------------- | ----------------------------------------------------------------------------- |
-| `dedupe`         | Drop items already in `seen_items` for this pipeline.                         |
-| `fetcher_apply`  | Walk the fetcher chain to populate `item.fulltext`.                           |
-| `filter`         | Rule-based keep/drop. 14 operators incl. regex, length, time windows. ReDoS-guarded. |
-| `field_filter`   | Mutate fields (truncate, drop) — e.g. trim `fulltext` to 20k chars before an expensive LLM call. |
-| `llm_stage`      | LLM call, `per_item` (fan out) or `aggregate` (single call over all items). JSON parsing, max input chars, head-tail truncation, 4-tier fallback chain, cost preflight. |
-| `render`         | Jinja2 template → markdown into `context.<key>`. Receives a fixed context (items, stats, run_date, …). |
+| `type`                | Purpose                                                                       |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `dedupe`              | Drop items already in `seen_items` for this pipeline.                         |
+| `fetcher_apply`       | Walk the fetcher chain to populate `item.fulltext`.                           |
+| `filter`              | Rule-based keep/drop. 14 operators incl. regex, length, time windows. ReDoS-guarded. |
+| `field_filter`        | Mutate fields (truncate, drop, lower, strip, regex_replace) — e.g. trim `fulltext` to 20k chars before an expensive LLM call. |
+| `llm_stage`           | LLM call, `per_item` (fan out) or `aggregate` (single call over all items). JSON parsing, max input chars, head-tail truncation, 4-tier fallback chain, cost preflight. |
+| `render`              | Jinja2 template → markdown into `context.<key>`. Receives a fixed context (items, stats, run_date, …). |
+| `limit`               | Sort and cap output. `sort_by`, `group_by`, `per_group_max`, `top_n`.        |
+| `enrich`              | Plug in enrichers that augment items with external data (e.g. HN comments).  |
+| `mirror_attachments`  | Download item attachments/extras to local disk; rewrite URLs.                 |
 
 </details>
 
@@ -552,10 +555,13 @@ unlimited filter combinations downstream.
 <details>
 <summary><b>📤 Sinks</b></summary>
 
-| `type`     | Description                                                  |
-| ---------- | ------------------------------------------------------------ |
-| `file_md`  | Deterministic local markdown file. Useful as an audit trail. |
-| `notion`   | Wraps [`notionify`](https://pypi.org/project/notionify/) — markdown → Notion page in your database. |
+| `type`      | Description                                                  |
+| ----------- | ------------------------------------------------------------ |
+| `file_md`   | Deterministic local markdown file. Useful as an audit trail. |
+| `notion`    | Wraps [`notionify`](https://pypi.org/project/notionify/) — markdown → Notion page in your database. |
+| `telegram`  | Push messages to Telegram chats via Bot API. MarkdownV2 rendering, safe truncation, split-on-too-long. |
+| `feishu`    | Push messages to Feishu/Lark groups via webhook. Supports `post`, `text`, and `interactive` (Card V2) modes. |
+| `email`     | Send HTML emails via SMTP. Per-recipient batching, `fail_fast` or `best_effort` delivery. |
 
 **Idempotency modes:**
 
@@ -570,8 +576,6 @@ For database parents, `properties` may use friendly TOML values such as
 expands them to the Notion API shape for `select`, `multi_select`,
 `rich_text`, `url`, `date`, and similar property types. Fully explicit Notion
 property dictionaries are passed through unchanged.
-
-> **Coming in v2:** email (HTML newsletter), GitHub repo push, webhook.
 
 </details>
 
@@ -592,6 +596,14 @@ sluice run <pipeline_id> --log-file logs/run.jsonl   # write DEBUG JSONL diagnos
 sluice deploy                                        # register all enabled pipelines as Prefect deployments
 sluice failures <pipeline_id>                        # list failed_items
 sluice failures <pipeline_id> --retry <item_key>     # move dead-letter back to failed
+sluice gc                                            # reclaim space from failed_items/url_cache/attachment_mirror
+sluice gc --dry-run                                  # show what would be deleted without modifying
+sluice gc --older-than 90d --pipeline ai_news        # target specific age and pipeline
+sluice stats                                         # show pipeline run stats (last 7 days)
+sluice stats ai_news --since 30d --format json       # per-pipeline stats in JSON
+sluice metrics-server --host 0.0.0.0 --port 9090    # start Prometheus exposition endpoint
+sluice deliveries <pipeline_id>                      # list sink delivery audit log
+sluice deliveries <pipeline_id> --run <run_key>      # filter deliveries by specific run
 ```
 
 </details>
@@ -626,15 +638,18 @@ SLUICE_LOG_FILE=logs/ai_news.jsonl sluice run ai_news --verbose
 <details>
 <summary><b>📊 State and what's persisted (SQLite)</b></summary>
 
-Five tables, no ORM, schema migrated via `PRAGMA user_version`:
+Eight tables, no ORM, schema migrated via `PRAGMA user_version`:
 
-| Table             | What it tracks                                                |
-| ----------------- | ------------------------------------------------------------- |
-| `seen_items`      | Dedupe registry per pipeline. Includes summary for future RAG. |
-| `failed_items`    | Per-item failures with full payload, status (`failed`/`dead_letter`/`resolved`), attempt count. |
-| `sink_emissions`  | Maps `(pipeline_id, run_key, sink_id)` → external_id. Powers idempotent retries. |
-| `url_cache`       | Article extraction cache, TTL'd. Avoids re-hitting Firecrawl on retries. |
-| `run_log`         | Per-run metadata: items in/out, LLM calls, estimated cost, status, error. |
+| Table                  | What it tracks                                                |
+| ---------------------- | ------------------------------------------------------------- |
+| `seen_items`           | Dedupe registry per pipeline. Includes summary for future RAG. |
+| `failed_items`         | Per-item failures with full payload, status (`failed`/`dead_letter`/`resolved`), attempt count. |
+| `sink_emissions`       | Maps `(pipeline_id, run_key, sink_id)` → external_id. Powers idempotent retries. |
+| `url_cache`            | Article extraction cache, TTL'd. Avoids re-hitting Firecrawl on retries. |
+| `run_log`              | Per-run metadata: items in/out, LLM calls, estimated cost, status, error. |
+| `sink_delivery_log`    | Per-message push-sink audit trail: ordinal, kind, recipient, external_id, status, error. |
+| `attachment_mirror`    | Mirrored attachment metadata: original URL, local path, mime type, size. |
+| `attachment_store`     | Attachment content storage: URL hash, bytes, mime type, pipeline ID. |
 
 </details>
 
@@ -684,18 +699,29 @@ prefect worker start --pool default # processes scheduled runs
 LLM fallback, idempotent retries, dry-run, loguru diagnostics, Prefect
 scheduling, SSRF guard.
 
-🚧 **v1.1**
+✅ **v1.1**
 
-- Native Anthropic Messages API (currently use OpenRouter for Claude access)
-- Per-tier worker counts (config accepts them; runtime currently honors stage-level only)
+- [x] Push-channel sinks: Telegram, Feishu, Email
+- [x] Attachment mirroring (`mirror_attachments` stage)
+- [x] Enricher protocol + `hn_comments`
+- [x] Sub-daily pipelines (`run_key_template`)
+- [x] `limit` stage
+- [x] `field_filter` ops: lower, strip, regex_replace
+- [x] Fetcher fallback (`on_all_failed`)
+- [x] URL cache size cap
+- [x] GC command + metrics + CLI audit viewer
+- [x] Lazy registry
+
+🚧 **v1.2**
+
+- Native Anthropic Messages API
+- Per-tier worker counts
 - Notion page cover image
 - Plugin entry-points (auto-discovery for third-party plugins)
-- `sluice gc` for cleanup of resolved/dead-lettered rows
 
 🔮 **v2**
 
 - IMAP / email source
-- Email HTML sink (with subscriber management)
 - GitHub repo sink (push markdown → trigger build)
 - RAG over historical summaries (semantic search across past digests)
 
@@ -707,8 +733,8 @@ scheduling, SSRF guard.
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # or pip install -e '.[dev]'
-pytest                              # 160 tests, ~9s
-pytest --cov=sluice                 # 89% coverage
+pytest                              # 257 tests
+pytest --cov=sluice                 # 81% coverage
 ruff check .
 ty check .
 ```

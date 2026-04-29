@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
 [![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-256%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Tests](https://img.shields.io/badge/tests-257%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
@@ -181,8 +181,8 @@ sluice deploy
 | ------------- | ---------------------------------- | --------------------------------------------------------------------------- |
 | `Source`      | 把 item 引入水流                   | `rss`                                                                       |
 | `Fetcher`     | 把文章 URL → markdown              | `trafilatura`、`firecrawl`、`jina_reader`                                   |
-| `Processor`   | 处理水流                           | `dedupe`、`fetcher_apply`、`filter`、`field_filter`、`llm_stage`、`render`  |
-| `Sink`        | 把 item 推到下游                   | `file_md`、`notion`                                                         |
+| `Processor`   | 处理水流                           | `dedupe`、`fetcher_apply`、`filter`、`field_filter`、`llm_stage`、`render`、`limit`、`enrich`、`mirror_attachments`  |
+| `Sink`        | 把 item 推到下游                   | `file_md`、`notion`、`telegram`、`feishu`、`email`                                  |
 | `LLMProvider` | 跟 OpenAI 兼容端点对话             | 加权 base/key 池 + 4 层降级链                                              |
 
 > 每个插件用一个装饰器自注册。要加一个新源（IMAP、Telegram、Reddit 等等），
@@ -434,16 +434,19 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 </details>
 
 <details>
-<summary><b>⚙️ Processors（六种 stage）</b></summary>
+<summary><b>⚙️ Processors（九种 stage）</b></summary>
 
-| `type`           | 用途                                                                       |
-| ---------------- | -------------------------------------------------------------------------- |
-| `dedupe`         | 丢掉本 pipeline `seen_items` 里已有的 item。                               |
-| `fetcher_apply`  | 走 fetcher chain 给 `item.fulltext` 灌内容。                              |
-| `filter`         | 规则过滤。14 种 op，含正则、长度、时间窗。带 ReDoS 防护。                  |
-| `field_filter`   | 修改字段（truncate、drop）—— 比如喂贵的 LLM 之前把 fulltext 截到 20k。     |
-| `llm_stage`      | LLM 调用，`per_item`（fan out）或 `aggregate`（一次跑全部）。支持 JSON 解析、最大输入截断、头尾保留、4 层降级链、成本预检。 |
-| `render`         | Jinja2 模板 → markdown 写到 `context.<key>`。模板拿到固定 context（items、stats、run_date 等）。 |
+| `type`                  | 用途                                                                       |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `dedupe`                | 丢掉本 pipeline `seen_items` 里已有的 item。                               |
+| `fetcher_apply`         | 走 fetcher chain 给 `item.fulltext` 灌内容。                              |
+| `filter`                | 规则过滤。14 种 op，含正则、长度、时间窗。带 ReDoS 防护。                  |
+| `field_filter`          | 修改字段（truncate、drop、lower、strip、regex_replace）—— 比如喂贵的 LLM 之前把 fulltext 截到 20k。 |
+| `llm_stage`             | LLM 调用，`per_item`（fan out）或 `aggregate`（一次跑全部）。支持 JSON 解析、最大输入截断、头尾保留、4 层降级链、成本预检。 |
+| `render`                | Jinja2 模板 → markdown 写到 `context.<key>`。模板拿到固定 context（items、stats、run_date 等）。 |
+| `limit`                 | 排序并截断输出。`sort_by`、`group_by`、`per_group_max`、`top_n`。         |
+| `enrich`                | 可插拔的 enricher 协议，用外部数据增强 item（如 HN 评论）。                |
+| `mirror_attachments`    | 把 item 的附件/extras 下载到本地磁盘；重写 URL。                           |
 
 </details>
 
@@ -539,10 +542,13 @@ rules = [
 <details>
 <summary><b>📤 Sinks（输出端）</b></summary>
 
-| `type`     | 说明                                                                      |
-| ---------- | ------------------------------------------------------------------------- |
-| `file_md`  | 确定性的本地 markdown 文件。当审计存档很合适。                           |
-| `notion`   | 包 [`notionify`](https://pypi.org/project/notionify/)：markdown → Notion 数据库的页面。 |
+| `type`      | 说明                                                                      |
+| ----------- | ------------------------------------------------------------------------- |
+| `file_md`   | 确定性的本地 markdown 文件。当审计存档很合适。                           |
+| `notion`    | 包 [`notionify`](https://pypi.org/project/notionify/)：markdown → Notion 数据库的页面。 |
+| `telegram`  | 通过 Bot API 推送消息到 Telegram 群/私聊。MarkdownV2 渲染、安全截断、超长自动分片。 |
+| `feishu`    | 通过 webhook 推送消息到飞书/Lark 群。支持 `post`、`text`、`interactive`（Card V2）模式。 |
+| `email`     | 通过 SMTP 发送 HTML 邮件。支持逐收件人发送、`fail_fast`/`best_effort` 策略。 |
 
 **幂等模式：**
 
@@ -556,8 +562,6 @@ rules = [
 `{ Tag = "AI", Source = "sluice" }`；sluice 会读取数据库 schema，把它们展开成
 Notion API 需要的 `select`、`multi_select`、`rich_text`、`url`、`date` 等结构。
 如果你已经写了完整 Notion property dict，则会原样透传。
-
-> **v2 计划：** email（HTML 邮件订阅）、GitHub repo 推送、webhook。
 
 </details>
 
@@ -578,6 +582,14 @@ sluice run <pipeline_id> --log-file logs/run.jsonl   # 写 DEBUG JSONL 诊断日
 sluice deploy                                        # 注册所有 enabled pipeline 到 Prefect
 sluice failures <pipeline_id>                        # 列出 failed_items
 sluice failures <pipeline_id> --retry <item_key>     # 把 dead_letter 重置回 failed
+sluice gc                                            # 回收 failed_items/url_cache/attachment_mirror 的空间
+sluice gc --dry-run                                  # 预览会删什么但不实际修改
+sluice gc --older-than 90d --pipeline ai_news        # 指定过期时间和 pipeline 范围
+sluice stats                                         # 显示 pipeline 运行统计（最近 7 天）
+sluice stats ai_news --since 30d --format json       # 单 pipeline 统计，JSON 格式
+sluice metrics-server --host 0.0.0.0 --port 9090    # 启动 Prometheus 指标暴露端点
+sluice deliveries <pipeline_id>                      # 列出 sink 投递审计日志
+sluice deliveries <pipeline_id> --run <run_key>      # 按特定 run 筛选投递记录
 ```
 
 </details>
@@ -611,15 +623,18 @@ SLUICE_LOG_FILE=logs/ai_news.jsonl sluice run ai_news --verbose
 <details>
 <summary><b>📊 持久化的状态（SQLite）</b></summary>
 
-5 张表，无 ORM，靠 `PRAGMA user_version` 做迁移：
+8 张表，无 ORM，靠 `PRAGMA user_version` 做迁移：
 
-| 表                | 做什么                                                          |
-| ----------------- | --------------------------------------------------------------- |
-| `seen_items`      | 每 pipeline 的去重表。带 summary，将来给 RAG 用。              |
-| `failed_items`    | 单 item 失败记录，带完整 payload、状态（`failed`/`dead_letter`/`resolved`）、重试次数。 |
-| `sink_emissions`  | `(pipeline_id, run_key, sink_id)` → external_id，幂等重试的核心。 |
-| `url_cache`       | 文章抽取缓存，带 TTL。重试时不用再敲 Firecrawl。               |
-| `run_log`         | 每次 run 的元信息：入/出 item 数、LLM 调用数、估算成本、状态、错误。 |
+| 表                     | 做什么                                                          |
+| ---------------------- | --------------------------------------------------------------- |
+| `seen_items`           | 每 pipeline 的去重表。带 summary，将来给 RAG 用。              |
+| `failed_items`         | 单 item 失败记录，带完整 payload、状态（`failed`/`dead_letter`/`resolved`）、重试次数。 |
+| `sink_emissions`       | `(pipeline_id, run_key, sink_id)` → external_id，幂等重试的核心。 |
+| `url_cache`            | 文章抽取缓存，带 TTL。重试时不用再敲 Firecrawl。               |
+| `run_log`              | 每次 run 的元信息：入/出 item 数、LLM 调用数、估算成本、状态、错误。 |
+| `sink_delivery_log`    | 逐消息 push-sink 审计：ordinal、kind、recipient、external_id、status、error。 |
+| `attachment_mirror`    | 镜像附件元信息：原始 URL、本地路径、mime type、大小。           |
+| `attachment_store`     | 附件内容存储：URL hash、bytes、mime type、pipeline ID。         |
 
 </details>
 
@@ -666,18 +681,29 @@ prefect worker start --pool default # 处理调度任务
 ✅ **v1（当前）** —— RSS source、Notion sink、file_md sink、6 种 processor、
 4 层 LLM 降级、幂等重试、dry-run、loguru 诊断、Prefect 调度、SSRF 防护。
 
-🚧 **v1.1**
+✅ **v1.1**
 
-- 原生 Anthropic Messages API（目前通过 OpenRouter 访问 Claude）
-- 各 tier 的 worker 配置（config 接受了，runtime 当前只用 stage 级）
+- [x] Push-channel sinks：Telegram、Feishu、Email
+- [x] Attachment 镜像（`mirror_attachments` stage）
+- [x] Enricher 协议 + `hn_comments`
+- [x] 亚日级 pipeline（`run_key_template`）
+- [x] `limit` stage
+- [x] `field_filter` 操作：lower、strip、regex_replace
+- [x] Fetcher 降级（`on_all_failed`）
+- [x] URL cache 大小上限
+- [x] GC 命令 + metrics + CLI 审计查看器
+- [x] Lazy registry
+
+🚧 **v1.2**
+
+- 原生 Anthropic Messages API
+- 各 tier 的 worker 配置
 - Notion 页面 cover image
 - 插件 entry-points（第三方插件自动发现）
-- `sluice gc` 清理 resolved/dead_letter 行
 
 🔮 **v2**
 
 - IMAP / 邮箱 source
-- Email HTML sink（带订阅者管理）
 - GitHub repo sink（推 markdown → 触发 build）
 - 历史摘要的 RAG（跨日报的语义搜索）
 
@@ -689,8 +715,8 @@ prefect worker start --pool default # 处理调度任务
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
 uv sync --all-extras                # 或 pip install -e '.[dev]'
-pytest                              # 160 个测试，约 9 秒
-pytest --cov=sluice                 # 89% 覆盖率
+pytest                              # 257 个测试
+pytest --cov=sluice                 # 81% 覆盖率
 ruff check .
 ty check .
 ```
