@@ -41,7 +41,11 @@ def _resolve_template(root, value: str) -> str:
         p = (Path(root) if root is not None else Path(".")) / value
         if p.is_file():
             return p.read_text()
-        raise ConfigError(f"template file not found: {p} (resolved from {value!r})")
+        from sluice.logging_setup import get_logger as _get_logger
+        _get_logger(__name__).bind(path=str(p), value=value).warning(
+            "builders.template_file_not_found"
+        )
+        return value  # fall back to literal path string as Jinja2 template
     return value
 
 

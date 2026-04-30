@@ -290,8 +290,17 @@ async def run_pipeline(
                         sink_type=sink.type,
                         items_in=len(ctx.items),
                     ).info("sink.started")
+                    sink_error: str | None = None
+                    emitted = None
                     try:
                         emitted = await sink.emit(ctx, emissions=emissions)
+                    except Exception as _sink_exc:
+                        sink_error = str(_sink_exc)
+                        log.bind(
+                            pipeline_id=pipe.id,
+                            sink_id=sink.id,
+                            sink_type=sink.type,
+                        ).exception("sink.failed")
                     finally:
                         if hasattr(sink, "aclose"):
                             await sink.aclose()
@@ -301,6 +310,7 @@ async def run_pipeline(
                         type=sink.type,
                         items_in=len(ctx.items),
                         emitted=emitted is not None,
+                        error=sink_error,
                         advance=1,
                     )
                     log.bind(
@@ -309,6 +319,7 @@ async def run_pipeline(
                         sink_type=sink.type,
                         items_in=len(ctx.items),
                         emitted=emitted is not None,
+                        error=sink_error,
                     ).info("sink.done")
 
             if not dry_run:

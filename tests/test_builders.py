@@ -111,9 +111,10 @@ def test_resolve_template_literal_string_passthrough():
     assert result == "{{ item.title }}\n{{ item.url }}"
 
 
-def test_resolve_template_missing_file_raises(tmp_path):
-    with pytest.raises(ConfigError, match="template file not found"):
-        _resolve_template(tmp_path, "prompts/missing.md")
+def test_resolve_template_missing_file_falls_back_to_value(tmp_path):
+    # Missing template file: warn and return the path string as literal template.
+    result = _resolve_template(tmp_path, "prompts/missing.md")
+    assert result == "prompts/missing.md"
 
 
 def test_resolve_template_empty_string():
@@ -149,6 +150,6 @@ def test_email_style_block_file_injected_end_to_end(tmp_path):
     assert "body { color: red; }" in html
 
 
-def test_resolve_template_missing_file_without_root_raises_config_error():
-    with pytest.raises(ConfigError, match="template file not found"):
-        _resolve_template(None, "missing.md")
+def test_resolve_template_missing_file_without_root_falls_back_to_value():
+    result = _resolve_template(None, "missing.md")
+    assert result == "missing.md"
