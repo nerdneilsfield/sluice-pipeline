@@ -9,7 +9,7 @@ and Notion in plain TOML — think of it as n8n in code form.**
 [![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
-[![Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
+[![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
 [![Tests](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
@@ -57,7 +57,7 @@ After months of running sluice daily on real feeds, here's what got better:
 
 - **Swappable output channels**: Telegram (MarkdownV2), Feishu (post/text/interactive), Email (fail_fast/best_effort) — all with `sink_delivery_log` audit trail.
 - **Attachment mirroring**: `mirror_attachments` downloads images/files to local disk with `file://`, `https://`, or relative URL prefix.
-- **Enricher protocol + hn_comments**: pluggable enrichers that augment items with external data (HN comment threads via hckrnws.com).
+- **Enricher protocol + hn_comments**: pluggable enrichers that augment items with external data (HN comment threads via the HN Firebase API, with official HN site as fallback). Run this stage **before** `summarize` so the LLM can incorporate community discussion.
 - **Sub-daily pipelines**: `run_key_template` with `{run_hour}`, `{run_minute}`, `{run_iso}`, `{run_epoch}` for cron intervals under 24h.
 - **`limit` stage**: sort, group, and cap output with `sort_by` / `group_by` / `per_group_max`.
 - **`field_filter` ops**: `lower`, `strip`, `regex_replace` in addition to existing `truncate` / `drop`.
@@ -585,8 +585,8 @@ unlimited filter combinations downstream.
 | `file_md`   | Deterministic local markdown file. Useful as an audit trail. |
 | `notion`    | Wraps [`notionify`](https://pypi.org/project/notionify/) — markdown → Notion page in your database. |
 | `telegram`  | Push messages to Telegram chats via Bot API. MarkdownV2 rendering, safe truncation, split-on-too-long. |
-| `feishu`    | Push messages to Feishu/Lark groups via webhook. Supports `post`, `text`, and `interactive` (Card V2) modes. |
-| `email`     | Send HTML emails via SMTP. Per-recipient batching, `fail_fast` or `best_effort` delivery. |
+| `feishu`    | Push messages to Feishu/Lark. Two auth modes: `auth_mode = "webhook"` (default) — webhook URL + optional HMAC secret; `auth_mode = "bot_api"` — app_id + app_secret + receive_id, sends Markdown-converted post messages via the Bot API. Supports `post`, `text`, and `interactive` (Card V2) message types. |
+| `email`     | Send HTML emails via SMTP. Auto-detects TLS mode from port (465→SSL, 587→STARTTLS). Per-recipient batching, `fail_fast` or `best_effort` delivery. |
 
 **Idempotency modes:**
 
@@ -846,7 +846,7 @@ Matrix over Python 3.11 and 3.12:
 1. Lockfile check + install (`uv lock --check`, `uv sync --all-extras --frozen`)
 2. `ruff check .` — lint
 3. `ty check` — type check (0 errors)
-4. `pytest --cov` — 303 tests, 81% coverage
+4. `pytest --cov` — 303 tests, 80% coverage
 
 ### `publish.yml` — triggered on `v*.*.*` tags
 
@@ -911,7 +911,7 @@ git clone https://github.com/nerdneilsfield/sluice-pipeline
 cd sluice-pipeline
 uv sync --all-extras                # or pip install -e '.[dev,all]'
 pytest -q                           # 303 tests
-pytest --cov=sluice                 # 82% coverage
+pytest --cov=sluice                 # 80% coverage
 ruff check .
 ty check                            # 0 errors
 ```

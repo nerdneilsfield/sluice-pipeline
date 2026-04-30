@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
-[![Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
+[![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
 [![Tests](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
@@ -55,7 +55,7 @@ RSS ───▶── │   源头   │──▶│  阶段   │──▶│ 
 
 - **多通道输出**：Telegram（MarkdownV2）、飞书（post/text/interactive）、邮件（fail_fast/best_effort）—— 均带 `sink_delivery_log` 审计。
 - **附件镜像**：`mirror_attachments` 阶段将图片/文件下载到本地磁盘，支持 `file://`、`https://` 或相对 URL 前缀。
-- **Enricher 协议 + hn_comments**：可插拔的富化器为条目注入外部数据（通过 hckrnws.com 抓取 HN 评论线程）。
+- **Enricher 协议 + hn_comments**：可插拔的富化器为条目注入外部数据（主要通过 HN Firebase API 获取评论线程，官方 HN 页面兜底）。该 stage **必须在 `summarize` 之前运行**，才能让 LLM 汇总时纳入社区讨论。
 - **亚日级流水线**：`run_key_template` 支持 `{run_hour}`、`{run_minute}`、`{run_iso}`、`{run_epoch}`，适配小于 24 小时的 cron 间隔。
 - **`limit` 阶段**：按 `sort_by` / `group_by` / `per_group_max` 排序分组并截断输出。
 - **`field_filter` 操作**：新增 `lower`、`strip`、`regex_replace`，与已有的 `truncate` / `drop` 并列使用。
@@ -571,8 +571,8 @@ rules = [
 | `file_md`   | 确定性的本地 markdown 文件。当审计存档很合适。                           |
 | `notion`    | 包 [`notionify`](https://pypi.org/project/notionify/)：markdown → Notion 数据库的页面。 |
 | `telegram`  | 通过 Bot API 推送消息到 Telegram 群/私聊。MarkdownV2 渲染、安全截断、超长自动分片。 |
-| `feishu`    | 通过 webhook 推送消息到飞书/Lark 群。支持 `post`、`text`、`interactive`（Card V2）模式。 |
-| `email`     | 通过 SMTP 发送 HTML 邮件。支持逐收件人发送、`fail_fast`/`best_effort` 策略。 |
+| `feishu`    | 推送消息到飞书/Lark。两种鉴权模式：`auth_mode = "webhook"`（默认）—— webhook URL + 可选 HMAC 签名；`auth_mode = "bot_api"` —— app_id + app_secret + receive_id，通过 Bot API 发送 Markdown 转换后的 post 消息。支持 `post`、`text`、`interactive`（Card V2）消息类型。 |
+| `email`     | 通过 SMTP 发送 HTML 邮件。自动根据端口检测 TLS 模式（465→SSL，587→STARTTLS）。支持逐收件人发送、`fail_fast`/`best_effort` 策略。 |
 
 **幂等模式：**
 
@@ -819,7 +819,7 @@ Python 3.11 和 3.12 矩阵：
 1. 锁文件校验 + 安装依赖（`uv lock --check`、`uv sync --all-extras --frozen`）
 2. `ruff check .` —— lint
 3. `ty check` —— 类型检查（0 错误）
-4. `pytest --cov` —— 303 个测试，81% 覆盖率
+4. `pytest --cov` —— 303 个测试，80% 覆盖率
 
 ### `publish.yml` —— 打 `v*.*.*` 标签时触发
 
@@ -883,7 +883,7 @@ git clone https://github.com/nerdneilsfield/sluice-pipeline
 cd sluice-pipeline
 uv sync --all-extras                # 或 pip install -e '.[dev,all]'
 pytest -q                           # 303 个测试
-pytest --cov=sluice                 # 82% 覆盖率
+pytest --cov=sluice                 # 80% 覆盖率
 ruff check .
 ty check                            # 0 错误
 ```
