@@ -19,6 +19,8 @@ from sluice.sinks._push_base import PushBatchItem, PushSinkBase
 
 _FEISHU_MAX_TEXT = 4000
 _FEISHU_MAX_POST_CONTENT = 4000
+_FEISHU_MIN_SEND_GAP = 0.2
+_MAX_429_RETRIES = 2
 
 
 def _sign(secret: str, ts: int) -> str:
@@ -128,6 +130,7 @@ class FeishuSink(PushSinkBase):
         self._delay = between_messages_delay_seconds
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=30.0)
+        self._next_send_mono = 0.0
         self._auth_mode = auth_mode
         self._receive_id = receive_id
         self._receive_id_type = receive_id_type
@@ -341,21 +344,58 @@ class FeishuSink(PushSinkBase):
         return out
 
     async def send_one(self, payload, recipient=None) -> str:
+        now = time.monotonic()
+        if self._next_send_mono > now:
+            await asyncio.sleep(self._next_send_mono - now)
+
         if self._auth_mode == "bot_api":
             if self._bot is None or self._receive_id is None:
                 raise RuntimeError("feishu bot_api: bot client or receive_id not configured")
 
             if self._mtype == "text":
-                # payload is {"msg_type": "text", "content": {"text": "..."}}
                 text = payload.get("content", {}).get("text", "")
-                return await self._bot.send_text(
-                    self._receive_id, self._receive_id_type, text
-                )
+                for attempt in range(1 + _MAX_429_RETRIES):
+                    try:
+                        ext = await self._bot.send_text(
+                            self._receive_id, self._receive_id_type, text
+                        )
+                    except RuntimeError as exc:
+                        if "Too Many Requests" not in str(exc) or attempt >= _MAX_429_RETRIES:
+                            raise
+                        retry_after = _FEISHU_MIN_SEND_GAP * 10
+                        for part in str(exc).split():
+                            try:
+                                retry_after = float(part)
+                                break
+                            except ValueError:
+                                continue
+                        self._next_send_mono = time.monotonic() + retry_after
+                        continue
+                    gap = max(_FEISHU_MIN_SEND_GAP, self._delay)
+                    self._next_send_mono = time.monotonic() + gap
+                    return ext
             else:
-                # payload is {"zh_cn": {"title": ..., "content": [...]}}
-                return await self._bot.send_post(
-                    self._receive_id, self._receive_id_type, payload
-                )
+                for attempt in range(1 + _MAX_429_RETRIES):
+                    try:
+                        ext = await self._bot.send_post(
+                            self._receive_id, self._receive_id_type, payload
+                        )
+                    except RuntimeError as exc:
+                        if "Too Many Requests" not in str(exc) or attempt >= _MAX_429_RETRIES:
+                            raise
+                        retry_after = _FEISHU_MIN_SEND_GAP * 10
+                        for part in str(exc).split():
+                            try:
+                                retry_after = float(part)
+                                break
+                            except ValueError:
+                                continue
+                        self._next_send_mono = time.monotonic() + retry_after
+                        continue
+                    gap = max(_FEISHU_MIN_SEND_GAP, self._delay)
+                    self._next_send_mono = time.monotonic() + gap
+                    return ext
+            raise RuntimeError(f"feishu bot_api: rate limited after {_MAX_429_RETRIES} retries")
 
         # Webhook mode
         body = dict(payload)
@@ -363,11 +403,27 @@ class FeishuSink(PushSinkBase):
             ts = int(time.time())
             body["timestamp"] = str(ts)
             body["sign"] = _sign(self._secret, ts)
-        resp = await self._client.post(self._url, json=body)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code", 0) != 0:
-            raise RuntimeError(f"feishu webhook error: {data}")
-        if self._delay > 0:
-            await asyncio.sleep(self._delay)
-        return f"feishu:{uuid.uuid4().hex[:12]}"
+        for attempt in range(1 + _MAX_429_RETRIES):
+            resp = await self._client.post(self._url, json=body)
+            if resp.status_code == 429:
+                retry_after = _FEISHU_MIN_SEND_GAP * 10
+                try:
+                    retry_after = float(resp.json().get("retry_after", retry_after))
+                except Exception:
+                    pass
+                self._next_send_mono = time.monotonic() + retry_after
+                if attempt < _MAX_429_RETRIES:
+                    continue
+                raise RuntimeError(
+                    f"feishu webhook 429: rate limited after {_MAX_429_RETRIES} retries"
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("code", 0) != 0:
+                raise RuntimeError(f"feishu webhook error: {data}")
+            gap = max(_FEISHU_MIN_SEND_GAP, self._delay)
+            self._next_send_mono = time.monotonic() + gap
+            if self._delay > 0:
+                await asyncio.sleep(self._delay)
+            return f"feishu:{uuid.uuid4().hex[:12]}"
+        raise RuntimeError(f"feishu webhook 429: rate limited after {_MAX_429_RETRIES} retries")

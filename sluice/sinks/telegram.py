@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 
 import httpx
 from jinja2 import Template
@@ -15,6 +16,9 @@ from sluice.sinks._telegram_render import (
 )
 
 _TG_MAX = 4096
+_TG_RATE_MSG_PER_MIN = 20
+_TG_MIN_SEND_GAP = 60.0 / _TG_RATE_MSG_PER_MIN * 1.05
+_MAX_429_RETRIES = 2
 
 
 def _estimate_size(toks):
@@ -157,6 +161,7 @@ class TelegramSink(PushSinkBase):
         self._delay = between_messages_delay_seconds
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=30.0)
+        self._next_send_mono = 0.0
 
     async def aclose(self):
         if self._owns_client:
@@ -197,14 +202,33 @@ class TelegramSink(PushSinkBase):
             "parse_mode": "MarkdownV2",
             "link_preview_options": {"is_disabled": self._lpd},
         }
-        resp = await self._client.post(url, json=body)
-        if not resp.is_success:
-            raise RuntimeError(
-                f"telegram {resp.status_code}: {resp.text[:500]}"
-            )
-        data = resp.json()
-        if not data.get("ok"):
-            raise RuntimeError(f"telegram error: {data}")
-        if self._delay > 0:
-            await asyncio.sleep(self._delay)
-        return f"{self._chat}:{data['result']['message_id']}"
+        for attempt in range(1 + _MAX_429_RETRIES):
+            now = time.monotonic()
+            if self._next_send_mono > now:
+                await asyncio.sleep(self._next_send_mono - now)
+            resp = await self._client.post(url, json=body)
+            if resp.status_code == 429:
+                retry_after = _TG_MIN_SEND_GAP * 2
+                try:
+                    retry_after = float(
+                        resp.json().get("parameters", {}).get("retry_after", retry_after)
+                    )
+                except Exception:
+                    pass
+                self._next_send_mono = time.monotonic() + retry_after
+                if attempt < _MAX_429_RETRIES:
+                    continue
+                raise RuntimeError(
+                    f"telegram 429: rate limited after {_MAX_429_RETRIES} retries"
+                )
+            if not resp.is_success:
+                raise RuntimeError(
+                    f"telegram {resp.status_code}: {resp.text[:500]}"
+                )
+            data = resp.json()
+            if not data.get("ok"):
+                raise RuntimeError(f"telegram error: {data}")
+            gap = max(_TG_MIN_SEND_GAP, self._delay)
+            self._next_send_mono = time.monotonic() + gap
+            return f"{self._chat}:{data['result']['message_id']}"
+        raise RuntimeError(f"telegram 429: rate limited after {_MAX_429_RETRIES} retries")

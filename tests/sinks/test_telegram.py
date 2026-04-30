@@ -240,3 +240,117 @@ async def test_telegram_send_and_audit(tmp_path):
     sent = respx.calls.last.request
     body = sent.read().decode()
     assert "link_preview_options" in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_one_429_retry():
+    respx.post("https://api.telegram.org/botT/sendMessage").mock(
+        side_effect=[
+            Response(
+                429,
+                json={
+                    "ok": False,
+                    "error_code": 429,
+                    "description": "Too Many Requests",
+                    "parameters": {"retry_after": 0.01},
+                },
+            ),
+            Response(200, json={"ok": True, "result": {"message_id": 42}}),
+        ]
+    )
+    sink = TelegramSink(
+        sink_id="tg",
+        bot_token="T",
+        chat_id="@x",
+        brief_input=None,
+        items_input="none",
+        items_template_str="",
+        split="per_item",
+        link_preview_disabled=True,
+        footer_template="",
+        on_message_too_long="truncate",
+        between_messages_delay_seconds=0.0,
+        delivery_log=DeliveryLog(db_path=":memory:"),
+    )
+    ext = await sink.send_one("hello")
+    assert ext == "@x:42"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_one_429_exhausts_retries():
+    respx.post("https://api.telegram.org/botT/sendMessage").mock(
+        side_effect=[
+            Response(
+                429,
+                json={
+                    "ok": False,
+                    "error_code": 429,
+                    "description": "Too Many Requests",
+                    "parameters": {"retry_after": 0.01},
+                },
+            ),
+            Response(
+                429,
+                json={
+                    "ok": False,
+                    "error_code": 429,
+                    "description": "Too Many Requests",
+                    "parameters": {"retry_after": 0.01},
+                },
+            ),
+            Response(
+                429,
+                json={
+                    "ok": False,
+                    "error_code": 429,
+                    "description": "Too Many Requests",
+                    "parameters": {"retry_after": 0.01},
+                },
+            ),
+        ]
+    )
+    sink = TelegramSink(
+        sink_id="tg",
+        bot_token="T",
+        chat_id="@x",
+        brief_input=None,
+        items_input="none",
+        items_template_str="",
+        split="per_item",
+        link_preview_disabled=True,
+        footer_template="",
+        on_message_too_long="truncate",
+        between_messages_delay_seconds=0.0,
+        delivery_log=DeliveryLog(db_path=":memory:"),
+    )
+    with pytest.raises(RuntimeError, match="rate limited"):
+        await sink.send_one("hello")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_send_one_updates_rate_limit_state():
+    respx.post("https://api.telegram.org/botT/sendMessage").mock(
+        return_value=Response(200, json={"ok": True, "result": {"message_id": 1}})
+    )
+    sink = TelegramSink(
+        sink_id="tg",
+        bot_token="T",
+        chat_id="@x",
+        brief_input=None,
+        items_input="none",
+        items_template_str="",
+        split="per_item",
+        link_preview_disabled=True,
+        footer_template="",
+        on_message_too_long="truncate",
+        between_messages_delay_seconds=0.0,
+        delivery_log=DeliveryLog(db_path=":memory:"),
+    )
+    sink._next_send_mono = 0.0
+    before = sink._next_send_mono
+    await sink.send_one("msg")
+    after = sink._next_send_mono
+    assert after > before
