@@ -10,6 +10,19 @@ from sluice.state.db import open_db
 runner = CliRunner()
 
 
+def _sqlite_resource_warnings(caught):
+    return [
+        w
+        for w in caught
+        if issubclass(w.category, ResourceWarning)
+        and (
+            "aiosqlite.core.Connection" in str(w.message)
+            or "sqlite3.Connection" in str(w.message)
+            or "unclosed database" in str(w.message)
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_deliveries_lists_rows(tmp_path):
     cfg_dir = tmp_path / "configs"
@@ -102,11 +115,12 @@ async def test_deliveries_closes_sqlite_connection(tmp_path):
         )
         await conn.commit()
 
+    # Clear unrelated objects from previous tests before checking this CLI path.
+    gc.collect()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ResourceWarning)
         res = runner.invoke(app, ["deliveries", "p1", "--config-dir", str(cfg_dir)])
         assert res.exit_code == 0, res.stdout
         gc.collect()
 
-    resource_warnings = [w for w in caught if issubclass(w.category, ResourceWarning)]
-    assert resource_warnings == []
+    assert _sqlite_resource_warnings(caught) == []
