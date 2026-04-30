@@ -9,6 +9,15 @@ from sluice.sinks._markdown_ast import parse_markdown
 from sluice.sinks._push_base import PushBatchItem, PushSinkBase
 
 
+def _smtp_tls_kwargs(port: int, starttls: bool) -> dict:
+    """Auto-detect TLS mode from port; starttls config only used for non-standard ports."""
+    if port == 465:
+        return {"use_tls": True, "start_tls": False}
+    if port == 587:
+        return {"use_tls": False, "start_tls": True}
+    return {"use_tls": False, "start_tls": starttls}
+
+
 async def _aiosmtplib_send(
     message: EmailMessage,
     *,
@@ -19,7 +28,7 @@ async def _aiosmtplib_send(
     starttls: bool,
     recipient: str,
 ) -> str:
-    smtp = aiosmtplib.SMTP(hostname=host, port=port, start_tls=starttls)
+    smtp = aiosmtplib.SMTP(hostname=host, port=port, **_smtp_tls_kwargs(port, starttls))
     try:
         await smtp.connect()
         if username:
