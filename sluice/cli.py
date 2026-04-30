@@ -25,7 +25,7 @@ def _import_all():
     # v1 uses explicit imports for plugin registration. Entry-points or
     # package discovery can replace this once third-party plugins exist.
     from sluice.sources import rss  # noqa
-    from sluice.fetchers import trafilatura_fetcher, firecrawl, jina_reader  # noqa
+    from sluice.fetchers import trafilatura_fetcher, firecrawl, jina_reader, crawl4ai  # noqa
     from sluice.sinks import file_md, notion  # noqa
 
 
