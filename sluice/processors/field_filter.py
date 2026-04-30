@@ -85,7 +85,7 @@ def _regex_replace(it: Item, field: str, pattern: str, replacement: str, count: 
                 bucket[tail] = compiled.sub(
                     replacement, bucket[tail], count=count or 0, timeout=2.0
                 )
-            except regex.TimeoutError:
+            except TimeoutError:
                 raise ConfigError(
                     f"regex_replace timed out on field {field!r} with pattern {pattern!r}"
                 )
@@ -95,7 +95,7 @@ def _regex_replace(it: Item, field: str, pattern: str, replacement: str, count: 
         if isinstance(v, str):
             try:
                 setattr(it, field, compiled.sub(replacement, v, count=count or 0, timeout=2.0))
-            except regex.TimeoutError:
+            except TimeoutError:
                 raise ConfigError(
                     f"regex_replace timed out on field {field!r} with pattern {pattern!r}"
                 )

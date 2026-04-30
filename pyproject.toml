@@ -34,12 +34,13 @@ dev = ["pytest>=8", "pytest-asyncio>=0.23", "pytest-cov>=5",
 channels = ["markdown-it-py>=3.0"]
 telegram = ["markdown-it-py>=3.0"]
 feishu   = ["markdown-it-py>=3.0"]
-email    = ["markdown-it-py>=3.0", "aiosmtplib>=3.0"]
+email    = ["markdown-it-py>=3.0", "aiosmtplib>=3.0", "lxml-html-clean>=0.1"]
 metrics  = ["prometheus_client>=0.20"]
 enrich-hn = ["beautifulsoup4>=4.12"]
 all = [
   "markdown-it-py>=3.0",
   "aiosmtplib>=3.0",
+  "lxml-html-clean>=0.1",
   "prometheus_client>=0.20",
   "beautifulsoup4>=4.12",
 ]

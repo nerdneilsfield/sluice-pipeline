@@ -17,6 +17,116 @@ def test_render_html_paragraph():
     assert "<strong>" in html
 
 
+def test_render_html_strips_script():
+    toks = parse_markdown("<script>alert('xss')</script>")
+    html = render_to_html(toks)
+    assert "<script>" not in html
+    assert "alert" not in html or "xss" not in html
+
+
+def test_email_single_mode_one_email_per_recipient():
+    items = [
+        Item(
+            source_id="s",
+            pipeline_id="p",
+            guid="1",
+            url="u1",
+            title="one",
+            published_at=None,
+            raw_summary=None,
+        ),
+        Item(
+            source_id="s",
+            pipeline_id="p",
+            guid="2",
+            url="u2",
+            title="two",
+            published_at=None,
+            raw_summary=None,
+        ),
+    ]
+    ctx = make_ctx(items=items)
+    sink = EmailSink(
+        sink_id="em",
+        smtp_host="x",
+        smtp_port=587,
+        smtp_username="u",
+        smtp_password="p",
+        smtp_starttls=True,
+        from_address="from@x",
+        recipients=["a@x", "b@x"],
+        subject_template="s",
+        brief_input=None,
+        items_input="items",
+        items_template_str="{{ item.title }}",
+        split="single",
+        html_template_str="<html>{{ body_html }}</html>",
+        style_block="",
+        footer_template="",
+        attach_run_log=False,
+        recipient_failure_policy="fail_fast",
+        delivery_log=None,
+    )
+    batch = sink.build_batch(ctx)
+    assert len(batch) == 2
+    for item in batch:
+        parts = item.payload.get_payload()
+        html_part = parts[-1].get_content()
+        assert "one" in html_part
+        assert "two" in html_part
+
+
+def test_email_per_item_mode_separate_emails():
+    items = [
+        Item(
+            source_id="s",
+            pipeline_id="p",
+            guid="1",
+            url="u1",
+            title="one",
+            published_at=None,
+            raw_summary=None,
+        ),
+        Item(
+            source_id="s",
+            pipeline_id="p",
+            guid="2",
+            url="u2",
+            title="two",
+            published_at=None,
+            raw_summary=None,
+        ),
+    ]
+    ctx = make_ctx(items=items)
+    sink = EmailSink(
+        sink_id="em",
+        smtp_host="x",
+        smtp_port=587,
+        smtp_username="u",
+        smtp_password="p",
+        smtp_starttls=True,
+        from_address="from@x",
+        recipients=["a@x"],
+        subject_template="s",
+        brief_input=None,
+        items_input="items",
+        items_template_str="{{ item.title }}",
+        split="per_item",
+        html_template_str="<html>{{ body_html }}</html>",
+        style_block="",
+        footer_template="",
+        attach_run_log=False,
+        recipient_failure_policy="fail_fast",
+        delivery_log=None,
+    )
+    batch = sink.build_batch(ctx)
+    assert len(batch) == 2
+    payloads_html = [item.payload.get_payload()[-1].get_content() for item in batch]
+    assert any("one" in h for h in payloads_html)
+    assert any("two" in h for h in payloads_html)
+    assert not any("one" in h and "two" in h for h in payloads_html)
+
+
 @pytest.mark.asyncio
 async def test_email_fail_fast_raises_on_first_failure(tmp_path, monkeypatch):
     async with open_db(tmp_path / "s.db"):

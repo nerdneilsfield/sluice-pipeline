@@ -1,6 +1,10 @@
+from pathlib import Path
+
 from sluice.config import (
     DedupeConfig,
+    EmailSinkConfig,
     EnrichStage,
+    FeishuSinkConfig,
     FetcherApplyConfig,
     FieldFilterConfig,
     FileMdSinkConfig,
@@ -13,6 +17,7 @@ from sluice.config import (
     PipelineConfig,
     RenderConfig,
     RssSourceConfig,
+    TelegramSinkConfig,
 )
 from sluice.core.errors import ConfigError
 from sluice.fetchers.chain import FetcherChain
@@ -27,6 +32,17 @@ from sluice.registry import (
 from sluice.state.cache import UrlCacheStore
 from sluice.state.failures import FailureStore
 from sluice.state.seen import SeenStore
+
+_TEMPLATE_EXTS = (".md", ".txt", ".j2", ".jinja2", ".css")
+
+
+def _resolve_template(root, value: str) -> str:
+    if value.endswith(_TEMPLATE_EXTS):
+        p = (Path(root) if root is not None else Path(".")) / value
+        if p.is_file():
+            return p.read_text()
+        raise ConfigError(f"template file not found: {p} (resolved from {value!r})")
+    return value
 
 
 def build_sources(pipe: PipelineConfig):
@@ -225,8 +241,10 @@ def build_processors(
 
             if db is None:
                 raise ConfigError(f"pipeline {pipe.id!r}: mirror_attachments stage requires db")
-            att_dir = global_cfg.state.attachment_dir or "./data/attachments"
-            prefix_val = global_cfg.state.attachment_url_prefix
+            att_dir = (
+                pipe.state.attachment_dir or global_cfg.state.attachment_dir or "./data/attachments"
+            )
+            prefix_val = pipe.state.attachment_url_prefix or global_cfg.state.attachment_url_prefix
             att_prefix = prefix_val if prefix_val is not None else ""
             store = AttachmentStore(db=db, base_dir=Path(att_dir))
             procs.append(
@@ -263,7 +281,10 @@ def build_processors(
     return procs
 
 
-def build_sinks(pipe: PipelineConfig):
+def build_sinks(pipe: PipelineConfig, delivery_log=None, root=None):
+    from pathlib import Path
+
+    cfg_root = Path(root) if root else Path(".")
     out = []
     for s in pipe.sinks:
         if isinstance(s, FileMdSinkConfig):
@@ -286,6 +307,77 @@ def build_sinks(pipe: PipelineConfig):
                     properties=s.properties,
                     mode=s.mode,
                     max_block_chars=s.max_block_chars,
+                    emit_on_empty=s.emit_on_empty,
+                )
+            )
+        elif isinstance(s, TelegramSinkConfig):
+            from sluice.loader import resolve_env
+            from sluice.sinks.telegram import TelegramSink
+
+            out.append(
+                TelegramSink(
+                    sink_id=s.id,
+                    bot_token=resolve_env(s.bot_token),
+                    chat_id=resolve_env(s.chat_id),
+                    brief_input=s.brief_input,
+                    items_input=s.items_input,
+                    items_template_str=_resolve_template(cfg_root, s.items_template),
+                    split=s.split,
+                    link_preview_disabled=s.link_preview_disabled,
+                    footer_template=_resolve_template(cfg_root, s.footer_template),
+                    on_message_too_long=s.on_message_too_long,
+                    between_messages_delay_seconds=s.between_messages_delay_seconds,
+                    delivery_log=delivery_log,
+                    emit_on_empty=s.emit_on_empty,
+                )
+            )
+        elif isinstance(s, FeishuSinkConfig):
+            from sluice.loader import resolve_env
+            from sluice.sinks.feishu import FeishuSink
+
+            out.append(
+                FeishuSink(
+                    sink_id=s.id,
+                    webhook_url=resolve_env(s.webhook_url),
+                    secret=resolve_env(s.secret) if s.secret else None,
+                    brief_input=s.brief_input,
+                    items_input=s.items_input,
+                    items_template_str=_resolve_template(cfg_root, s.items_template),
+                    split=s.split,
+                    message_type=s.message_type,
+                    on_message_too_long=s.on_message_too_long,
+                    card_template_str=_resolve_template(cfg_root, s.card_template),
+                    footer_template=_resolve_template(cfg_root, s.footer_template),
+                    between_messages_delay_seconds=s.between_messages_delay_seconds,
+                    delivery_log=delivery_log,
+                    emit_on_empty=s.emit_on_empty,
+                )
+            )
+        elif isinstance(s, EmailSinkConfig):
+            from sluice.loader import resolve_env
+            from sluice.sinks.email import EmailSink
+
+            out.append(
+                EmailSink(
+                    sink_id=s.id,
+                    smtp_host=resolve_env(s.smtp_host),
+                    smtp_port=s.smtp_port,
+                    smtp_username=resolve_env(s.smtp_username),
+                    smtp_password=resolve_env(s.smtp_password),
+                    smtp_starttls=s.smtp_starttls,
+                    from_address=resolve_env(s.from_address),
+                    recipients=s.recipients,
+                    subject_template=s.subject_template,
+                    brief_input=s.brief_input,
+                    items_input=s.items_input,
+                    items_template_str=_resolve_template(cfg_root, s.items_template),
+                    split=s.split,
+                    html_template_str=_resolve_template(cfg_root, s.html_template),
+                    style_block=_resolve_template(cfg_root, s.style_block_file),
+                    footer_template=_resolve_template(cfg_root, s.footer_template),
+                    attach_run_log=s.attach_run_log,
+                    recipient_failure_policy=s.recipient_failure_policy,
+                    delivery_log=delivery_log,
                     emit_on_empty=s.emit_on_empty,
                 )
             )

@@ -29,3 +29,16 @@ def test_split_never_inside_code_block():
     chunks = split_tokens(toks, max_size=50, estimate_size=lambda ts: len(ts))
     fences_per = [sum(1 for t in c if t.type == "fence") for c in chunks]
     assert sum(fences_per) == 1
+
+
+def test_split_oversized_single_block_emitted_as_own_chunk():
+    md = "x" * 5000
+    toks = parse_markdown(md)
+
+    def estimate(ts):
+        return sum(len(t.content) for t in ts)
+
+    chunks = split_tokens(toks, max_size=100, estimate_size=estimate)
+    assert len(chunks) == 1
+    assert len(chunks[0]) > 0
+    assert estimate(chunks[0]) > 100

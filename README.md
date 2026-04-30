@@ -649,7 +649,7 @@ Eight tables, no ORM, schema migrated via `PRAGMA user_version`:
 | `run_log`              | Per-run metadata: items in/out, LLM calls, estimated cost, status, error. |
 | `sink_delivery_log`    | Per-message push-sink audit trail: ordinal, kind, recipient, external_id, status, error. |
 | `attachment_mirror`    | Mirrored attachment metadata: original URL, local path, mime type, size. |
-| `attachment_store`     | Attachment content storage: URL hash, bytes, mime type, pipeline ID. |
+| `gc_log`               | GC run history: timestamp, tables cleaned, rows affected. |
 
 </details>
 

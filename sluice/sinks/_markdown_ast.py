@@ -40,6 +40,13 @@ def split_tokens(
     max_size: int,
     estimate_size: Callable[[list[Token]], int],
 ) -> list[list[Token]]:
+    """Split tokens into chunks that each fit within *max_size*.
+
+    Splits at block boundaries (paragraphs, headings, code blocks, etc.).
+    If a single block is already larger than *max_size*, it is emitted as
+    its own chunk — callers are expected to truncate the rendered output
+    as a safety net (e.g. Telegram's ``_safe_truncate``).
+    """
     groups = _block_groups(tokens)
     chunks: list[list[Token]] = []
     cur: list[Token] = []
@@ -50,6 +57,9 @@ def split_tokens(
             cur = list(g)
         else:
             cur = candidate
+        if estimate_size(cur) > max_size:
+            chunks.append(cur)
+            cur = []
     if cur:
         chunks.append(cur)
     return chunks

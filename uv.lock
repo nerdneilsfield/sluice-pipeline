@@ -2529,6 +2529,7 @@ dependencies = [
 all = [
     { name = "aiosmtplib" },
     { name = "beautifulsoup4" },
+    { name = "lxml-html-clean" },
     { name = "markdown-it-py" },
     { name = "prometheus-client" },
 ]
@@ -2547,6 +2548,7 @@ dev = [
 ]
 email = [
     { name = "aiosmtplib" },
+    { name = "lxml-html-clean" },
     { name = "markdown-it-py" },
 ]
 enrich-hn = [
@@ -2578,6 +2580,8 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "lxml-html-clean", marker = "extra == 'all'", specifier = ">=0.1" },
+    { name = "lxml-html-clean", marker = "extra == 'email'", specifier = ">=0.1" },
     { name = "markdown-it-py", marker = "extra == 'all'", specifier = ">=3.0" },
     { name = "markdown-it-py", marker = "extra == 'channels'", specifier = ">=3.0" },
     { name = "markdown-it-py", marker = "extra == 'email'", specifier = ">=3.0" },

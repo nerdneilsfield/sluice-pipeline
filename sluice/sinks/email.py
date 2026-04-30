@@ -60,9 +60,13 @@ class EmailSink(PushSinkBase):
         attach_run_log,
         recipient_failure_policy,
         delivery_log,
+        emit_on_empty: bool = False,
     ):
         super().__init__(
-            sink_id=sink_id, footer_template=footer_template, delivery_log=delivery_log
+            sink_id=sink_id,
+            footer_template=footer_template,
+            delivery_log=delivery_log,
+            emit_on_empty=emit_on_empty,
         )
         self._host = smtp_host
         self._port = smtp_port
@@ -105,17 +109,45 @@ class EmailSink(PushSinkBase):
         )
 
     def build_batch(self, ctx: PipelineContext) -> list[PushBatchItem]:
-        html = self._compose_body(ctx)
         subject = self._subject_tmpl.render(pipeline_id=ctx.pipeline_id, run_date=ctx.run_date)
         out = []
-        for r in self._recipients:
-            msg = EmailMessage()
-            msg["From"] = self._from
-            msg["To"] = r
-            msg["Subject"] = subject
-            msg.set_content("HTML email — please view in an HTML-capable client.")
-            msg.add_alternative(html, subtype="html")
-            out.append(PushBatchItem(kind="recipient", payload=msg, recipient=r))
+        items = ctx.items if self._items_input == "items" else []
+        if self._split == "per_item" and items:
+            for it in items:
+                parts: list[str] = []
+                if self._brief_input and self._brief_input.startswith("context."):
+                    key = self._brief_input.split(".", 1)[1]
+                    brief = ctx.context.get(key)
+                    if brief:
+                        parts.append(brief)
+                parts.append(self._items_tmpl.render(item=it, ctx=ctx))
+                md = "\n\n".join(parts)
+                body_html = render_to_html(parse_markdown(md))
+                html = self._html_tmpl.render(
+                    body_html=body_html,
+                    style_block=self._style_block,
+                    pipeline_id=ctx.pipeline_id,
+                    run_date=ctx.run_date,
+                    footer=self.render_footer(ctx),
+                )
+                for r in self._recipients:
+                    msg = EmailMessage()
+                    msg["From"] = self._from
+                    msg["To"] = r
+                    msg["Subject"] = subject
+                    msg.set_content("HTML email — please view in an HTML-capable client.")
+                    msg.add_alternative(html, subtype="html")
+                    out.append(PushBatchItem(kind="recipient", payload=msg, recipient=r))
+        else:
+            html = self._compose_body(ctx)
+            for r in self._recipients:
+                msg = EmailMessage()
+                msg["From"] = self._from
+                msg["To"] = r
+                msg["Subject"] = subject
+                msg.set_content("HTML email — please view in an HTML-capable client.")
+                msg.add_alternative(html, subtype="html")
+                out.append(PushBatchItem(kind="recipient", payload=msg, recipient=r))
         return out
 
     async def send_one(self, payload, recipient=None) -> str:

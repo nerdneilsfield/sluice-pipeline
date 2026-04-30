@@ -42,6 +42,10 @@ class EnrichProcessor:
         self._failures = failures
         self._max_retries = max_retries
 
+    async def aclose(self):
+        if hasattr(self._enricher, "close") and asyncio.iscoroutinefunction(self._enricher.close):
+            await self._enricher.close()
+
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         from sluice.processors.dedupe import item_key
 
@@ -77,13 +81,7 @@ class EnrichProcessor:
             res = _truncate_head_tail(res, self._max)
             set_dotpath(item, self._output_field, res)
 
-        try:
-            await asyncio.gather(*(one(it) for it in ctx.items))
-        finally:
-            if hasattr(self._enricher, "close") and asyncio.iscoroutinefunction(
-                self._enricher.close
-            ):
-                await self._enricher.close()
+        await asyncio.gather(*(one(it) for it in ctx.items))
         return ctx
 
 

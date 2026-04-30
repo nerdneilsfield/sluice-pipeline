@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, cast
+from typing import Callable
 from zoneinfo import ZoneInfo
 
 from sluice.builders import (
@@ -11,6 +11,7 @@ from sluice.builders import (
 )
 from sluice.config import FetcherApplyConfig, GlobalConfig, PipelineConfig
 from sluice.context import PipelineContext, RunStats
+from sluice.core.errors import ConfigError as _ConfigError
 from sluice.llm.budget import RunBudget
 from sluice.llm.pool import ProviderPool
 from sluice.loader import ConfigBundle
@@ -20,6 +21,7 @@ from sluice.processors.dedupe import item_key
 from sluice.run_key import render_run_key
 from sluice.state.cache import UrlCacheStore
 from sluice.state.db import open_db
+from sluice.state.delivery_log import DeliveryLog
 from sluice.state.emissions import EmissionStore
 from sluice.state.failures import FailureStore
 from sluice.state.run_log import RunLog
@@ -43,7 +45,12 @@ def _resolve_db_path(global_cfg: GlobalConfig, pipe: PipelineConfig) -> str:
     db_path = pipe.state.db_path
     if db_path is None:
         db_path = global_cfg.state.db_path
-    return cast(str, db_path)
+    if db_path is None:
+        raise _ConfigError(
+            f"pipeline {pipe.id!r}: state.db_path must be configured "
+            f"in [state] or per-pipeline [pipeline.state]"
+        )
+    return db_path
 
 
 def _resolve_tz(global_cfg: GlobalConfig, pipe: PipelineConfig) -> ZoneInfo:
@@ -200,6 +207,7 @@ async def run_pipeline(
                 budget=budget,
                 dry_run=dry_run,
                 requeued_keys=requeued_keys,
+                db=db,
             )
 
             cap = pipe.limits.max_items_per_run
@@ -244,9 +252,11 @@ async def run_pipeline(
                     stage=p.name,
                     items_in=before,
                 ).info("processor.started")
-                ctx = await p.process(ctx)
-                if hasattr(p, "aclose"):
-                    await p.aclose()
+                try:
+                    ctx = await p.process(ctx)
+                finally:
+                    if hasattr(p, "aclose"):
+                        await p.aclose()
                 if isinstance(p, DedupeProcessor):
                     apply_item_cap()
                 sync_run_stats()
@@ -270,7 +280,8 @@ async def run_pipeline(
             sync_run_stats()
 
             if not dry_run:
-                sinks = build_sinks(pipe)
+                delivery_log = DeliveryLog(db_path=db_path)
+                sinks = build_sinks(pipe, delivery_log=delivery_log, root=bundle.root)
                 for sink in sinks:
                     emit("sink_started", id=sink.id, type=sink.type, items_in=len(ctx.items))
                     log.bind(
@@ -279,9 +290,11 @@ async def run_pipeline(
                         sink_type=sink.type,
                         items_in=len(ctx.items),
                     ).info("sink.started")
-                    emitted = await sink.emit(ctx, emissions=emissions)
-                    if hasattr(sink, "aclose"):
-                        await sink.aclose()
+                    try:
+                        emitted = await sink.emit(ctx, emissions=emissions)
+                    finally:
+                        if hasattr(sink, "aclose"):
+                            await sink.aclose()
                     emit(
                         "sink_done",
                         id=sink.id,

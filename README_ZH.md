@@ -634,7 +634,7 @@ SLUICE_LOG_FILE=logs/ai_news.jsonl sluice run ai_news --verbose
 | `run_log`              | 每次 run 的元信息：入/出 item 数、LLM 调用数、估算成本、状态、错误。 |
 | `sink_delivery_log`    | 逐消息 push-sink 审计：ordinal、kind、recipient、external_id、status、error。 |
 | `attachment_mirror`    | 镜像附件元信息：原始 URL、本地路径、mime type、大小。           |
-| `attachment_store`     | 附件内容存储：URL hash、bytes、mime type、pipeline ID。         |
+| `gc_log`               | GC 运行历史：时间戳、清理的表、影响的行数。                     |
 
 </details>
 

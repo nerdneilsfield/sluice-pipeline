@@ -12,6 +12,9 @@ def _escape(text: str) -> str:
     return "".join(out)
 
 
+_LINK_MARK = "\x00LINK\x00"
+
+
 def render_to_markdown_v2(tokens: list[Token]) -> str:
     import re
 
@@ -47,9 +50,9 @@ def render_to_markdown_v2(tokens: list[Token]) -> str:
         elif tok.type == "link_open":
             href = next((a[1] for a in (tok.attrs or {}).items() if a[0] == "href"), "")
             out.append("[")
-            out.append("__LINK_HREF__" + href + "__")
+            out.append(_LINK_MARK + href + "\x01")
         elif tok.type == "link_close":
-            out.append("__LINK_END__")
+            out.append("\x02")
         elif tok.type == "inline":
             out.append(render_to_markdown_v2(tok.children or []))
         elif tok.type in ("bullet_list_open", "ordered_list_open"):
@@ -62,8 +65,8 @@ def render_to_markdown_v2(tokens: list[Token]) -> str:
             out.append("\n")
     raw = "".join(out)
     raw = re.sub(
-        r"\[__LINK_HREF__(.*?)__(.*?)__LINK_END__",
-        lambda m: f"[{m.group(2)}]({_escape(m.group(1))})",
+        r"\[" + re.escape(_LINK_MARK) + r"(.*?)\x01(.*?)\x02",
+        lambda m: f"[{m.group(2)}]({m.group(1)})",
         raw,
     )
     return raw.rstrip() + "\n"

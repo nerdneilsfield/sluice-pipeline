@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import httpx
 from jinja2 import Template
@@ -26,7 +27,79 @@ def _safe_truncate(text: str, limit: int) -> str:
     cut = limit - 1
     if cut > 0 and text[cut - 1] == "\\":
         cut -= 1
-    return text[:cut] + "…"
+    result = text[:cut] + "…"
+    result = _remove_incomplete_link(result)
+    result = _balance_markers(result)
+    if result.endswith("\\…"):
+        result = result[:-2] + "…"
+    if len(result) > limit:
+        result = result[: limit - 1] + "…"
+    return result
+
+
+def _remove_incomplete_link(text: str) -> str:
+    for pattern in (r"\[[^\]]*\]\([^)]*$", r"\[[^\]]*$"):
+        matches = list(re.finditer(pattern, text))
+        if matches:
+            return text[: matches[-1].start()] + "…"
+    return text
+
+
+def _mask_link_urls(text: str) -> str:
+    chars = list(text)
+    for match in re.finditer(r"\[[^\]]*\]\([^)]*\)", text):
+        open_paren = text.find("(", match.start(), match.end())
+        for i in range(open_paren + 1, match.end() - 1):
+            chars[i] = " "
+    return "".join(chars)
+
+
+def _balance_markers(text: str) -> str:
+    masked = _mask_link_urls(text)
+    remove: list[tuple[int, int]] = []
+    for marker in ("*", "_", "`"):
+        runs = list(re.finditer(rf"(?<!\\){re.escape(marker)}+", masked))
+        for width in {len(run.group(0)) for run in runs}:
+            exact = [run for run in runs if len(run.group(0)) == width]
+            if len(exact) % 2 != 0:
+                remove.append(exact[-1].span())
+    result = text
+    for start, end in sorted(remove, reverse=True):
+        result = result[:start] + "…" + result[end:]
+    return result
+
+
+def _split_md_to_payloads(md: str, footer: str, too_long: str) -> list[PushBatchItem]:
+    toks = parse_markdown(md)
+    text = render_to_markdown_v2(toks)
+    if footer:
+        text = text + "\n" + _escape_markdown_v2(footer)
+    if len(text) <= _TG_MAX:
+        return [PushBatchItem(kind="item", payload=text)]
+    if too_long == "truncate":
+        return [PushBatchItem(kind="item", payload=_safe_truncate(text, _TG_MAX))]
+    if too_long == "fail":
+        raise RuntimeError(f"telegram message exceeds {_TG_MAX} chars")
+    footer_escaped = _escape_markdown_v2(footer) if footer else ""
+    suffix_template = " ({1}/{999})"
+    max_suffix_len = len(_escape_markdown_v2(suffix_template))
+    chunk_budget = _TG_MAX - max(8, len(footer_escaped) + max_suffix_len + 2)
+    if chunk_budget < 200:
+        chunk_budget = _TG_MAX - max_suffix_len - 2
+        footer_escaped = ""
+    chunks = split_tokens(toks, chunk_budget, _estimate_size)
+    total = len(chunks)
+    out: list[PushBatchItem] = []
+    for i, c in enumerate(chunks, start=1):
+        body = render_to_markdown_v2(c)
+        chunk_suffix = _escape_markdown_v2(f"({i}/{total})")
+        if footer_escaped:
+            chunk_suffix = _escape_markdown_v2(footer) + " " + chunk_suffix
+        payload = body + "\n" + chunk_suffix
+        if len(payload) > _TG_MAX:
+            payload = _safe_truncate(payload, _TG_MAX)
+        out.append(PushBatchItem(kind="chunk", payload=payload))
+    return out
 
 
 class TelegramSink(PushSinkBase):
@@ -47,10 +120,14 @@ class TelegramSink(PushSinkBase):
         on_message_too_long: str,
         between_messages_delay_seconds: float,
         delivery_log,
+        emit_on_empty: bool = False,
         client: httpx.AsyncClient | None = None,
     ):
         super().__init__(
-            sink_id=sink_id, footer_template=footer_template, delivery_log=delivery_log
+            sink_id=sink_id,
+            footer_template=footer_template,
+            delivery_log=delivery_log,
+            emit_on_empty=emit_on_empty,
         )
         self._token = bot_token
         self._chat = chat_id
@@ -68,19 +145,6 @@ class TelegramSink(PushSinkBase):
         if self._owns_client:
             await self._client.aclose()
 
-    def _render_payload(self, md: str, footer: str | None = None) -> str:
-        toks = parse_markdown(md)
-        text = render_to_markdown_v2(toks)
-        if footer:
-            text = text + "\n" + _escape_markdown_v2(footer)
-        if len(text) <= _TG_MAX:
-            return text
-        if self._too_long == "truncate":
-            return _safe_truncate(text, _TG_MAX)
-        if self._too_long == "fail":
-            raise RuntimeError(f"telegram message exceeds {_TG_MAX} chars")
-        return text
-
     def build_batch(self, ctx: PipelineContext) -> list[PushBatchItem]:
         out: list[PushBatchItem] = []
         footer = self.render_footer(ctx)
@@ -92,33 +156,16 @@ class TelegramSink(PushSinkBase):
             )
             md = ctx.context.get(key, "") if key else ""
             if md:
-                out.append(PushBatchItem(kind="brief", payload=self._render_payload(md, footer)))
+                out.extend(_split_md_to_payloads(md, footer, self._too_long))
         items = ctx.items if self._items_input == "items" else []
-        for it in items:
-            md = self._tmpl.render(item=it, ctx=ctx)
-            text = self._render_payload(md, footer)
-            if len(text) > _TG_MAX and self._too_long == "split_more":
-                toks = parse_markdown(md)
-                footer_escaped = _escape_markdown_v2(footer) if footer else ""
-                suffix_template = f" ({1}/{999})"
-                max_suffix_len = len(_escape_markdown_v2(suffix_template))
-                chunk_budget = _TG_MAX - max(8, len(footer_escaped) + max_suffix_len + 2)
-                if chunk_budget < 200:
-                    chunk_budget = _TG_MAX - max_suffix_len - 2
-                    footer_escaped = ""
-                chunks = split_tokens(toks, chunk_budget, _estimate_size)
-                total = len(chunks)
-                for i, c in enumerate(chunks, start=1):
-                    body = render_to_markdown_v2(c)
-                    chunk_suffix = _escape_markdown_v2(f"({i}/{total})")
-                    if footer_escaped:
-                        chunk_suffix = _escape_markdown_v2(footer) + " " + chunk_suffix
-                    payload = body + "\n" + chunk_suffix
-                    if len(payload) > _TG_MAX:
-                        payload = _safe_truncate(payload, _TG_MAX)
-                    out.append(PushBatchItem(kind="chunk", payload=payload))
-            else:
-                out.append(PushBatchItem(kind="item", payload=text))
+        if self._split == "single" and items:
+            parts = [self._tmpl.render(item=it, ctx=ctx) for it in items]
+            combined = "\n\n".join(parts)
+            out.extend(_split_md_to_payloads(combined, footer, self._too_long))
+        else:
+            for it in items:
+                md = self._tmpl.render(item=it, ctx=ctx)
+                out.extend(_split_md_to_payloads(md, footer, self._too_long))
         return out
 
     async def send_one(self, payload, recipient=None) -> str:

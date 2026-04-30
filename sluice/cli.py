@@ -295,13 +295,13 @@ def gc(
     if not db_path:
         typer.echo("no state.db_path configured", err=True)
         raise typer.Exit(2)
-    if not att_dir:
-        typer.echo("no state.attachment_dir configured", err=True)
-        raise typer.Exit(2)
     cutoff_iso = (datetime.now(timezone.utc) - parse_duration(older_than)).isoformat(
         timespec="seconds"
     )
     selected = set(t.strip() for t in tables.split(","))
+    if "attachment_mirror" in selected and not att_dir:
+        typer.echo("no state.attachment_dir configured (required for attachment_mirror)", err=True)
+        raise typer.Exit(2)
 
     async def _run():
         async with open_db(db_path) as db:

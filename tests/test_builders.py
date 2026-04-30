@@ -5,9 +5,16 @@ import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.processors.dedupe  # noqa
 import sluice.processors.filter  # noqa
 import sluice.sources.rss  # noqa
-from sluice.builders import build_fetcher_chain, build_processors, build_sources
+from sluice.builders import (
+    _resolve_template,
+    build_fetcher_chain,
+    build_processors,
+    build_sinks,
+    build_sources,
+)
 from sluice.config import (
     DedupeConfig,
+    EmailSinkConfig,
     FetcherImplConfig,
     FileMdSinkConfig,
     FilterConfig,
@@ -16,6 +23,8 @@ from sluice.config import (
     PipelineConfig,
     RssSourceConfig,
 )
+from sluice.core.errors import ConfigError
+from tests.conftest import make_ctx
 
 
 def test_build_rss_source():
@@ -87,3 +96,59 @@ async def test_build_processors():
         )
         assert len(procs) == 1
         assert procs[0].name == "f"
+
+
+def test_resolve_template_reads_file(tmp_path):
+    f = tmp_path / "prompts" / "item.md"
+    f.parent.mkdir(parents=True)
+    f.write_text("Hello {{ item.title }}")
+    result = _resolve_template(tmp_path, "prompts/item.md")
+    assert result == "Hello {{ item.title }}"
+
+
+def test_resolve_template_literal_string_passthrough():
+    result = _resolve_template(None, "{{ item.title }}\n{{ item.url }}")
+    assert result == "{{ item.title }}\n{{ item.url }}"
+
+
+def test_resolve_template_missing_file_raises(tmp_path):
+    with pytest.raises(ConfigError, match="template file not found"):
+        _resolve_template(tmp_path, "prompts/missing.md")
+
+
+def test_resolve_template_empty_string():
+    assert _resolve_template(None, "") == ""
+
+
+def test_email_style_block_file_injected_end_to_end(tmp_path):
+    css = tmp_path / "prompts" / "email.css"
+    css.parent.mkdir(parents=True)
+    css.write_text("body { color: red; }")
+    cfg = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[DedupeConfig(type="dedupe", name="d")],
+        sinks=[
+            EmailSinkConfig(
+                id="em",
+                type="email",
+                smtp_host="smtp.example",
+                smtp_username="u",
+                smtp_password="p",
+                from_address="from@example.com",
+                recipients=["to@example.com"],
+                items_input="none",
+                style_block_file="prompts/email.css",
+            )
+        ],
+    )
+    sink = build_sinks(cfg, delivery_log=None, root=tmp_path)[0]
+    batch = sink.build_batch(make_ctx(items=[]))
+    html = batch[0].payload.get_payload()[-1].get_content()
+    assert "body { color: red; }" in html
+
+
+def test_resolve_template_missing_file_without_root_raises_config_error():
+    with pytest.raises(ConfigError, match="template file not found"):
+        _resolve_template(None, "missing.md")

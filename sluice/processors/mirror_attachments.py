@@ -1,3 +1,4 @@
+from dataclasses import replace
 from typing import Literal
 
 import httpx
@@ -6,7 +7,7 @@ from sluice.context import PipelineContext
 from sluice.core.dotpath import set_dotpath
 from sluice.core.errors import ConfigError
 from sluice.core.item import Item
-from sluice.fetchers._ssrf import SSRFError, guard
+from sluice.fetchers._ssrf import SSRFError, guard, guard_response, guarded_redirect_url
 from sluice.processors.base import register_processor
 from sluice.state.attachment_store import AttachmentStore
 from sluice.state.attachments import format_url
@@ -59,6 +60,7 @@ class MirrorAttachmentsProcessor:
             current = url
             for _ in range(5):
                 resp = await self._client.get(current, follow_redirects=False)
+                guard_response(resp)
                 if resp.is_redirect:
                     location = resp.headers.get("location")
                     if not location:
@@ -67,8 +69,7 @@ class MirrorAttachmentsProcessor:
                                 f"redirect without Location header from {current}"
                             )
                         return None
-                    next_url = httpx.URL(current).join(location).human_repr()
-                    guard(next_url)
+                    next_url = guarded_redirect_url(current, location)
                     current = next_url
                     continue
                 resp.raise_for_status()
@@ -107,9 +108,7 @@ class MirrorAttachmentsProcessor:
                 kept.append(att)
                 continue
             new_url, local_path = res
-            att.url = new_url
-            att.local_path = local_path
-            kept.append(att)
+            kept.append(replace(att, url=new_url, local_path=local_path))
         item.attachments = kept
 
     async def _mirror_extras(self, item: Item) -> None:

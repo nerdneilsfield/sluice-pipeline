@@ -34,6 +34,15 @@ def load_all(root: Path) -> ConfigBundle:
             pipelines[cfg.id] = cfg
     for pipe in pipelines.values():
         _validate_run_key_template(global_cfg, pipe)
+    for pipe in pipelines.values():
+        att_prefix = (
+            pipe.state.attachment_url_prefix or global_cfg.state.attachment_url_prefix or ""
+        )
+        validate_pipeline_attachment_email_compat(
+            [s.model_dump() for s in pipe.sinks],
+            [st.model_dump() for st in pipe.stages],
+            att_prefix,
+        )
     return ConfigBundle(global_cfg, providers, pipelines, root)
 
 

@@ -263,8 +263,67 @@ class NotionSinkConfig(CommonSinkFields):
     max_block_chars: int = 1900
 
 
+class TelegramSinkConfig(CommonSinkFields):
+    type: Literal["telegram"]
+    bot_token: str = "env:TELEGRAM_BOT_TOKEN"
+    chat_id: str = "env:TELEGRAM_CHAT_ID"
+    brief_input: str | None = None
+    items_input: Literal["items", "none"] = "items"
+    items_template: str = "{{ item.title }}\n{{ item.url }}"
+    split: Literal["per_item", "single"] = "per_item"
+    link_preview_disabled: bool = True
+    footer_template: str = ""
+    on_message_too_long: Literal["truncate", "fail", "split_more"] = "truncate"
+    between_messages_delay_seconds: float = 0.0
+
+
+class FeishuSinkConfig(CommonSinkFields):
+    type: Literal["feishu"]
+    webhook_url: str = "env:FEISHU_WEBHOOK_URL"
+    secret: str | None = None
+    brief_input: str | None = None
+    items_input: Literal["items", "none"] = "items"
+    items_template: str = "{{ item.title }}\n{{ item.url }}"
+    split: Literal["per_item", "single"] = "per_item"
+    message_type: Literal["post", "text", "interactive"] = "post"
+    on_message_too_long: Literal["truncate", "fail", "split_more"] = "truncate"
+    card_template: str = ""
+    footer_template: str = ""
+    between_messages_delay_seconds: float = 0.0
+
+
+class EmailSinkConfig(CommonSinkFields):
+    type: Literal["email"]
+    smtp_host: str = "env:SMTP_HOST"
+    smtp_port: int = 587
+    smtp_username: str = "env:SMTP_USERNAME"
+    smtp_password: str = "env:SMTP_PASSWORD"
+    smtp_starttls: bool = True
+    from_address: str = "env:SMTP_FROM"
+    recipients: list[str] = []
+    subject_template: str = "{{ pipeline_id }} · {{ run_date }}"
+    brief_input: str | None = None
+    items_input: Literal["items", "none"] = "items"
+    items_template: str = "{{ item.title }}\n{{ item.url }}"
+    split: Literal["per_item", "single"] = "per_item"
+    html_template: str = (
+        "<html><head>{% if style_block %}<style>{{ style_block }}</style>{% endif %}</head>"
+        "<body>{{ body_html }}</body></html>"
+    )
+    style_block_file: str = ""
+    footer_template: str = ""
+    attach_run_log: bool = False
+    recipient_failure_policy: Literal["fail_fast", "best_effort"] = "fail_fast"
+
+
 SinkConfig = Annotated[
-    Union[FileMdSinkConfig, NotionSinkConfig],
+    Union[
+        EmailSinkConfig,
+        FeishuSinkConfig,
+        FileMdSinkConfig,
+        NotionSinkConfig,
+        TelegramSinkConfig,
+    ],
     Field(discriminator="type"),
 ]
 

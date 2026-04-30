@@ -26,7 +26,7 @@ class UrlCacheStore:
         self.db = db
         self._max_rows = max_rows
         self._check_every_n = check_every_n
-        self._puts_until_check = check_every_n
+        self._puts_until_check = check_every_n + 1
 
     async def get(self, url: str) -> CachedExtraction | None:
         now = datetime.now(timezone.utc).isoformat()

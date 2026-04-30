@@ -28,8 +28,9 @@ def _item_with_attach(url, **extras):
 
 @pytest.mark.asyncio
 @respx.mock
+@patch("sluice.processors.mirror_attachments.guard_response")
 @patch("sluice.processors.mirror_attachments.guard")
-async def test_mirrors_attachment_url_relative_mode(_mock_guard, tmp_path):
+async def test_mirrors_attachment_url_relative_mode(_mock_guard, _mock_guard_resp, tmp_path):
     respx.get("https://example.com/a.jpg").mock(
         return_value=Response(200, content=b"\xff\xd8\xff", headers={"content-type": "image/jpeg"})
     )
@@ -57,8 +58,9 @@ async def test_mirrors_attachment_url_relative_mode(_mock_guard, tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
+@patch("sluice.processors.mirror_attachments.guard_response")
 @patch("sluice.processors.mirror_attachments.guard")
-async def test_rewrite_fields_extras(_mock_guard, tmp_path):
+async def test_rewrite_fields_extras(_mock_guard, _mock_guard_resp, tmp_path):
     respx.get("https://x/cover.png").mock(
         return_value=Response(
             200, content=b"\x89PNG\r\n\x1a\n", headers={"content-type": "image/png"}
@@ -95,8 +97,9 @@ async def test_rewrite_fields_extras(_mock_guard, tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
+@patch("sluice.processors.mirror_attachments.guard_response")
 @patch("sluice.processors.mirror_attachments.guard")
-async def test_oversize_skipped_or_failed(_mock_guard, tmp_path):
+async def test_oversize_skipped_or_failed(_mock_guard, _mock_guard_resp, tmp_path):
     respx.get("https://big/x.jpg").mock(
         return_value=Response(200, content=b"\x00" * 5000, headers={"content-type": "image/jpeg"})
     )
