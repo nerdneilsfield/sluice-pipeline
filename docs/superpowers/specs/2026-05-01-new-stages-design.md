@@ -147,13 +147,16 @@ workers        = 8                       # parallel LLM calls (semaphore); same 
 timeout        = 60
 score_field    = "score"                 # key in item.extras; default "score"
 tags_merge     = "append"               # "append" | "replace"
-on_parse_error = "skip"                 # "skip" | "fail" | "default"
-default_score  = 5                      # used when on_parse_error = "default"
-default_tags   = []                     # used when on_parse_error = "default"
-max_input_chars = 8000
+on_parse_error    = "skip"              # "skip" | "fail" | "default"
+default_score     = 5                   # used when on_parse_error = "default"
+default_tags      = []                  # used when on_parse_error = "default"
+max_input_chars   = 8000               # truncate input field before sending to LLM
+truncate_strategy = "head_tail"        # "head_tail" | "head" | "error"; matches llm_stage
 ```
 
 `concurrency` is not a parameter. Worker parallelism is controlled solely by `workers`, consistent with the existing `llm_stage` implementation.
+
+`max_input_chars` and `truncate_strategy` mirror the `llm_stage` contract: the value of `input_field` is truncated to `max_input_chars` characters before being passed to the prompt template. `"head_tail"` keeps the first half and last half; `"head"` keeps only the beginning; `"error"` raises `ConfigError` at construction time if the field can exceed the limit (useful as a safety check). Default is `"head_tail"`.
 
 ### LLM Output Contract
 
