@@ -1,5 +1,4 @@
 # ─── Pipeline: ai_news ───────────────────────────────────────────────────────
-# Daily AI/infra news digest → Notion + Telegram (+ optional Feishu/Email).
 # Copy to configs/pipelines/ai_news.toml and adjust to your feeds.
 
 id          = "ai_news"
@@ -8,24 +7,24 @@ enabled     = true
 cron        = "0 8 * * *"
 timezone    = "Asia/Shanghai"
 window      = "24h"
-lookback_overlap = "2h"   # re-check items from the tail of the previous window
+lookback_overlap = "2h"
 
-# Sub-daily example (uncomment to run every 6 hours):
-# cron              = "0 */6 * * *"
-# window            = "6h"
-# run_key_template  = "{pipeline_id}/{run_date}-{run_hour}"
+# Sub-daily (every 6 hours):
+# cron             = "0 */6 * * *"
+# window           = "6h"
+# run_key_template = "{pipeline_id}/{run_date}-{run_hour}"
 
 # ─── Backpressure & cost caps ────────────────────────────────────────────────
 [limits]
-max_items_per_run       = 60
-item_overflow_policy    = "drop_oldest"
-max_llm_calls_per_run   = 600
-max_estimated_cost_usd  = 3.0   # hard-stop before blowing the budget
+max_items_per_run      = 60
+item_overflow_policy   = "drop_oldest"
+max_llm_calls_per_run  = 600
+max_estimated_cost_usd = 3.0
 
 # ─── Failed-item lifecycle ───────────────────────────────────────────────────
 [failures]
 retry_failed  = true
-max_retries   = 3          # dead-letter after 3 consecutive failures
+max_retries   = 3
 retry_backoff = "next_run"
 
 # ─── Sources ─────────────────────────────────────────────────────────────────
@@ -43,15 +42,15 @@ timeout = 60
 
 [[sources]]
 type    = "rss"
-url     = "https://www.deepmind.com/blog/rss.xml"
-tag     = "ai"
-timeout = 60
-
-[[sources]]
-type    = "rss"
 url     = "https://huggingface.co/blog/feed.xml"
 tag     = "ml"
 timeout = 60
+
+# HN RSS — needed if you want hn_comments enricher to work
+# [[sources]]
+# type = "rss"
+# url  = "https://hnrss.org/frontpage"
+# tag  = "hn"
 
 # ─── Stages ──────────────────────────────────────────────────────────────────
 
@@ -60,47 +59,43 @@ name = "dedupe"
 type = "dedupe"
 
 [[stages]]
-name = "fetch_fulltext"
-type = "fetcher_apply"
+name                      = "fetch_fulltext"
+type                      = "fetcher_apply"
 write_field               = "fulltext"
-skip_if_field_longer_than = 2000   # trust the feed if content is already long
+skip_if_field_longer_than = 2000
 
 [[stages]]
 name = "prefilter"
 type = "filter"
 mode = "keep_if_all"
 rules = [
-  { field = "fulltext",      op = "min_length",  value = 300 },
-  { field = "title",         op = "not_matches",
+  { field = "fulltext",     op = "min_length",  value = 300 },
+  { field = "title",        op = "not_matches",
     value = "(?i)sponsored|advertisement|广告|赞助|招聘|hiring" },
-  { field = "published_at",  op = "newer_than",  value = "48h" },
+  { field = "published_at", op = "newer_than",  value = "48h" },
 ]
 
-# Trim fulltext before LLM to save tokens (20k chars ~ 5k tokens).
 [[stages]]
 name = "trim_fulltext"
 type = "field_filter"
-ops  = [
-  { op = "truncate", field = "fulltext", n = 20000 },
-]
+ops  = [{ op = "truncate", field = "fulltext", n = 20000 }]
 
 [[stages]]
-name = "summarize"
-type        = "llm_stage"
-mode        = "per_item"
-input_field  = "fulltext"
-output_field = "summary"
-prompt_file  = "prompts/summarize_zh.md"
-model          = "glm/glm-4-flash"
-fallback_model = "deepseek/deepseek-chat"
-fallback_model_2 = "ollama/qwen2.5:14b"
-workers     = 8
-concurrency = 4
-timeout     = 120
+name              = "summarize"
+type              = "llm_stage"
+mode              = "per_item"
+input_field       = "fulltext"
+output_field      = "summary"
+prompt_file       = "prompts/summarize_zh.md"
+model             = "glm/glm-4-flash"
+fallback_model    = "deepseek/deepseek-chat"
+fallback_model_2  = "ollama/qwen2.5:14b"
+workers           = 8
+concurrency       = 4
+timeout           = 120
 max_input_chars   = 20000
 truncate_strategy = "head_tail"
 
-# Post-summarize relevance filter (optional — remove if all content is relevant).
 [[stages]]
 name = "postfilter"
 type = "filter"
@@ -109,39 +104,35 @@ rules = [
   { field = "summary", op = "min_length", value = 30 },
 ]
 
-# Cap to top 20 most recent items before aggregation.
 [[stages]]
-name  = "cap"
-type  = "limit"
-top_n = 20
+name    = "cap"
+type    = "limit"
+top_n   = 20
 sort_by = "published_at"
 
-# Enrich items with HN comment threads (optional).
+# ── HN comments enricher (optional) ─────────────────────────────────────────
+# Only enriches items whose URL matches news.ycombinator.com/item?id=...
 # Requires: pip install "sluice-pipeline[enrich-hn]"
-# Comments land in item.extras.hn_comments (list of dicts with author/text/score).
-# Items are matched by url_pattern (default: news.ycombinator.com/item?id=...).
-# Non-matching items are silently skipped — safe to add even in mixed pipelines.
-# Tip: add an HN RSS source (e.g. https://hnrss.org/frontpage) alongside others.
 #
 # [[stages]]
-# name    = "hn_comments"
-# type    = "enrich"
+# name     = "hn_comments"
+# type     = "enrich"
 # enricher = "hn_comments"
 #
-# [stages.enricher_config]
-# max_comments   = 20     # top-level comments to fetch per item
-# delay_seconds  = 10.0   # pause between requests to avoid rate-limiting
+# [stages.config]
+# top_comments          = 20
+# request_delay_seconds = 10.0
 
 [[stages]]
-name = "daily_analysis"
-type         = "llm_stage"
-mode         = "aggregate"
-input_field  = "summary"
-output_target = "context.daily_brief"
-prompt_file  = "prompts/daily_brief_zh.md"
+name           = "daily_analysis"
+type           = "llm_stage"
+mode           = "aggregate"
+input_field    = "summary"
+output_target  = "context.daily_brief"
+prompt_file    = "prompts/daily_brief_zh.md"
 model          = "deepseek/deepseek-chat"
 fallback_model = "openai/gpt-4o-mini"
-timeout = 180
+timeout        = 180
 
 [[stages]]
 name         = "render"
@@ -150,6 +141,11 @@ template     = "templates/daily.md.j2"
 output_field = "context.markdown"
 
 # ─── Sinks ───────────────────────────────────────────────────────────────────
+# Template variables:
+#   items_template  — Jinja2: item, ctx, index, total
+#   footer_template — Jinja2: pipeline_id, run_date, run_key
+#   title_template  — str.format: {run_date}, {pipeline_id}
+#   path            — str.format: {run_date}, {pipeline_id}
 
 [[sinks]]
 id    = "local"
@@ -158,64 +154,222 @@ input = "context.markdown"
 path  = "./out/ai_news/{run_date}.md"
 
 [[sinks]]
-id          = "notion_main"
-type        = "notion"
-input       = "context.markdown"
-parent_id   = "env:NOTION_DB_AI_NEWS"
-parent_type = "database"
-token       = "env:NOTION_TOKEN"
+id              = "notion_main"
+type            = "notion"
+input           = "context.markdown"
+parent_id       = "env:NOTION_DB_AI_NEWS"
+parent_type     = "database"
+token           = "env:NOTION_TOKEN"
 title_template  = "AI 日报 · {run_date}"
 properties      = { Tag = "AI", Source = "sluice" }
 mode            = "upsert"
 max_block_chars = 1900
 
-# ── Telegram push sink (optional) ────────────────────────────────────────────
-# Uncomment and set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to enable.
-#
+# ═══════════════════════════════════════════════════════════════════════════
+# TELEGRAM SINK COMBINATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── A. 只发日报综述（一条消息）─────────────────────────────────────────────
 # [[sinks]]
-# id           = "telegram_digest"
+# id           = "tg_brief_only"
 # type         = "telegram"
 # bot_token    = "env:TELEGRAM_BOT_TOKEN"
 # chat_id      = "env:TELEGRAM_CHAT_ID"
-# items_template  = "prompts/telegram_item.md.j2"
+# brief_input  = "context.daily_brief"   # 发 daily_analysis 的输出
+# items_input  = "none"                  # 不发逐条
 # footer_template = "📅 {{ run_date }} | sluice"
-# split            = "per_item"
 # on_message_too_long = "split_more"
-# emit_on_empty    = false
+# emit_on_empty = false
 
-# ── Feishu — Webhook mode (optional) ─────────────────────────────────────────
-# Simplest setup: group admin creates an incoming webhook, no app install needed.
-# Uncomment and set FEISHU_WEBHOOK_URL to enable.
-#
+# ── B. 只发逐条新闻（每条一条消息）────────────────────────────────────────
 # [[sinks]]
-# id           = "feishu_webhook"
+# id              = "tg_items_only"
+# type            = "telegram"
+# bot_token       = "env:TELEGRAM_BOT_TOKEN"
+# chat_id         = "env:TELEGRAM_CHAT_ID"
+# items_input     = "items"
+# items_template  = "prompts/telegram_item.md.j2"
+# split           = "per_item"
+# on_message_too_long = "split_more"
+# footer_template = "📅 {{ run_date }} | sluice"
+# between_messages_delay_seconds = 1.0
+# emit_on_empty   = false
+
+# ── C. 先发综述、再逐条（同一个 sink，同一个 chat）────────────────────────
+# [[sinks]]
+# id              = "tg_brief_then_items"
+# type            = "telegram"
+# bot_token       = "env:TELEGRAM_BOT_TOKEN"
+# chat_id         = "env:TELEGRAM_CHAT_ID"
+# brief_input     = "context.daily_brief"
+# items_input     = "items"
+# items_template  = "prompts/telegram_item.md.j2"
+# split           = "per_item"
+# on_message_too_long = "split_more"
+# footer_template = "📅 {{ run_date }} | sluice"
+# between_messages_delay_seconds = 1.0
+# emit_on_empty   = false
+
+# ── D. 所有新闻合并成一条消息──────────────────────────────────────────────
+# [[sinks]]
+# id              = "tg_single"
+# type            = "telegram"
+# bot_token       = "env:TELEGRAM_BOT_TOKEN"
+# chat_id         = "env:TELEGRAM_CHAT_ID"
+# items_input     = "items"
+# items_template  = "prompts/telegram_item.md.j2"
+# split           = "single"
+# on_message_too_long = "split_more"
+# footer_template = "📅 {{ run_date }} | sluice"
+# emit_on_empty   = false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEISHU WEBHOOK COMBINATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── A. Webhook — 只发综述 ─────────────────────────────────────────────────
+# [[sinks]]
+# id           = "feishu_brief_only"
 # type         = "feishu"
-# auth_mode    = "webhook"                      # default, can be omitted
+# auth_mode    = "webhook"
 # webhook_url  = "env:FEISHU_WEBHOOK_URL"
-# secret       = "env:FEISHU_WEBHOOK_SECRET"   # remove if webhook has no signing
-# message_type = "post"                         # "post" | "text" | "interactive"
-# items_template   = "prompts/feishu_item.md.j2"
-# footer_template  = "📅 {{ run_date }} | sluice"
-# split            = "per_item"
+# secret       = "env:FEISHU_WEBHOOK_SECRET"
+# message_type = "post"
+# brief_input  = "context.daily_brief"
+# items_input  = "none"
 # on_message_too_long = "truncate"
-# emit_on_empty    = false
+# footer_template = "📅 {{ run_date }} | sluice"
+# emit_on_empty = false
 
-# ── Feishu — Bot API mode (optional) ─────────────────────────────────────────
-# Richer mode: sends Markdown auto-converted to Feishu post JSON.
-# Supports DM, any group by chat_id/open_id, no webhook required.
-# Requires a Feishu app with im:message:send_as_bot permission.
-#
+# ── B. Webhook — 逐条发 ──────────────────────────────────────────────────
 # [[sinks]]
-# id              = "feishu_bot"
+# id              = "feishu_items_only"
+# type            = "feishu"
+# auth_mode       = "webhook"
+# webhook_url     = "env:FEISHU_WEBHOOK_URL"
+# secret          = "env:FEISHU_WEBHOOK_SECRET"
+# message_type    = "post"
+# items_input     = "items"
+# items_template  = "prompts/feishu_item.md.j2"
+# split           = "per_item"
+# on_message_too_long = "truncate"
+# footer_template = "📅 {{ run_date }} | sluice"
+# between_messages_delay_seconds = 1.0
+# emit_on_empty   = false
+
+# ── C. Webhook — 综述 + 逐条 ─────────────────────────────────────────────
+# [[sinks]]
+# id              = "feishu_brief_then_items"
+# type            = "feishu"
+# auth_mode       = "webhook"
+# webhook_url     = "env:FEISHU_WEBHOOK_URL"
+# secret          = "env:FEISHU_WEBHOOK_SECRET"
+# message_type    = "post"
+# brief_input     = "context.daily_brief"
+# items_input     = "items"
+# items_template  = "prompts/feishu_item.md.j2"
+# split           = "per_item"
+# on_message_too_long = "truncate"
+# footer_template = "📅 {{ run_date }} | sluice"
+# between_messages_delay_seconds = 1.0
+# emit_on_empty   = false
+
+# ── D. Webhook — Card V2（仅综述，不支持 split_more）────────────────────
+# [[sinks]]
+# id              = "feishu_card"
+# type            = "feishu"
+# auth_mode       = "webhook"
+# webhook_url     = "env:FEISHU_WEBHOOK_URL"
+# secret          = "env:FEISHU_WEBHOOK_SECRET"
+# message_type    = "interactive"
+# brief_input     = "context.daily_brief"
+# items_input     = "none"
+# card_template   = "prompts/feishu_card.default.json.j2"
+# on_message_too_long = "truncate"
+# emit_on_empty   = false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEISHU BOT API COMBINATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+# Requires Feishu app with im:message:send_as_bot scope.
+# message_type: "post" or "text" only (not "interactive").
+
+# ── A. Bot API — 综述 + 逐条 ─────────────────────────────────────────────
+# [[sinks]]
+# id              = "feishu_bot_all"
 # type            = "feishu"
 # auth_mode       = "bot_api"
 # app_id          = "env:FEISHU_APP_ID"
 # app_secret      = "env:FEISHU_APP_SECRET"
 # receive_id      = "env:FEISHU_CHAT_ID"
-# receive_id_type = "chat_id"                   # "chat_id" | "open_id" | "user_id" | "email"
-# message_type    = "post"                      # "post" | "text"  (interactive not supported)
-# items_template   = "prompts/feishu_item.md.j2"
-# footer_template  = "📅 {{ run_date }} | sluice"
-# split            = "per_item"
+# receive_id_type = "chat_id"           # "chat_id" | "open_id" | "user_id" | "email"
+# message_type    = "post"
+# brief_input     = "context.daily_brief"
+# items_input     = "items"
+# items_template  = "prompts/feishu_item.md.j2"
+# split           = "per_item"
 # on_message_too_long = "split_more"
-# emit_on_empty    = false
+# footer_template = "📅 {{ run_date }} | sluice"
+# between_messages_delay_seconds = 1.0
+# emit_on_empty   = false
+
+# ── B. Bot API — 发给个人 DM ─────────────────────────────────────────────
+# [[sinks]]
+# id              = "feishu_bot_dm"
+# type            = "feishu"
+# auth_mode       = "bot_api"
+# app_id          = "env:FEISHU_APP_ID"
+# app_secret      = "env:FEISHU_APP_SECRET"
+# receive_id      = "env:FEISHU_USER_OPEN_ID"
+# receive_id_type = "open_id"
+# message_type    = "post"
+# brief_input     = "context.daily_brief"
+# items_input     = "items"
+# items_template  = "prompts/feishu_item.md.j2"
+# split           = "per_item"
+# on_message_too_long = "split_more"
+# footer_template = "📅 {{ run_date }} | sluice"
+# emit_on_empty   = false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EMAIL COMBINATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── A. Email — 综述 + 逐条（一封邮件）────────────────────────────────────
+# [[sinks]]
+# id                       = "email_digest"
+# type                     = "email"
+# smtp_host                = "env:SMTP_HOST"
+# smtp_port                = 587
+# smtp_username            = "env:SMTP_USERNAME"
+# smtp_password            = "env:SMTP_PASSWORD"
+# from_address             = "env:SMTP_FROM"
+# recipients               = ["user@example.com"]
+# subject_template         = "AI 日报 · {{ run_date }}"
+# brief_input              = "context.daily_brief"
+# items_input              = "items"
+# items_template           = "prompts/email_item.md.j2"
+# split                    = "single"
+# html_template            = "prompts/email_wrapper.html.j2"
+# style_block_file         = "prompts/email.css"
+# footer_template          = "📅 {{ run_date }} | sluice"
+# recipient_failure_policy = "best_effort"
+# emit_on_empty            = false
+
+# ── B. Email — 每条新闻单独一封 ──────────────────────────────────────────
+# [[sinks]]
+# id                       = "email_per_item"
+# type                     = "email"
+# smtp_host                = "env:SMTP_HOST"
+# smtp_port                = 587
+# smtp_username            = "env:SMTP_USERNAME"
+# smtp_password            = "env:SMTP_PASSWORD"
+# from_address             = "env:SMTP_FROM"
+# recipients               = ["user@example.com"]
+# subject_template         = "{{ run_date }} · {{ pipeline_id }}"
+# items_input              = "items"
+# items_template           = "prompts/email_item.md.j2"
+# split                    = "per_item"
+# html_template            = "prompts/email_wrapper.html.j2"
+# recipient_failure_policy = "best_effort"
+# emit_on_empty            = false
