@@ -20,6 +20,7 @@ _THIRD_PARTY_LOGGERS = [
     "feedparser",
     "trafilatura",
     "prefect",
+    "markdown_it",
 ]
 
 logger.disable("sluice")
