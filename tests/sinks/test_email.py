@@ -18,10 +18,27 @@ def test_render_html_paragraph():
 
 
 def test_render_html_strips_script():
+    pytest.importorskip("lxml_html_clean")
     toks = parse_markdown("<script>alert('xss')</script>")
     html = render_to_html(toks)
     assert "<script>" not in html
-    assert "alert" not in html or "xss" not in html
+    assert "alert" not in html and "xss" not in html
+
+
+def test_render_html_propagates_cleaner_runtime_errors(monkeypatch):
+    lxml_html_clean = pytest.importorskip("lxml_html_clean")
+
+    class BrokenCleaner:
+        def __init__(self, **kwargs):
+            pass
+
+        def clean_html(self, raw):
+            raise RuntimeError("cleaner broke")
+
+    monkeypatch.setattr(lxml_html_clean, "Cleaner", BrokenCleaner)
+    toks = parse_markdown("hello")
+    with pytest.raises(RuntimeError, match="cleaner broke"):
+        render_to_html(toks)
 
 
 def test_email_single_mode_one_email_per_recipient():

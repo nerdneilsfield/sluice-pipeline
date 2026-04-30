@@ -49,6 +49,13 @@ def test_safe_truncate_balances_mixed_star_runs():
     assert len(_unescaped_exact_runs(truncated, "*", 2)) % 2 == 0
 
 
+def test_safe_truncate_ignores_escaped_star_markers():
+    text = r"\*literal\* *italic " + "x" * 200
+    truncated = _safe_truncate(text, 80)
+    assert r"\*literal\*" in truncated
+    assert len(_unescaped_exact_runs(truncated, "*", 1)) % 2 == 0
+
+
 def test_safe_truncate_removes_incomplete_link_url():
     text = "[label](https://example.com/" + "x" * 200 + ")"
     truncated = _safe_truncate(text, 40)

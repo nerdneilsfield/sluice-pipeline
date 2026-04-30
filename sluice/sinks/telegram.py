@@ -28,13 +28,21 @@ def _safe_truncate(text: str, limit: int) -> str:
     if cut > 0 and text[cut - 1] == "\\":
         cut -= 1
     result = text[:cut] + "…"
-    result = _remove_incomplete_link(result)
-    result = _balance_markers(result)
+    result = _repair_truncated_markdown_v2(result)
     if result.endswith("\\…"):
         result = result[:-2] + "…"
     if len(result) > limit:
-        result = result[: limit - 1] + "…"
+        result = _repair_truncated_markdown_v2(result[: limit - 1] + "…")
     return result
+
+
+def _repair_truncated_markdown_v2(text: str) -> str:
+    previous = None
+    while text != previous:
+        previous = text
+        text = _remove_incomplete_link(text)
+        text = _balance_markers(text)
+    return text
 
 
 def _remove_incomplete_link(text: str) -> str:
@@ -58,9 +66,18 @@ def _balance_markers(text: str) -> str:
     masked = _mask_link_urls(text)
     remove: list[tuple[int, int]] = []
     for marker in ("*", "_", "`"):
-        runs = list(re.finditer(rf"(?<!\\){re.escape(marker)}+", masked))
+        escaped = re.escape(marker)
+        runs = list(re.finditer(r"(?<!\\)" + escaped + "+", masked))
         for width in {len(run.group(0)) for run in runs}:
-            exact = [run for run in runs if len(run.group(0)) == width]
+            exact_pattern = (
+                r"(?<!\\)(?<!" + escaped + ")" + escaped + f"{{{width}}}(?!" + escaped + ")"
+            )
+            exact = list(
+                re.finditer(
+                    exact_pattern,
+                    masked,
+                )
+            )
             if len(exact) % 2 != 0:
                 remove.append(exact[-1].span())
     result = text

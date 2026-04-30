@@ -30,7 +30,9 @@ def _truncate_post_array(arr: list[list[dict]], max_chars: int) -> list[list[dic
     result: list[list[dict]] = []
     for line in arr:
         line_len = sum(len(seg.get("text", "")) for seg in line)
-        if total + line_len > max_chars and result:
+        if total + line_len > max_chars:
+            if not result:
+                result.append(_split_post_line(line, max_chars)[0])
             break
         result.append(line)
         total += line_len

@@ -373,6 +373,7 @@ def stats(
     """Print run statistics from run_log."""
     import json
     import sqlite3
+    from contextlib import closing
 
     from sluice.runner import _resolve_db_path
 
@@ -400,7 +401,7 @@ def stats(
         sql += " AND pipeline_id = ?"
         args.append(pipeline)
     sql += " GROUP BY pipeline_id"
-    with sqlite3.connect(db_path) as c:
+    with closing(sqlite3.connect(db_path)) as c:
         rows = c.execute(sql, args).fetchall()
     if format == "json":
         keys = [
@@ -465,6 +466,7 @@ def deliveries(
 ):
     """List delivery audit trail for a pipeline."""
     import sqlite3
+    from contextlib import closing
 
     from sluice.runner import _resolve_db_path
 
@@ -494,7 +496,7 @@ def deliveries(
         sql += " AND status = ?"
         args.append(status)
     sql += " ORDER BY attempt_at DESC LIMIT 200"
-    with sqlite3.connect(db_path) as c:
+    with closing(sqlite3.connect(db_path)) as c:
         for row in c.execute(sql, args):
             typer.echo(" | ".join(str(x) if x is not None else "-" for x in row))
 

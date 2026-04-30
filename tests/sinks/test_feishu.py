@@ -8,7 +8,7 @@ from sluice.core.errors import ConfigError
 from sluice.core.item import Item
 from sluice.sinks._feishu_render import render_to_post_array
 from sluice.sinks._markdown_ast import parse_markdown
-from sluice.sinks.feishu import FeishuSink, _sign
+from sluice.sinks.feishu import FeishuSink, _sign, _truncate_post_array
 from sluice.state.db import open_db
 from sluice.state.delivery_log import DeliveryLog
 from sluice.state.emissions import EmissionStore
@@ -47,6 +47,13 @@ def test_sign_deterministic_and_nonempty():
     assert s1 == s2
     assert len(s1) > 0
     assert _sign("other", ts) != s1
+
+
+def test_truncate_post_array_truncates_first_oversized_line():
+    arr = [[{"tag": "text", "text": "x" * 5000}]]
+    truncated = _truncate_post_array(arr, 4000)
+    assert len(truncated) == 1
+    assert sum(len(seg.get("text", "")) for line in truncated for seg in line) == 4000
 
 
 def test_single_mode_combines_items():
