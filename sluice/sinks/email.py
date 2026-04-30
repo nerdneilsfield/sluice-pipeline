@@ -1,5 +1,5 @@
 from email.message import EmailMessage
-from email.utils import make_msgid
+from email.utils import formatdate, make_msgid
 
 import aiosmtplib
 from jinja2 import Template
@@ -34,7 +34,11 @@ async def _aiosmtplib_send(
         await smtp.connect()
         if username:
             await smtp.login(username, password)
-        await smtp.send_message(message, recipients=[recipient])
+        # Use sendmail() with raw bytes to guarantee headers are not stripped
+        raw = message.as_bytes()
+        msg_id = message["Message-ID"] or "no-id"
+        sender = message["From"]
+        await smtp.sendmail(sender, [recipient], raw)
         await smtp.quit()
     except Exception:
         try:
@@ -42,7 +46,7 @@ async def _aiosmtplib_send(
         except Exception:
             pass
         raise
-    return message["Message-ID"] or "no-id"
+    return msg_id
 
 
 class EmailSink(PushSinkBase):
@@ -145,6 +149,7 @@ class EmailSink(PushSinkBase):
                     msg["From"] = self._from
                     msg["To"] = r
                     msg["Subject"] = subject
+                    msg["Date"] = formatdate()
                     msg["Message-ID"] = make_msgid()
                     msg.set_content("HTML email — please view in an HTML-capable client.")
                     msg.add_alternative(html, subtype="html")
