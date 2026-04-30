@@ -28,8 +28,14 @@ async def _aiosmtplib_send(
     password: str,
     starttls: bool,
     recipient: str,
+    mail_domain: str = "localhost",
 ) -> str:
-    smtp = aiosmtplib.SMTP(hostname=host, port=port, **_smtp_tls_kwargs(port, starttls))
+    smtp = aiosmtplib.SMTP(
+        hostname=host,
+        port=port,
+        local_hostname=mail_domain,
+        **_smtp_tls_kwargs(port, starttls),
+    )
     try:
         await smtp.connect()
         if username:
@@ -88,6 +94,8 @@ class EmailSink(PushSinkBase):
         self._pass = smtp_password
         self._starttls = smtp_starttls
         self._from = from_address
+        # Domain extracted from from_address for EHLO and Message-ID
+        self._mail_domain = from_address.split("@")[-1] if "@" in from_address else smtp_host
         self._recipients = list(recipients)
         self._subject_tmpl = Template(subject_template)
         self._brief_input = brief_input
@@ -150,7 +158,7 @@ class EmailSink(PushSinkBase):
                     msg["To"] = r
                     msg["Subject"] = subject
                     msg["Date"] = formatdate()
-                    msg["Message-ID"] = make_msgid()
+                    msg["Message-ID"] = make_msgid(domain=self._mail_domain)
                     msg.set_content("HTML email — please view in an HTML-capable client.")
                     msg.add_alternative(html, subtype="html")
                     out.append(PushBatchItem(kind="recipient", payload=msg, recipient=r))
@@ -161,7 +169,7 @@ class EmailSink(PushSinkBase):
                 msg["From"] = self._from
                 msg["To"] = r
                 msg["Subject"] = subject
-                msg["Message-ID"] = make_msgid()
+                msg["Message-ID"] = make_msgid(domain=self._mail_domain)
                 msg.set_content("HTML email — please view in an HTML-capable client.")
                 msg.add_alternative(html, subtype="html")
                 out.append(PushBatchItem(kind="recipient", payload=msg, recipient=r))
@@ -176,4 +184,5 @@ class EmailSink(PushSinkBase):
             password=self._pass,
             starttls=self._starttls,
             recipient=recipient,
+            mail_domain=self._mail_domain,
         )
