@@ -9,8 +9,8 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 [![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
-[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
-[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Coverage](https://img.shields.io/badge/coverage-81%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
+[![Tests](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice-pipeline)
@@ -776,7 +776,7 @@ Matrix over Python 3.11 and 3.12:
 1. Check the lockfile and install dependencies (`uv lock --check`, `uv sync --all-extras --frozen`)
 2. `ruff check .` — lint
 3. `ty check` — type check (0 errors)
-4. `pytest --cov` — 290 tests, 83% coverage
+4. `pytest --cov` — 303 tests, 81% coverage
 
 ### `publish.yml` — runs on `v*.*.*` tags
 
@@ -838,9 +838,9 @@ scheduling, SSRF guard.
 
 ```bash
 git clone https://github.com/nerdneilsfield/sluice-pipeline
-cd sluice
+cd sluice-pipeline
 uv sync --all-extras                # or pip install -e '.[dev,all]'
-pytest -q                           # 290 tests
+pytest -q                           # 303 tests
 pytest --cov=sluice                 # 82% coverage
 ruff check .
 ty check                            # 0 errors

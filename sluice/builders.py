@@ -338,7 +338,7 @@ def build_sinks(pipe: PipelineConfig, delivery_log=None, root=None):
             out.append(
                 FeishuSink(
                     sink_id=s.id,
-                    webhook_url=resolve_env(s.webhook_url),
+                    webhook_url=resolve_env(s.webhook_url) if s.auth_mode == "webhook" else "",
                     secret=resolve_env(s.secret) if s.secret else None,
                     brief_input=s.brief_input,
                     items_input=s.items_input,
