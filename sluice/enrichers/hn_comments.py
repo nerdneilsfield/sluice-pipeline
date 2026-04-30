@@ -5,7 +5,7 @@ import time
 import httpx
 
 from sluice.core.item import Item
-from sluice.enrichers.hn_parser import parse_hn_thread
+from sluice.enrichers.hn_parser import EnricherParseError, parse_hn_official, parse_hn_thread
 from sluice.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -66,11 +66,25 @@ class HnCommentsEnricher:
         log.bind(item_id=item_id, url=item.url).debug("hn_comments.fetching")
         target = f"{self._base}/stories/{item_id}"
         await self._bucket_for(httpx.URL(target).host).acquire()
-        resp = await self._client.get(target)
-        resp.raise_for_status()
-        result = parse_hn_thread(resp.text, top_n=self._top)
+        # Try hckrnws first
+        try:
+            resp = await self._client.get(target)
+            resp.raise_for_status()
+            result = parse_hn_thread(resp.text, top_n=self._top)
+            source = "hckrnws"
+        except (EnricherParseError, Exception) as exc:
+            log.bind(item_id=item_id, error=str(exc)).debug(
+                "hn_comments.hckrnws_failed_fallback_official"
+            )
+            official_url = f"https://news.ycombinator.com/item?id={item_id}"
+            await self._bucket_for(httpx.URL(official_url).host).acquire()
+            resp = await self._client.get(official_url)
+            resp.raise_for_status()
+            result = parse_hn_official(resp.text, top_n=self._top)
+            source = "hn_official"
+
         preview = result[:200].replace("\n", " ") if result else "(empty)"
-        log.bind(item_id=item_id, chars=len(result) if result else 0, preview=preview).debug(
-            "hn_comments.fetched"
-        )
+        log.bind(
+            item_id=item_id, source=source, chars=len(result) if result else 0, preview=preview
+        ).debug("hn_comments.fetched")
         return result
