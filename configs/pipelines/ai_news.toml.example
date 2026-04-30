@@ -118,10 +118,8 @@ sort_by = "published_at"
 # name     = "hn_comments"
 # type     = "enrich"
 # enricher = "hn_comments"
-#
-# [stages.config]
-# top_comments          = 20
-# request_delay_seconds = 10.0
+# config   = { top_comments = 20, request_delay_seconds = 10.0 }
+# # on_failure = "skip"  # default: silently skip items that fail enrichment
 
 [[stages]]
 name           = "daily_analysis"
