@@ -36,6 +36,18 @@ from sluice.state.seen import SeenStore
 _TEMPLATE_EXTS = (".md", ".txt", ".j2", ".jinja2", ".css")
 
 
+def _resolve_api_headers(headers: dict) -> dict:
+    """Resolve env: references in header value strings."""
+    from sluice.loader import resolve_env
+
+    return {
+        key: (
+            resolve_env(value) if isinstance(value, str) and value.startswith("env:") else value
+        )
+        for key, value in headers.items()
+    }
+
+
 def _resolve_template(root, value: str) -> str:
     if value.endswith(_TEMPLATE_EXTS):
         # Try config-root-relative first, then CWD-relative
@@ -125,6 +137,8 @@ def build_fetcher_chain(
             from sluice.loader import resolve_env
 
             kwargs["api_key"] = resolve_env(kwargs["api_key"])
+        if "api_headers" in kwargs and isinstance(kwargs["api_headers"], dict):
+            kwargs["api_headers"] = _resolve_api_headers(kwargs["api_headers"])
         fetchers.append(cls(**kwargs))
     return FetcherChain(
         fetchers,
