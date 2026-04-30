@@ -1,15 +1,30 @@
 {
   "schema": "2.0",
-  "header": {"title": {"tag": "plain_text", "content": "{{ pipeline_id }} · {{ run_date }}"}},
+  "header": {
+    "title": {
+      "tag": "plain_text",
+      "content": "{{ pipeline_id | replace('_', ' ') | title }} · {{ run_date }}"
+    },
+    "ud_icon": { "tag": "standard_icon", "token": "robot-emoji_img_v3_02az_ae9db88b-a2a3-4be4-b6b0-cc0e6d03eb4g" },
+    "template": "blue"
+  },
   "body": {
     "elements": [
       {
         "tag": "div",
         "text": {
-          "tag": "post",
-          "content": {{ body_post_array | tojson }}
+          "tag": "lark_md",
+          "content": {{ body_md | tojson }}
         }
-      }
+      }{% if footer %},
+      { "tag": "hr" },
+      {
+        "tag": "div",
+        "text": {
+          "tag": "lark_md",
+          "content": {{ footer | tojson }}
+        }
+      }{% endif %}
     ]
   }
 }

@@ -1,21 +1,59 @@
-id = "ai_news"
+# ─── Pipeline: ai_news ───────────────────────────────────────────────────────
+# Daily AI/infra news digest → Notion + Telegram (+ optional Feishu/Email).
+# Copy to configs/pipelines/ai_news.toml and adjust to your feeds.
+
+id          = "ai_news"
 description = "Daily AI news digest"
-enabled = true
-cron = "0 8 * * *"
-timezone = "Asia/Shanghai"
-window = "24h"
+enabled     = true
+cron        = "0 8 * * *"
+timezone    = "Asia/Shanghai"
+window      = "24h"
+lookback_overlap = "2h"   # re-check items from the tail of the previous window
+
+# Sub-daily example (uncomment to run every 6 hours):
+# cron              = "0 */6 * * *"
+# window            = "6h"
+# run_key_template  = "{pipeline_id}/{run_date}-{run_hour}"
+
+# ─── Backpressure & cost caps ────────────────────────────────────────────────
+[limits]
+max_items_per_run       = 60
+item_overflow_policy    = "drop_oldest"
+max_llm_calls_per_run   = 600
+max_estimated_cost_usd  = 3.0   # hard-stop before blowing the budget
+
+# ─── Failed-item lifecycle ───────────────────────────────────────────────────
+[failures]
+retry_failed  = true
+max_retries   = 3          # dead-letter after 3 consecutive failures
+retry_backoff = "next_run"
+
+# ─── Sources ─────────────────────────────────────────────────────────────────
+[[sources]]
+type    = "rss"
+url     = "https://openai.com/blog/rss"
+tag     = "ai"
+timeout = 60
 
 [[sources]]
-type = "rss"
-url  = "https://openai.com/blog/rss"
-tag  = "ai"
-timeout = 120
+type    = "rss"
+url     = "https://www.anthropic.com/news/rss.xml"
+tag     = "ai"
+timeout = 60
 
 [[sources]]
-type = "rss"
-url  = "https://www.anthropic.com/news/rss.xml"
-tag  = "ai"
-timeout = 120
+type    = "rss"
+url     = "https://www.deepmind.com/blog/rss.xml"
+tag     = "ai"
+timeout = 60
+
+[[sources]]
+type    = "rss"
+url     = "https://huggingface.co/blog/feed.xml"
+tag     = "ml"
+timeout = 60
+
+# ─── Stages ──────────────────────────────────────────────────────────────────
 
 [[stages]]
 name = "dedupe"
@@ -24,63 +62,122 @@ type = "dedupe"
 [[stages]]
 name = "fetch_fulltext"
 type = "fetcher_apply"
-write_field = "fulltext"
-skip_if_field_longer_than = 2000
+write_field               = "fulltext"
+skip_if_field_longer_than = 2000   # trust the feed if content is already long
 
 [[stages]]
 name = "prefilter"
 type = "filter"
 mode = "keep_if_all"
 rules = [
-  { field = "fulltext", op = "min_length", value = 300 },
+  { field = "fulltext",      op = "min_length",  value = 300 },
+  { field = "title",         op = "not_matches",
+    value = "(?i)sponsored|advertisement|广告|赞助|招聘|hiring" },
+  { field = "published_at",  op = "newer_than",  value = "48h" },
+]
+
+# Trim fulltext before LLM to save tokens (20k chars ~ 5k tokens).
+[[stages]]
+name = "trim_fulltext"
+type = "field_filter"
+ops  = [
+  { op = "truncate", field = "fulltext", n = 20000 },
 ]
 
 [[stages]]
 name = "summarize"
-type = "llm_stage"
-mode = "per_item"
+type        = "llm_stage"
+mode        = "per_item"
 input_field  = "fulltext"
 output_field = "summary"
 prompt_file  = "prompts/summarize_zh.md"
 model          = "glm/glm-4-flash"
-fallback_model = "deepseek/deepseek-v3"
+fallback_model = "deepseek/deepseek-chat"
+fallback_model_2 = "ollama/qwen2.5:14b"
 workers     = 8
 concurrency = 4
-timeout = 120
-max_input_chars = 20000
+timeout     = 120
+max_input_chars   = 20000
+truncate_strategy = "head_tail"
+
+# Post-summarize relevance filter (optional — remove if all content is relevant).
+[[stages]]
+name = "postfilter"
+type = "filter"
+mode = "keep_if_all"
+rules = [
+  { field = "summary", op = "min_length", value = 30 },
+]
+
+# Cap to top 20 most recent items before aggregation.
+[[stages]]
+name  = "cap"
+type  = "limit"
+top_n = 20
+sort_by = "published_at"
 
 [[stages]]
 name = "daily_analysis"
-type = "llm_stage"
-mode = "aggregate"
-input_field   = "summary"
+type         = "llm_stage"
+mode         = "aggregate"
+input_field  = "summary"
 output_target = "context.daily_brief"
-prompt_file   = "prompts/daily_brief_zh.md"
-model          = "deepseek/deepseek-v3"
-fallback_model = "openai/gpt-4o"
-timeout = 120
+prompt_file  = "prompts/daily_brief_zh.md"
+model          = "deepseek/deepseek-chat"
+fallback_model = "openai/gpt-4o-mini"
+timeout = 180
 
 [[stages]]
-name = "render"
-type = "render"
-template = "templates/daily.md.j2"
+name         = "render"
+type         = "render"
+template     = "templates/daily.md.j2"
 output_field = "context.markdown"
 
+# ─── Sinks ───────────────────────────────────────────────────────────────────
+
 [[sinks]]
-id = "local"
-type = "file_md"
+id    = "local"
+type  = "file_md"
 input = "context.markdown"
 path  = "./out/ai_news/{run_date}.md"
 
 [[sinks]]
-id = "notion_main"
-type = "notion"
-input = "context.markdown"
-parent_id = "env:NOTION_DB_AI_NEWS"
+id          = "notion_main"
+type        = "notion"
+input       = "context.markdown"
+parent_id   = "env:NOTION_DB_AI_NEWS"
 parent_type = "database"
-token = "env:NOTION_TOKEN"
-title_template = "AI 日报 · {run_date}"
-properties = { Tag = "AI", Source = "sluice" }
-mode = "upsert"
+token       = "env:NOTION_TOKEN"
+title_template  = "AI 日报 · {run_date}"
+properties      = { Tag = "AI", Source = "sluice" }
+mode            = "upsert"
 max_block_chars = 1900
-# cover_image deferred to v1.1 (notionify v3 has no cover slot)
+
+# ── Telegram push sink (optional) ────────────────────────────────────────────
+# Uncomment and set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to enable.
+#
+# [[sinks]]
+# id           = "telegram_digest"
+# type         = "telegram"
+# bot_token    = "env:TELEGRAM_BOT_TOKEN"
+# chat_id      = "env:TELEGRAM_CHAT_ID"
+# items_template  = "prompts/telegram_item.md.j2"
+# footer_template = "📅 {{ run_date }} | sluice"
+# split            = "per_item"
+# on_message_too_long = "split_more"
+# emit_on_empty    = false
+
+# ── Feishu push sink (optional) ──────────────────────────────────────────────
+# Uncomment and set FEISHU_WEBHOOK_URL to enable.
+#
+# [[sinks]]
+# id           = "feishu_digest"
+# type         = "feishu"
+# webhook_url  = "env:FEISHU_WEBHOOK_URL"
+# secret       = "env:FEISHU_WEBHOOK_SECRET"   # remove if webhook has no signing
+# message_type = "post"                         # "post" | "text" | "interactive"
+# items_template  = "prompts/feishu_item.md.j2"
+# footer_template = "📅 {{ run_date }} | sluice"
+# split            = "per_item"
+# on_message_too_long = "truncate"
+# emit_on_empty    = false

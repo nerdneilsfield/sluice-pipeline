@@ -1,16 +1,87 @@
+# ─── LLM Provider pool ───────────────────────────────────────────────────────
+# Copy to providers.toml and fill in your keys.
+# Multiple providers can be active simultaneously; each llm_stage picks
+# via  model = "<provider>/<model_name>"  and walks the fallback chain.
+
+# ── GLM (Zhipu AI) ────────────────────────────────────────────────────────────
 [[providers]]
 name = "glm"
 type = "openai_compatible"
 
 [[providers.base]]
-url = "https://open.bigmodel.cn/api/paas/v4"
+url    = "https://open.bigmodel.cn/api/paas/v4"
 weight = 1
 key = [
   { value = "env:GLM_API_KEY",   weight = 3 },
-  { value = "env:GLM_API_KEY_2", weight = 1, quota_duration = 18000 },
+  { value = "env:GLM_API_KEY_2", weight = 1, quota_duration = 18000,
+    quota_error_tokens = ["exceed", "quota", "rate limit"] },
 ]
 
 [[providers.models]]
-model_name = "glm-4-flash"
+model_name          = "glm-4-flash"
 input_price_per_1k  = 0.0001
 output_price_per_1k = 0.0001
+
+[[providers.models]]
+model_name          = "glm-4-plus"
+input_price_per_1k  = 0.007
+output_price_per_1k = 0.007
+
+# ── DeepSeek ──────────────────────────────────────────────────────────────────
+[[providers]]
+name = "deepseek"
+type = "openai_compatible"
+
+[[providers.base]]
+url    = "https://api.deepseek.com/v1"
+weight = 1
+key = [
+  { value = "env:DEEPSEEK_API_KEY", weight = 1 },
+]
+
+[[providers.models]]
+model_name          = "deepseek-chat"
+input_price_per_1k  = 0.00027
+output_price_per_1k = 0.0011
+
+[[providers.models]]
+model_name          = "deepseek-reasoner"
+input_price_per_1k  = 0.00055
+output_price_per_1k = 0.0022
+
+# ── OpenAI ────────────────────────────────────────────────────────────────────
+[[providers]]
+name = "openai"
+type = "openai_compatible"
+
+[[providers.base]]
+url    = "https://api.openai.com/v1"
+weight = 1
+key = [
+  { value = "env:OPENAI_API_KEY", weight = 1 },
+]
+
+[[providers.models]]
+model_name          = "gpt-4o-mini"
+input_price_per_1k  = 0.00015
+output_price_per_1k = 0.0006
+
+[[providers.models]]
+model_name          = "gpt-4o"
+input_price_per_1k  = 0.0025
+output_price_per_1k = 0.01
+
+# ── Ollama (local, free) ──────────────────────────────────────────────────────
+# Last-resort fallback — no price set means cost cap won't apply to this tier.
+[[providers]]
+name = "ollama"
+type = "openai_compatible"
+
+[[providers.base]]
+url    = "http://localhost:11434/v1"
+weight = 1
+key    = [{ value = "local" }]
+
+[[providers.models]]
+model_name = "qwen2.5:14b"
+# No price — local model, cost tracking disabled for this provider.
