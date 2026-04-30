@@ -601,15 +601,14 @@ async def test_poll_failure_status_raises(allow_public_dns, no_sleep):
 @pytest.mark.asyncio
 @respx.mock
 async def test_poll_timeout_raises(allow_public_dns, no_sleep, monkeypatch):
-    """Poll timeout: mock time.monotonic to advance past poll_timeout."""
-    import time
+    """Poll timeout: patch the module-level time used by the fetcher."""
     tick = [0.0]
 
     def fake_monotonic():
         tick[0] += 0.1
         return tick[0]
 
-    monkeypatch.setattr(time, "monotonic", fake_monotonic)
+    monkeypatch.setattr("sluice.fetchers.crawl4ai.time.monotonic", fake_monotonic)
     respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t4"})
     )
@@ -893,21 +892,22 @@ git commit -m "feat(fetchers): add Crawl4AIFetcher with sync and poll extraction
 Add to `tests/fetchers/test_crawl4ai.py`:
 
 ```python
-def test_crawl4ai_registered_in_registry():
-    """Registry must know about crawl4ai after the CLI import path."""
-    import sluice.fetchers.crawl4ai  # noqa — triggers @register_fetcher
+def test_crawl4ai_registered_via_cli_import_all():
+    """_import_all() (the CLI path) must register crawl4ai in the fetcher registry."""
+    from sluice.cli import _import_all
     from sluice.registry import get_fetcher
+    _import_all()
     cls = get_fetcher("crawl4ai")
     assert cls is Crawl4AIFetcher
 ```
 
-- [ ] **Step 2: Run to confirm it passes (the decorator already registers)**
+- [ ] **Step 2: Run to confirm it fails**
 
 ```bash
-uv run pytest tests/fetchers/test_crawl4ai.py::test_crawl4ai_registered_in_registry -v
+uv run pytest tests/fetchers/test_crawl4ai.py::test_crawl4ai_registered_via_cli_import_all -v
 ```
 
-Expected: PASS (the `@register_fetcher` decorator ran on import).
+Expected: FAIL — `crawl4ai` not in registry yet (cli.py import not updated).
 
 - [ ] **Step 3: Add crawl4ai to CLI explicit import**
 
@@ -923,16 +923,18 @@ Change to:
 from sluice.fetchers import trafilatura_fetcher, firecrawl, jina_reader, crawl4ai  # noqa
 ```
 
-- [ ] **Step 4: Verify CLI import path works**
+- [ ] **Step 4: Run the registry test — should now pass**
 
 ```bash
-uv run python -c "
-from sluice.cli import _import_all
-_import_all()
-from sluice.registry import get_fetcher
-cls = get_fetcher('crawl4ai')
-print('OK:', cls)
-"
+uv run pytest tests/fetchers/test_crawl4ai.py::test_crawl4ai_registered_via_cli_import_all -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 4b: CLI smoke test**
+
+```bash
+uv run python -c "from sluice.cli import _import_all; _import_all(); from sluice.registry import get_fetcher; print('OK:', get_fetcher('crawl4ai'))"
 ```
 
 Expected output: `OK: <class 'sluice.fetchers.crawl4ai.Crawl4AIFetcher'>`
