@@ -11,7 +11,7 @@
 
 {{ it.summary }}
 
-[原文]({{ it.url }}){% if it.published_at %} · {{ it.published_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+[原文]({{ it.url }}): {{ it.url }}{% if it.published_at %} · {{ it.published_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
 
 {% endfor %}
 

@@ -273,7 +273,7 @@ class TelegramSinkConfig(CommonSinkFields):
     chat_id: str = "env:TELEGRAM_CHAT_ID"
     brief_input: str | None = None
     items_input: Literal["items", "none"] = "items"
-    items_template: str = "{{ item.title }}\n{{ item.url }}"
+    items_template: str = "**{{ item.title }}**\n{{ item.url }}\n\n{{ item.summary or item.raw_summary or '' }}"
     split: Literal["per_item", "single"] = "per_item"
     link_preview_disabled: bool = True
     footer_template: str = ""
@@ -287,7 +287,7 @@ class FeishuSinkConfig(CommonSinkFields):
     secret: str | None = None
     brief_input: str | None = None
     items_input: Literal["items", "none"] = "items"
-    items_template: str = "{{ item.title }}\n{{ item.url }}"
+    items_template: str = "{{ item.title }}\n{{ item.url }}\n\n{{ item.summary or item.raw_summary or '' }}"
     split: Literal["per_item", "single"] = "per_item"
     message_type: Literal["post", "text", "interactive"] = "post"
     on_message_too_long: Literal["truncate", "fail", "split_more"] = "truncate"
@@ -338,7 +338,7 @@ class EmailSinkConfig(CommonSinkFields):
     subject_template: str = "{{ pipeline_id }} · {{ run_date }}"
     brief_input: str | None = None
     items_input: Literal["items", "none"] = "items"
-    items_template: str = "{{ item.title }}\n{{ item.url }}"
+    items_template: str = "{{ item.title }}\n{{ item.url }}\n\n{{ item.summary or item.raw_summary or '' }}"
     split: Literal["per_item", "single"] = "per_item"
     html_template: str = (
         "<html><head>{% if style_block %}<style>{{ style_block }}</style>{% endif %}</head>"
