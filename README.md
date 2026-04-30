@@ -5,15 +5,15 @@
 **Code-native, configurable information pipelines —
 the "code version of n8n" for RSS, LLMs, and Notion.**
 
-[![PyPI version](https://img.shields.io/pypi/v/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
-[![Python](https://img.shields.io/pypi/pyversions/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
+[![PyPI version](https://img.shields.io/pypi/v/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
+[![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
-[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-257%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
+[![Coverage](https://img.shields.io/badge/coverage-82%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
+[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
 
-[**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
+[**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice)
 
 </div>
 
@@ -42,6 +42,8 @@ RSS ───▶── │  Source  │──▶│ Stages  │──▶│  Ren
 - [Configuration](#configuration)
 - [Built-in plugins](#built-in-plugins)
 - [Operations & observability](#operations--observability)
+- [Docker deployment](#docker-deployment)
+- [CI/CD](#cicd)
 - [Roadmap](#roadmap)
 - [Development](#development)
 - [License](#license)
@@ -60,7 +62,7 @@ RSS ───▶── │  Source  │──▶│ Stages  │──▶│  Ren
 - **URL cache size cap**: configurable `max_rows` with LRU-style eviction.
 - **GC command**: `sluice gc` reclaims space from `failed_items`, `url_cache`, `attachment_mirror` + orphan file sweep.
 - **Metrics**: custom Prometheus collector + `sluice stats` + `sluice metrics-server` + `sluice deliveries` audit viewer.
-- **Lazy registry**: plugins register via lazy stubs so `pip install sluice` (no extras) keeps working.
+- **Lazy registry**: plugins register via lazy stubs so `pip install sluice-pipeline` (no extras) keeps working.
 
 ---
 
@@ -92,7 +94,21 @@ plain Python and TOML. No SaaS dependency, no GUI lock-in, no opaque webhooks.
 ### 1. Install
 
 ```bash
-pip install sluice
+# PyPI package is named sluice-pipeline (sluice was taken)
+# import and CLI command are still just "sluice"
+pip install sluice-pipeline
+
+# With push-channel sinks (Telegram / Feishu / Email)
+pip install "sluice-pipeline[channels]"
+
+# With Prometheus metrics
+pip install "sluice-pipeline[metrics]"
+
+# With HN Comments enricher
+pip install "sluice-pipeline[enrich-hn]"
+
+# Everything
+pip install "sluice-pipeline[all]"
 ```
 
 > Requires Python 3.11+. Bring your own [Notion integration token](https://developers.notion.com/docs/create-a-notion-integration)
@@ -693,6 +709,96 @@ prefect worker start --pool default # processes scheduled runs
 
 ---
 
+## Docker deployment
+
+Docker files live in [`scripts/docker/`](./scripts/docker/).
+
+### Standalone (no Prefect)
+
+Run a single pipeline execution and exit — good for cron-triggered containers or one-off runs.
+
+```bash
+cd scripts/docker
+
+# Copy your configs and .env into place
+cp -r ../../configs ./configs
+
+# Run once
+docker compose run --rm sluice run --pipeline ai_news
+
+# Dry-run
+docker compose run --rm sluice run --pipeline ai_news --dry-run
+
+# Validate configs
+docker compose run --rm sluice validate
+```
+
+`docker-compose.yml` mounts `./configs` (read-only) and `./data` (writable SQLite state).
+
+### With Prefect scheduler
+
+Start a local Prefect server + sluice worker that registers all enabled pipelines as scheduled deployments:
+
+```bash
+cd scripts/docker
+cp -r ../../configs ./configs
+
+docker compose -f docker-compose.prefect.yml up
+```
+
+- Prefect UI at **http://localhost:4200**
+- `sluice deploy` runs automatically on container start, registering all `cron`-enabled pipelines
+- Data volumes are persisted across restarts
+
+### Build your own image
+
+```bash
+# Build from repo root
+docker build -f scripts/docker/Dockerfile -t sluice:local .
+
+# Run
+docker run --rm \
+  -v $(pwd)/configs:/app/configs:ro \
+  -v $(pwd)/data:/app/data \
+  sluice:local run --pipeline ai_news
+```
+
+---
+
+## CI/CD
+
+GitHub Actions workflows live in [`.github/workflows/`](./.github/workflows/).
+
+### `ci.yml` — runs on every push and PR
+
+Matrix over Python 3.11 and 3.12:
+
+1. Install `uv` and dependencies (`uv sync --all-extras`)
+2. `ruff check .` — lint
+3. `ty check` — type check (0 errors)
+4. `pytest --cov` — 290 tests, 82% coverage
+
+### `publish.yml` — runs on `v*.*.*` tags
+
+Triggered by pushing a version tag (e.g. `git tag v0.2.0 && git push --tags`):
+
+1. Runs CI matrix
+2. `uv build` → `dist/`
+3. Publishes to PyPI via **OIDC trusted publishing** (no API token stored in secrets)
+
+**One-time PyPI setup:**
+
+1. Create a `pypi` environment in GitHub → Settings → Environments
+2. On PyPI → [sluice-pipeline](https://pypi.org/project/sluice-pipeline/) → Publishing → add a trusted publisher:
+   - Owner: `nerdneilsfield`
+   - Repository: `sluice`
+   - Workflow: `publish.yml`
+   - Environment: `pypi`
+
+After that, tagging a release is enough — no secret rotation needed.
+
+---
+
 ## Roadmap
 
 ✅ **v1 (now)** — RSS source, Notion sink, file_md sink, 6 processors, 4-tier
@@ -732,11 +838,11 @@ scheduling, SSRF guard.
 ```bash
 git clone https://github.com/nerdneilsfield/sluice
 cd sluice
-uv sync --all-extras                # or pip install -e '.[dev]'
-pytest                              # 257 tests
-pytest --cov=sluice                 # 81% coverage
+uv sync --all-extras                # or pip install -e '.[dev,all]'
+pytest -q                           # 290 tests
+pytest --cov=sluice                 # 82% coverage
 ruff check .
-ty check .
+ty check                            # 0 errors
 ```
 
 The architecture and design rationale live in

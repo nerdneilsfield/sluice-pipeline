@@ -1,0 +1,52 @@
+# Sluice — Prefect scheduling mode
+#
+# Starts a local Prefect server and a sluice worker that registers all enabled
+# pipelines as Prefect deployments, then serves them on their cron schedules.
+#
+# Usage:
+#   docker compose -f docker-compose.prefect.yml up
+#
+# Prefect UI will be available at http://localhost:4200
+#
+# To trigger a pipeline manually from the Prefect UI or CLI:
+#   prefect deployment run sluice-<pipeline_id>/sluice-<pipeline_id>
+
+services:
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    volumes:
+      # Persist Prefect's own SQLite state (flows, runs, deployments)
+      - prefect-data:/root/.prefect
+    environment:
+      TZ: UTC
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  sluice:
+    build:
+      context: ../../
+      dockerfile: scripts/docker/Dockerfile
+    # Register all enabled pipelines as Prefect deployments and serve them.
+    command: ["deploy", "--config-dir", "/app/configs"]
+    volumes:
+      # Mount your TOML config files (read-only)
+      - ./configs:/app/configs:ro
+      # Persist sluice SQLite state DB and output artifacts
+      - ./data:/app/data
+    environment:
+      TZ: UTC
+      # Point sluice (and Prefect client) at the local Prefect server
+      PREFECT_API_URL: http://prefect-server:4200/api
+    depends_on:
+      prefect-server:
+        condition: service_healthy
+
+volumes:
+  prefect-data:
