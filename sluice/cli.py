@@ -497,8 +497,9 @@ def deliveries(
         args.append(status)
     sql += " ORDER BY attempt_at DESC LIMIT 200"
     with closing(sqlite3.connect(db_path)) as c:
-        for row in c.execute(sql, args):
-            typer.echo(" | ".join(str(x) if x is not None else "-" for x in row))
+        with closing(c.execute(sql, args)) as cur:
+            for row in cur:
+                typer.echo(" | ".join(str(x) if x is not None else "-" for x in row))
 
 
 if __name__ == "__main__":
