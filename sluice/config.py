@@ -215,12 +215,16 @@ class EnrichStage(BaseModel):
     type: Literal["enrich"]
     name: str
     enricher: str
-    output_field: str
+    output_field: str = ""   # defaults to extras.<enricher> if omitted
     on_failure: Literal["skip", "fail"] = "skip"
     cache: bool = True
     max_chars: int = 8000
     concurrency: int = 4
     config: dict = Field(default_factory=dict)
+
+    def model_post_init(self, __context) -> None:
+        if not self.output_field:
+            object.__setattr__(self, "output_field", f"extras.{self.enricher}")
 
 
 StageConfig = Annotated[
