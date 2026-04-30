@@ -23,7 +23,6 @@ from sluice.config import (
     PipelineConfig,
     RssSourceConfig,
 )
-from sluice.core.errors import ConfigError
 from tests.conftest import make_ctx
 
 

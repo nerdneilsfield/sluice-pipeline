@@ -175,13 +175,17 @@ class TelegramSink(PushSinkBase):
             if md:
                 out.extend(_split_md_to_payloads(md, footer, self._too_long))
         items = ctx.items if self._items_input == "items" else []
+        total = len(items)
         if self._split == "single" and items:
-            parts = [self._tmpl.render(item=it, ctx=ctx) for it in items]
+            parts = [
+                self._tmpl.render(item=it, ctx=ctx, index=i, total=total)
+                for i, it in enumerate(items, 1)
+            ]
             combined = "\n\n".join(parts)
             out.extend(_split_md_to_payloads(combined, footer, self._too_long))
         else:
-            for it in items:
-                md = self._tmpl.render(item=it, ctx=ctx)
+            for i, it in enumerate(items, 1):
+                md = self._tmpl.render(item=it, ctx=ctx, index=i, total=total)
                 out.extend(_split_md_to_payloads(md, footer, self._too_long))
         return out
 

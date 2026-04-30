@@ -38,14 +38,19 @@ _TEMPLATE_EXTS = (".md", ".txt", ".j2", ".jinja2", ".css")
 
 def _resolve_template(root, value: str) -> str:
     if value.endswith(_TEMPLATE_EXTS):
-        p = (Path(root) if root is not None else Path(".")) / value
-        if p.is_file():
-            return p.read_text()
+        # Try config-root-relative first, then CWD-relative
+        candidates = [
+            (Path(root) if root is not None else Path(".")) / value,
+            Path(value),
+        ]
+        for p in candidates:
+            if p.is_file():
+                return p.read_text()
         from sluice.logging_setup import get_logger as _get_logger
-        _get_logger(__name__).bind(path=str(p), value=value).warning(
+        _get_logger(__name__).bind(path=str(candidates[0]), value=value).warning(
             "builders.template_file_not_found"
         )
-        return value  # fall back to literal path string as Jinja2 template
+        return value
     return value
 
 

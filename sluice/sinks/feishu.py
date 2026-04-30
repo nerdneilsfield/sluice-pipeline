@@ -322,15 +322,19 @@ class FeishuSink(PushSinkBase):
                     md = md + "\n\n" + footer
                 out.extend(self._emit_payload(md, ctx))
         items = ctx.items if self._items_input == "items" else []
+        total = len(items)
         if self._split == "single" and items:
-            parts = [self._tmpl.render(item=it, ctx=ctx) for it in items]
+            parts = [
+                self._tmpl.render(item=it, ctx=ctx, index=i, total=total)
+                for i, it in enumerate(items, 1)
+            ]
             combined = "\n\n".join(parts)
             if footer:
                 combined = combined + "\n\n" + footer
             out.extend(self._emit_payload(combined, ctx))
         else:
-            for it in items:
-                md = self._tmpl.render(item=it, ctx=ctx)
+            for i, it in enumerate(items, 1):
+                md = self._tmpl.render(item=it, ctx=ctx, index=i, total=total)
                 if footer:
                     md = md + "\n\n" + footer
                 out.extend(self._emit_payload(md, ctx))
