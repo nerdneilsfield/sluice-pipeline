@@ -41,7 +41,7 @@ rules = [{ field = "summary", op = "min_length", value = 50 }]
 [[stages]]
 name = "render"
 type = "render"
-template = "templates/daily.md.j2"
+template = "prompts/daily.md.j2"
 output_field = "context.markdown"
 
 [[sinks]]
