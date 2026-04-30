@@ -847,21 +847,20 @@ We ship sluice with the same workflows we use ourselves. Everything lives in
 
 ### `ci.yml` — runs on every push and PR
 
-Matrix over Python 3.11 and 3.12:
+Matrix over Python 3.11 through 3.14:
 
-1. Lockfile check + install (`uv lock --check`, `uv sync --all-extras --frozen`)
+1. Install dependencies (`uv sync --all-extras --frozen`)
 2. `ruff check .` — lint
 3. `ty check` — type check (0 errors)
-4. `pytest --cov` — 303 tests, 80% coverage
+4. `pytest -q`
 
 ### `publish.yml` — triggered on `v*.*.*` tags
 
 Push a version tag (`git tag v0.2.0 && git push --tags`) and the rest is automatic:
 
-1. CI matrix runs first
-2. Verifies the tag matches `pyproject.toml` version
-3. `uv build` → `dist/`
-4. Publishes to PyPI via **OIDC trusted publishing** — no API tokens, no secret rotation
+1. Verifies the tag matches `pyproject.toml` version
+2. `uv build` → `dist/`
+3. Publishes to PyPI via **OIDC trusted publishing** — no API tokens, no secret rotation
 
 **One-time PyPI setup:**
 

@@ -820,21 +820,20 @@ GitHub Actions 工作流在 [`.github/workflows/`](./.github/workflows/)。
 
 ### `ci.yml` —— 每次 push 和 PR 都跑
 
-Python 3.11 和 3.12 矩阵：
+Python 3.11 到 3.14 矩阵：
 
-1. 锁文件校验 + 安装依赖（`uv lock --check`、`uv sync --all-extras --frozen`）
+1. 安装依赖（`uv sync --all-extras --frozen`）
 2. `ruff check .` —— lint
 3. `ty check` —— 类型检查（0 错误）
-4. `pytest --cov` —— 303 个测试，80% 覆盖率
+4. `pytest -q`
 
 ### `publish.yml` —— 打 `v*.*.*` 标签时触发
 
 推个版本 tag（`git tag v0.2.0 && git push --tags`），剩下全自动：
 
-1. 先跑 CI 矩阵
-2. 校验 tag 版本跟 `pyproject.toml` 一致
-3. `uv build` → `dist/`
-4. 通过 **OIDC 可信发布**推上 PyPI —— 不需要 API token，不用轮换密钥
+1. 校验 tag 版本跟 `pyproject.toml` 一致
+2. `uv build` → `dist/`
+3. 通过 **OIDC 可信发布**推上 PyPI —— 不需要 API token，不用轮换密钥
 
 **一次性 PyPI 配置：**
 
