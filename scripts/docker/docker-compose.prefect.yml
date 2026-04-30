@@ -4,6 +4,8 @@
 # pipelines as Prefect deployments, then serves them on their cron schedules.
 #
 # Usage:
+#   cp .env.example .env
+#   $EDITOR .env
 #   docker compose -f docker-compose.prefect.yml up
 #
 # Prefect UI will be available at http://localhost:4200
@@ -15,24 +17,35 @@ services:
   prefect-server:
     image: prefecthq/prefect:3-latest
     command: prefect server start --host 0.0.0.0
+    env_file:
+      - .env
     ports:
       - "4200:4200"
     volumes:
       # Persist Prefect's own SQLite state (flows, runs, deployments)
       - prefect-data:/root/.prefect
     environment:
-      TZ: UTC
+      TZ: ${TZ:-UTC}
+      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?Set PREFECT_AUTH_STRING in scripts/docker/.env}
+      PREFECT_UI_API_URL: ${PREFECT_UI_API_URL:-http://localhost:4200/api}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import base64, os, urllib.request;
+          req = urllib.request.Request('http://localhost:4200/api/health');
+          auth = os.environ.get('PREFECT_SERVER_API_AUTH_STRING');
+          req.add_header('Authorization', 'Basic ' + base64.b64encode(auth.encode()).decode()) if auth else None;
+          urllib.request.urlopen(req)"
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
 
   sluice:
-    build:
-      context: ../../
-      dockerfile: scripts/docker/Dockerfile
+    image: ${SLUICE_IMAGE:-ghcr.io/nerdneilsfield/sluice-pipeline:latest}
+    env_file:
+      - .env
     # Register all enabled pipelines as Prefect deployments and serve them.
     command: ["deploy", "--config-dir", "/app/configs"]
     volumes:
@@ -41,9 +54,10 @@ services:
       # Persist sluice SQLite state DB and output artifacts
       - ./data:/app/data
     environment:
-      TZ: UTC
+      TZ: ${TZ:-UTC}
       # Point sluice (and Prefect client) at the local Prefect server
-      PREFECT_API_URL: http://prefect-server:4200/api
+      PREFECT_API_URL: ${PREFECT_API_URL:-http://prefect-server:4200/api}
+      PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?Set PREFECT_AUTH_STRING in scripts/docker/.env}
     depends_on:
       prefect-server:
         condition: service_healthy

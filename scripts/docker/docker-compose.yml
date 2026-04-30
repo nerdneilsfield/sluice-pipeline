@@ -4,6 +4,8 @@
 # Mount your TOML configs into /app/configs and persist state under /app/data.
 #
 # Usage:
+#   cp .env.example .env
+#   $EDITOR .env
 #   docker compose run --rm sluice run my_pipeline
 #
 # Override the pipeline at the command line:
@@ -17,9 +19,9 @@
 
 services:
   sluice:
-    build:
-      context: ../../
-      dockerfile: scripts/docker/Dockerfile
+    image: ${SLUICE_IMAGE:-ghcr.io/nerdneilsfield/sluice-pipeline:latest}
+    env_file:
+      - .env
     # Default command: run a single pipeline. Override with `docker compose run`.
     command: ["run", "my_pipeline"]
     volumes:
@@ -28,4 +30,4 @@ services:
       # Persist SQLite state DB and any output artifacts
       - ./data:/app/data
     environment:
-      TZ: UTC
+      TZ: ${TZ:-UTC}

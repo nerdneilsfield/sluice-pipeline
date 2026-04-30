@@ -13,5 +13,7 @@ configs/pipelines/*.toml
 
 configs_test/
 
+scripts/docker/.env
+
 docs/SLUICE_V1.1_PHASE5-6_REVIEW_REPORT.md
 docs/SLUICE_V1_1_PHASE3_4_REVIEW.md
