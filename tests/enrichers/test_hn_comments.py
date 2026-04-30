@@ -32,15 +32,24 @@ async def test_skip_non_hn_url():
 @pytest.mark.asyncio
 @respx.mock
 async def test_fetches_and_parses(tmp_path):
-    assert FIXTURE.exists(), "fixture must be committed; not optional"
-    respx.get("https://www.hckrnws.com/stories/47908051").mock(
-        return_value=Response(
-            200, content=FIXTURE.read_bytes(), headers={"content-type": "text/html"}
-        )
+    # Primary path: Firebase API
+    item_data = {"id": 47908051, "kids": [111, 222]}
+    comment_111 = {"id": 111, "by": "alice", "text": "Great article about oil."}
+    comment_222 = {"id": 222, "by": "bob", "text": "Really interesting read."}
+
+    respx.get("https://hacker-news.firebaseio.com/v0/item/47908051.json").mock(
+        return_value=Response(200, json=item_data)
     )
+    respx.get("https://hacker-news.firebaseio.com/v0/item/111.json").mock(
+        return_value=Response(200, json=comment_111)
+    )
+    respx.get("https://hacker-news.firebaseio.com/v0/item/222.json").mock(
+        return_value=Response(200, json=comment_222)
+    )
+
     e = HnCommentsEnricher()
     out = await e.enrich(_it("https://news.ycombinator.com/item?id=47908051"))
-    assert out is not None and len(out) > 0
+    assert out is not None and "alice" in out and "bob" in out
 
 
 @pytest.mark.asyncio

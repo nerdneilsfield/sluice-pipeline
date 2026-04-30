@@ -269,10 +269,16 @@ def build_processors(
                 )
             )
         elif isinstance(st, EnrichStage):
+            import inspect
+
             from sluice.processors.enrich import EnrichProcessor
 
             enricher_cls = get_enricher(st.enricher)
-            enricher = enricher_cls(**st.config)
+            cfg = dict(st.config)
+            sig = inspect.signature(enricher_cls.__init__)
+            if fetcher_chain is not None and "chain" in sig.parameters:
+                cfg["chain"] = fetcher_chain
+            enricher = enricher_cls(**cfg)
             procs.append(
                 EnrichProcessor(
                     name=st.name,

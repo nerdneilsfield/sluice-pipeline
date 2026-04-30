@@ -1,23 +1,23 @@
+from __future__ import annotations
+
 import asyncio
 import re
 import time
+from typing import TYPE_CHECKING
 
 import httpx
 
 from sluice.core.item import Item
-from sluice.enrichers.hn_parser import (
-    EnricherParseError,
-    parse_hn_api_items,
-    parse_hn_official,
-    parse_hn_thread,
-)
+from sluice.enrichers.hn_parser import EnricherParseError, parse_hn_api_items
 from sluice.logging_setup import get_logger
+
+if TYPE_CHECKING:
+    from sluice.fetchers.chain import FetcherChain
 
 log = get_logger(__name__)
 
 _HN_API = "https://hacker-news.firebaseio.com/v0"
 _HN_OFFICIAL = "https://news.ycombinator.com"
-_HCKRNWS = "https://www.hckrnws.com"
 
 
 class _HostBucket:
@@ -42,16 +42,15 @@ class HnCommentsEnricher:
         self,
         *,
         url_pattern: str = r"news\.ycombinator\.com/item\?id=(\d+)",
-        base_url: str = _HCKRNWS,
         request_delay_seconds: float = 2.0,
         top_comments: int = 20,
-        chain=None,  # accepted for API compat, not used
+        chain: FetcherChain | None = None,
     ):
         self._pattern = re.compile(url_pattern)
-        self._base = base_url.rstrip("/")
         self._top = top_comments
         self._buckets: dict[str, _HostBucket] = {}
         self._delay = request_delay_seconds
+        self._chain = chain
         self._client = httpx.AsyncClient(timeout=20.0)
 
     def _bucket_for(self, host: str) -> _HostBucket:
@@ -62,16 +61,15 @@ class HnCommentsEnricher:
     async def close(self):
         await self._client.aclose()
 
-    async def _get(self, url: str) -> httpx.Response:
+    async def _get_json(self, url: str) -> dict:
         await self._bucket_for(httpx.URL(url).host).acquire()
         resp = await self._client.get(url)
         resp.raise_for_status()
-        return resp
+        return resp.json()
 
     async def _fetch_via_api(self, item_id: str) -> str:
-        """Primary: HN Firebase API — structured JSON, no HTML parsing needed."""
-        resp = await self._get(f"{_HN_API}/item/{item_id}.json")
-        data = resp.json()
+        """Primary: HN Firebase API — structured JSON, author + text."""
+        data = await self._get_json(f"{_HN_API}/item/{item_id}.json")
         if not data:
             raise EnricherParseError(f"hn api: item {item_id} not found")
         kids = data.get("kids", [])
@@ -80,23 +78,22 @@ class HnCommentsEnricher:
 
         async def fetch_comment(kid_id: int) -> dict:
             try:
-                r = await self._get(f"{_HN_API}/item/{kid_id}.json")
-                return r.json() or {}
+                return await self._get_json(f"{_HN_API}/item/{kid_id}.json") or {}
             except Exception:
                 return {}
 
         items = await asyncio.gather(*[fetch_comment(k) for k in kids[: self._top]])
         return parse_hn_api_items(list(items), top_n=self._top)
 
-    async def _fetch_via_hckrnws(self, item_id: str) -> str:
-        """Fallback 1: hckrnws reader page (server-side rendered)."""
-        resp = await self._get(f"{self._base}/stories/{item_id}")
-        return parse_hn_thread(resp.text, top_n=self._top)
-
-    async def _fetch_via_official(self, item_id: str) -> str:
-        """Fallback 2: official HN item page."""
-        resp = await self._get(f"{_HN_OFFICIAL}/item?id={item_id}")
-        return parse_hn_official(resp.text, top_n=self._top)
+    async def _fetch_via_chain(self, item_id: str) -> str:
+        """Fallback: use fetcher chain to extract text from the official HN page."""
+        if self._chain is None:
+            raise EnricherParseError("hn chain: no fetcher chain configured")
+        url = f"{_HN_OFFICIAL}/item?id={item_id}"
+        text = await self._chain.fetch(url)
+        if not text or len(text) < 50:
+            raise EnricherParseError(f"hn chain: too short ({len(text or '')} chars)")
+        return text
 
     async def enrich(self, item: Item) -> str | None:
         candidate = item.url or ""
@@ -112,8 +109,7 @@ class HnCommentsEnricher:
 
         attempts = [
             ("api", self._fetch_via_api),
-            ("hckrnws", self._fetch_via_hckrnws),
-            ("official", self._fetch_via_official),
+            ("chain", self._fetch_via_chain),
         ]
         last_exc: Exception | None = None
         for source, fn in attempts:
