@@ -6,9 +6,9 @@ on:
       - "v*.*.*"
     branches: [master]
 
-# Emit "latest" on master push; versioned tags on v* tags.
-# We push to two Docker Hub namespaces (nerdneilsfield + nerdneils)
-# and also to GHCR (free, OIDC — no extra secrets).
+# Push to two registries on every v*.*.* tag or master push:
+#   - ghcr.io/nerdneilsfield/sluice-pipeline  (GITHUB_TOKEN, no extra secret)
+#   - nerdneils/sluice-pipeline               (secret: DOCKERHUB_TOKEN)
 
 jobs:
   docker:
@@ -17,7 +17,7 @@ jobs:
 
     permissions:
       contents: read
-      packages: write   # needed for GHCR push via OIDC
+      packages: write   # required for GHCR push via OIDC
 
     steps:
       - uses: actions/checkout@v4
@@ -34,34 +34,18 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # We'll apply the same tag set to all three registries below.
           images: |
-            nerdneilsfield/sluice-pipeline
-            nerdneils/sluice-pipeline
             ghcr.io/nerdneilsfield/sluice-pipeline
+            nerdneils/sluice-pipeline
           tags: |
-            # v1.2.3  → 1.2.3 + 1.2 + 1 + latest
+            # v1.2.3 → 1.2.3 + 1.2 + 1 + latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             # master branch → edge
             type=edge,branch=master
 
-      # ── Log in to Docker Hub (nerdneilsfield) ────────────────────────────
-      - name: Login to Docker Hub (nerdneilsfield)
-        uses: docker/login-action@v3
-        with:
-          username: nerdneilsfield
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      # ── Log in to Docker Hub (nerdneils) ─────────────────────────────────
-      - name: Login to Docker Hub (nerdneils)
-        uses: docker/login-action@v3
-        with:
-          username: nerdneils
-          password: ${{ secrets.DOCKERHUB_TOKEN_NERDNEILS }}
-
-      # ── Log in to GHCR (uses built-in GITHUB_TOKEN) ──────────────────────
+      # ── Log in to GHCR (uses built-in GITHUB_TOKEN, no secret needed) ────
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -69,7 +53,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Build once, push to all three registries ─────────────────────────
+      # ── Log in to Docker Hub (nerdneils) ─────────────────────────────────
+      - name: Login to Docker Hub (nerdneils)
+        uses: docker/login-action@v3
+        with:
+          username: nerdneils
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Build once, push to both registries ──────────────────────────────
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -79,6 +70,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Layer cache from GHCR (free, no extra secret)
+          # Layer cache stored on GHCR — free, no extra secret
           cache-from: type=registry,ref=ghcr.io/nerdneilsfield/sluice-pipeline:buildcache
           cache-to: type=registry,ref=ghcr.io/nerdneilsfield/sluice-pipeline:buildcache,mode=max
