@@ -764,6 +764,8 @@ you're deploying to a VPS, a home server, or a cron-triggered cloud function,
 containers make life simpler. Here are the two paths.
 
 Docker files live in [`scripts/docker/`](./scripts/docker/).
+The compose files use the published GHCR image by default. Set `SLUICE_IMAGE`
+in `scripts/docker/.env` to pin a version for production.
 
 ### Path A: Standalone — run once, exit
 
@@ -775,6 +777,8 @@ cd scripts/docker
 
 # Copy your configs and .env into place
 cp -r ../../configs ./configs
+cp .env.example .env
+$EDITOR .env
 
 # Run once
 docker compose run --rm sluice run ai_news
@@ -800,6 +804,8 @@ inspect, a UI for retries and debugging.
 ```bash
 cd scripts/docker
 cp -r ../../configs ./configs
+cp .env.example .env
+$EDITOR .env
 
 docker compose -f docker-compose.prefect.yml up
 ```

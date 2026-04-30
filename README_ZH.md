@@ -741,6 +741,8 @@ Prefect 完全可选。先拿 cron 试试水，想要可视化的时候加 `slui
 NAS、或者 Kubernetes CronJob 的时候，容器会让事情简单很多。下面两条路。
 
 Docker 配置在 [`scripts/docker/`](./scripts/docker/) 目录。
+compose 文件默认使用已经发布的 GHCR 镜像。生产环境建议在
+`scripts/docker/.env` 里设置 `SLUICE_IMAGE` 来固定版本。
 
 ### 路径 A：单次执行 —— 跑完就退
 
@@ -752,6 +754,8 @@ cd scripts/docker
 
 # 把配置和 .env 拷进来
 cp -r ../../configs ./configs
+cp .env.example .env
+$EDITOR .env
 
 # 跑一次
 docker compose run --rm sluice run ai_news
@@ -775,6 +779,8 @@ pipeline、退出。不需要常驻进程，不绑端口，没有状态。
 ```bash
 cd scripts/docker
 cp -r ../../configs ./configs
+cp .env.example .env
+$EDITOR .env
 
 docker compose -f docker-compose.prefect.yml up
 ```
