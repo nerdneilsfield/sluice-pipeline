@@ -68,4 +68,9 @@ class HnCommentsEnricher:
         await self._bucket_for(httpx.URL(target).host).acquire()
         resp = await self._client.get(target)
         resp.raise_for_status()
-        return parse_hn_thread(resp.text, top_n=self._top)
+        result = parse_hn_thread(resp.text, top_n=self._top)
+        preview = result[:200].replace("\n", " ") if result else "(empty)"
+        log.bind(item_id=item_id, chars=len(result) if result else 0, preview=preview).debug(
+            "hn_comments.fetched"
+        )
+        return result
