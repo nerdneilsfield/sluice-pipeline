@@ -1,3 +1,4 @@
+import re
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
@@ -8,6 +9,10 @@ from sluice.context import PipelineContext
 from sluice.sinks._email_render import render_to_html
 from sluice.sinks._markdown_ast import parse_markdown
 from sluice.sinks._push_base import PushBatchItem, PushSinkBase
+
+# Pre-process non-standard bullet (U+00B7) into standard Markdown "-" so
+# markdown-it renders them as real <ul>/<li> lists in HTML emails.
+_BULLET_RE = re.compile(r"^[ \t]*·[ \t]", re.MULTILINE)
 
 
 def _smtp_tls_kwargs(port: int, starttls: bool) -> dict:
@@ -118,9 +123,10 @@ class EmailSink(PushSinkBase):
             brief = ctx.context.get(key)
             if brief:
                 parts.append(brief)
-        for it in items:
-            parts.append(self._items_tmpl.render(item=it, ctx=ctx))
-        md = "\n\n".join(parts)
+        total = len(items)
+        for i, it in enumerate(items, 1):
+            parts.append(self._items_tmpl.render(item=it, ctx=ctx, index=i, total=total))
+        md = _BULLET_RE.sub("- ", "\n\n".join(parts))
         body_html = render_to_html(parse_markdown(md))
         return self._html_tmpl.render(
             body_html=body_html,
@@ -135,15 +141,16 @@ class EmailSink(PushSinkBase):
         out = []
         items = ctx.items if self._items_input == "items" else []
         if self._split == "per_item" and items:
-            for it in items:
+            total = len(items)
+            for i, it in enumerate(items, 1):
                 parts: list[str] = []
                 if self._brief_input and self._brief_input.startswith("context."):
                     key = self._brief_input.split(".", 1)[1]
                     brief = ctx.context.get(key)
                     if brief:
                         parts.append(brief)
-                parts.append(self._items_tmpl.render(item=it, ctx=ctx))
-                md = "\n\n".join(parts)
+                parts.append(self._items_tmpl.render(item=it, ctx=ctx, index=i, total=total))
+                md = _BULLET_RE.sub("- ", "\n\n".join(parts))
                 body_html = render_to_html(parse_markdown(md))
                 html = self._html_tmpl.render(
                     body_html=body_html,
