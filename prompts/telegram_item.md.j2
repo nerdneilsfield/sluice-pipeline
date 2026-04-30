@@ -2,3 +2,8 @@
 {{ item.url }}
 
 {{ item.summary or item.raw_summary or "(无摘要)" }}
+{% if item.extras.hn_comments %}
+
+💬 HN 讨论
+{{ item.extras.hn_comments }}
+{% endif %}
