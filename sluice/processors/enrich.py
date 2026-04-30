@@ -56,6 +56,13 @@ class EnrichProcessor:
                 except Exception as exc:
                     if self._on_failure == "fail":
                         raise
+                    log.bind(
+                        stage=self.name,
+                        enricher=self._enricher.name,
+                        item_key=item_key(item),
+                        error_class=type(exc).__name__,
+                        error=str(exc),
+                    ).warning("enrich.item_skipped")
                     if self._failures is not None:
                         try:
                             await self._failures.record(
