@@ -170,7 +170,7 @@ truncate_strategy = "head_tail"        # "head_tail" | "head" | "error"
 
 Network errors, rate-limit errors, and provider-exhausted errors from the LLM call are treated as per-item failures and apply the same `on_parse_error` policy. In dry-run mode, these failures are only logged and do not write to `failed_items`.
 
-`score_tag` respects both `RunBudget.max_llm_calls` and `RunBudget.max_usd`. The cost preflight logs projected call count and estimated USD before starting, identical to `llm_stage`.
+`score_tag` respects `RunBudget.max_calls` and `RunBudget.max_usd`, as initialised from pipeline limits `max_llm_calls_per_run` and `max_estimated_cost_usd`. The cost preflight logs projected call count and estimated USD before starting, identical to `llm_stage`.
 
 ### LLM Output Contract
 
@@ -211,7 +211,7 @@ The LLM must return a JSON object:
 | `"fail"` | Item is recorded in `failed_items` and removed from `ctx.items`. In dry-run: logged only, not written. |
 | `"default"` | `default_score` (clamped int) and `default_tags` (cleaned list) are applied. |
 
-This policy applies to both parse failures and LLM call failures. One item's failure never affects other items in the batch.
+This policy applies to parse failures, LLM call failures, and truncate errors. The parameter is named `on_parse_error` for config simplicity, but it governs all per-item `score_tag` failures. One item's failure never affects other items in the batch.
 
 ### Output Fields
 
@@ -316,5 +316,5 @@ type = "dedupe"
 - `score_tag` `truncate_strategy = "error"` triggers `on_parse_error` at runtime (not a load-time error).
 - `score_tag` `tags_merge = "append"` preserves original tag order then appends new, case-sensitive exact dedup.
 - `score_tag` `tags_merge = "replace"` deduplicates new tags in received order before overwriting.
-- `score_tag` respects both `RunBudget.max_llm_calls` and `RunBudget.max_usd`.
+- `score_tag` respects `RunBudget.max_calls` and `RunBudget.max_usd` (from `max_llm_calls_per_run` and `max_estimated_cost_usd`).
 - No new pip dependencies introduced by `cross_dedupe` or `html_strip`.
