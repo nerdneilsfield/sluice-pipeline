@@ -167,17 +167,39 @@ max_block_chars = 1900
 # on_message_too_long = "split_more"
 # emit_on_empty    = false
 
-# ── Feishu push sink (optional) ──────────────────────────────────────────────
+# ── Feishu — Webhook mode (optional) ─────────────────────────────────────────
+# Simplest setup: group admin creates an incoming webhook, no app install needed.
 # Uncomment and set FEISHU_WEBHOOK_URL to enable.
 #
 # [[sinks]]
-# id           = "feishu_digest"
+# id           = "feishu_webhook"
 # type         = "feishu"
+# auth_mode    = "webhook"                      # default, can be omitted
 # webhook_url  = "env:FEISHU_WEBHOOK_URL"
 # secret       = "env:FEISHU_WEBHOOK_SECRET"   # remove if webhook has no signing
 # message_type = "post"                         # "post" | "text" | "interactive"
-# items_template  = "prompts/feishu_item.md.j2"
-# footer_template = "📅 {{ run_date }} | sluice"
+# items_template   = "prompts/feishu_item.md.j2"
+# footer_template  = "📅 {{ run_date }} | sluice"
 # split            = "per_item"
 # on_message_too_long = "truncate"
+# emit_on_empty    = false
+
+# ── Feishu — Bot API mode (optional) ─────────────────────────────────────────
+# Richer mode: sends Markdown auto-converted to Feishu post JSON.
+# Supports DM, any group by chat_id/open_id, no webhook required.
+# Requires a Feishu app with im:message:send_as_bot permission.
+#
+# [[sinks]]
+# id              = "feishu_bot"
+# type            = "feishu"
+# auth_mode       = "bot_api"
+# app_id          = "env:FEISHU_APP_ID"
+# app_secret      = "env:FEISHU_APP_SECRET"
+# receive_id      = "env:FEISHU_CHAT_ID"
+# receive_id_type = "chat_id"                   # "chat_id" | "open_id" | "user_id" | "email"
+# message_type    = "post"                      # "post" | "text"  (interactive not supported)
+# items_template   = "prompts/feishu_item.md.j2"
+# footer_template  = "📅 {{ run_date }} | sluice"
+# split            = "per_item"
+# on_message_too_long = "split_more"
 # emit_on_empty    = false
