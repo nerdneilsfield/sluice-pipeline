@@ -152,3 +152,22 @@ def test_email_style_block_file_injected_end_to_end(tmp_path):
 def test_resolve_template_missing_file_without_root_falls_back_to_value():
     result = _resolve_template(None, "missing.md")
     assert result == "missing.md"
+
+
+def test_resolve_api_headers_resolves_env_values(monkeypatch):
+    """_resolve_api_headers substitutes env: prefixed values."""
+    from sluice.builders import _resolve_api_headers
+
+    monkeypatch.setenv("TEST_TOKEN", "secret-value")
+    result = _resolve_api_headers({
+        "Authorization": "env:TEST_TOKEN",
+        "X-Static": "literal",
+    })
+    assert result == {"Authorization": "secret-value", "X-Static": "literal"}
+
+
+def test_resolve_api_headers_passthrough_non_env():
+    from sluice.builders import _resolve_api_headers
+
+    result = _resolve_api_headers({"Authorization": "Bearer abc"})
+    assert result == {"Authorization": "Bearer abc"}
