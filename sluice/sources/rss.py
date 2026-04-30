@@ -49,7 +49,7 @@ class RssSource:
                 text = r.text
         except Exception:
             log.bind(source_id=self.source_id, url=self.url).exception("rss.fetch_failed")
-            raise
+            return
         feed = feedparser.parse(text)
         entries = list(feed.entries)
         skipped_future = 0
