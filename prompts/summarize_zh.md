@@ -17,7 +17,7 @@
 {% if item.extras.hn_comments %}
 
 HN 社区热门评论（可参考社区观点，但以正文为主）：
-{% for c in item.extras.hn_comments[:5] %}
+{% for c in item.extras.hn_comments[:10] %}
 - [{{ c.author }}] {{ c.text | truncate(200) }}
 {% endfor %}
 {% endif %}

@@ -116,10 +116,12 @@ type  = "limit"
 top_n = 20
 sort_by = "published_at"
 
-# Enrich items that originated from HN with comment threads (optional).
+# Enrich items with HN comment threads (optional).
 # Requires: pip install "sluice-pipeline[enrich-hn]"
 # Comments land in item.extras.hn_comments (list of dicts with author/text/score).
-# Only items whose URL contains "news.ycombinator.com" are enriched; others skip.
+# Items are matched by url_pattern (default: news.ycombinator.com/item?id=...).
+# Non-matching items are silently skipped — safe to add even in mixed pipelines.
+# Tip: add an HN RSS source (e.g. https://hnrss.org/frontpage) alongside others.
 #
 # [[stages]]
 # name    = "hn_comments"
