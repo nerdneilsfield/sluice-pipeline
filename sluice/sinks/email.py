@@ -156,6 +156,7 @@ class EmailSink(PushSinkBase):
                 msg["From"] = self._from
                 msg["To"] = r
                 msg["Subject"] = subject
+                msg["Message-ID"] = make_msgid()
                 msg.set_content("HTML email — please view in an HTML-capable client.")
                 msg.add_alternative(html, subtype="html")
                 out.append(PushBatchItem(kind="recipient", payload=msg, recipient=r))
