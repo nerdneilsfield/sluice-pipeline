@@ -116,6 +116,20 @@ type  = "limit"
 top_n = 20
 sort_by = "published_at"
 
+# Enrich items that originated from HN with comment threads (optional).
+# Requires: pip install "sluice-pipeline[enrich-hn]"
+# Comments land in item.extras.hn_comments (list of dicts with author/text/score).
+# Only items whose URL contains "news.ycombinator.com" are enriched; others skip.
+#
+# [[stages]]
+# name    = "hn_comments"
+# type    = "enrich"
+# enricher = "hn_comments"
+#
+# [stages.enricher_config]
+# max_comments   = 20     # top-level comments to fetch per item
+# delay_seconds  = 10.0   # pause between requests to avoid rate-limiting
+
 [[stages]]
 name = "daily_analysis"
 type         = "llm_stage"
