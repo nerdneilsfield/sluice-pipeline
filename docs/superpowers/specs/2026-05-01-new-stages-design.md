@@ -19,7 +19,7 @@ These stages are independent of each other and of existing stages. They each fol
 The existing runner executes all processors in dry-run mode; only sink emission, `seen_items` writes, and `failed_items` writes are skipped. Therefore:
 
 - `cross_dedupe` and `html_strip` run normally in dry-run (they are pure in-memory transformations).
-- `score_tag` also runs in dry-run and makes real LLM calls. If you want to skip LLM calls during dry-run, use the pipeline's `--dry-run` flag only for sink testing and run `score_tag` in a separate non-dry-run pass, or comment out the stage during dry-runs.
+- `score_tag` also runs in dry-run and makes real LLM calls. If you want to skip LLM calls during dry-run, comment out the stage.
 
 ## Non-Goals
 
@@ -28,6 +28,7 @@ The existing runner executes all processors in dry-run mode; only sink emission,
 - No HTML rendering or sanitisation for email in html_strip (that lives in the email sink).
 - No cluster stage in this spec (separate design).
 - No changes to the sink layer, state schema, or fetcher chain.
+- No implicit parse retry in score_tag. Parse failures go directly to `on_parse_error` policy.
 
 ---
 
@@ -55,12 +56,14 @@ merge_tags = true                   # merge tags from dropped items into kept it
 Two rounds, all in memory, no database access:
 
 **Round 1 — URL match:**
-Build a dict keyed by `item.url` (already canonicalised by the RSS source). When multiple items share the same URL, keep the one whose `source_id` appears earliest in `source_priority`, and merge tags from the dropped items if `merge_tags = true`. If no `source_priority` is set, keep the first item in list order.
+Build a dict keyed by `item.url`. Only items with a **non-empty** URL participate in this round; items with `item.url == ""` are passed through to Round 2 unchanged. When multiple items share the same URL, keep the one whose `source_id` appears earliest in `source_priority`, and merge tags from the dropped items if `merge_tags = true`. If no `source_priority` is set, keep the first item in list order.
 
 **Round 2 — Title similarity:**
-For items that survived Round 1, iterate in list order. For each unprocessed item, find all subsequent items whose `difflib.SequenceMatcher(None, a.title.lower(), b.title.lower()).ratio()` ≥ `title_similarity_threshold`. All matching items form one group with the current item as anchor. Keep the anchor (or the source_priority winner within the group), drop and optionally merge tags from the rest. Continue to the next unprocessed item.
+For items that survived Round 1, iterate in list order. Items with an **empty title** are skipped entirely for similarity comparison (an empty string would score `ratio = 1.0` against any other empty title). For each unprocessed item with a non-empty title, find all subsequent unprocessed items whose `difflib.SequenceMatcher(None, a.title.lower(), b.title.lower()).ratio()` ≥ `title_similarity_threshold`. All matching items form one group with the current item as anchor. Keep the anchor (or the source_priority winner within the group), drop and optionally merge tags from the rest. Continue to the next unprocessed item.
 
-This is a **greedy pairwise** approach, not transitive closure. If A~B and B~C but A!~C, then A's group captures B (and B is dropped), but C is compared only against remaining items. This avoids accidental over-merging of loosely related articles.
+**Tag merge order (both rounds):** When merging tags from a dropped item into the kept item, append tags in the dropped item's original order, skipping exact duplicates (case-sensitive). The kept item's original tags come first.
+
+This is a **greedy pairwise** approach, not transitive closure. If A~B and B~C but A!~C, then A's group captures B (and B is dropped), but C is compared only against remaining items.
 
 **Output order:** The output list preserves the relative order of kept items from the original batch.
 
@@ -68,9 +71,9 @@ This is a **greedy pairwise** approach, not transitive closure. If A~B and B~C b
 
 ### Error Handling
 
-- Items with empty `url` and empty `title` are passed through unchanged.
+- Items with empty `url` skip Round 1; items with empty `title` skip Round 2. Both pass through unchanged.
 - A `title_similarity_threshold` outside `[0.0, 1.0]` raises `ConfigError` at load time.
-- `source_priority` entries that don't match any item's `source_id` are silently ignored (not an error — the pipeline may not always have all sources active).
+- `source_priority` entries that don't match any item's `source_id` are silently ignored.
 
 ---
 
@@ -87,13 +90,13 @@ Some RSS feeds embed HTML in `raw_summary` or other fields. `html_strip` convert
 name = "strip_html"
 type = "html_strip"
 fields = ["raw_summary", "fulltext"]
-# Supported field paths:
+# Valid field paths:
 #   top-level Item field:  "raw_summary", "title", "fulltext"
-#   one-level extras key:  "extras.body", "extras.description"
-# Deeper nesting is not supported.
+#   one-level extras key:  "extras.body"
+# Invalid: "extras.a.b", "foo.bar" → ConfigError at load time
 ```
 
-`fields` is required and must be non-empty. Dot-path is supported for exactly one level of `extras.<key>`. Deeper nesting is not supported and will raise `ConfigError` at load time.
+`fields` is required and must be non-empty. The only valid dotted path form is `extras.<key>` (exactly one dot). Any other dotted path — including `foo.bar` or `extras.a.b` — raises `ConfigError` at load time.
 
 ### Conversion Rules (per field, per item)
 
@@ -121,7 +124,7 @@ The converter subclasses `html.parser.HTMLParser` with the following behaviour:
 ### Error Handling
 
 - A field path that does not exist on the item is silently skipped.
-- `ConfigError` at load time if `fields` is empty or a dot-path has more than one level.
+- `ConfigError` at load time if `fields` is empty, or if any path is dotted but not in the form `extras.<key>`.
 
 ---
 
@@ -131,7 +134,7 @@ The converter subclasses `html.parser.HTMLParser` with the following behaviour:
 
 A single LLM call per item that writes a 1–10 relevance score and a list of topic tags. Downstream stages can filter on `extras.score` or render `item.tags`. Combining score and tags in one call halves LLM cost compared to two separate `llm_stage` stages.
 
-`score_tag` is a specialised sibling of `llm_stage` with a fixed JSON output parser and per-item parse-error handling. Unlike `llm_stage` (which fails the whole stage on a parse error), `score_tag` handles parse failures per item.
+`score_tag` is a specialised sibling of `llm_stage` with a fixed JSON output parser and per-item error handling. Parse failures and LLM call failures are both handled per item.
 
 ### Configuration
 
@@ -145,22 +148,33 @@ model          = "glm/glm-4-flash"
 fallback_model = "deepseek/deepseek-chat"
 workers        = 8                       # parallel LLM calls (semaphore); same as llm_stage
 timeout        = 60
-score_field    = "score"                 # key in item.extras; default "score"
+score_field    = "score"                 # key name in item.extras; must be non-empty, no dot
 tags_merge     = "append"               # "append" | "replace"
-on_parse_error    = "skip"              # "skip" | "fail" | "default"
-default_score     = 5                   # used when on_parse_error = "default"
-default_tags      = []                  # used when on_parse_error = "default"
+on_parse_error = "skip"                 # "skip" | "fail" | "default"
+default_score  = 5                      # used when on_parse_error = "default"
+default_tags   = []                     # used when on_parse_error = "default"
 max_input_chars   = 8000               # truncate input field before sending to LLM
-truncate_strategy = "head_tail"        # "head_tail" | "head" | "error"; matches llm_stage
+truncate_strategy = "head_tail"        # "head_tail" | "head" | "error"
 ```
 
-`concurrency` is not a parameter. Worker parallelism is controlled solely by `workers`, consistent with the existing `llm_stage` implementation.
+`concurrency` is not a parameter — worker parallelism is `workers` only.
 
-`max_input_chars` and `truncate_strategy` mirror the `llm_stage` contract: the value of `input_field` is truncated to `max_input_chars` characters before being passed to the prompt template. `"head_tail"` keeps the first half and last half; `"head"` keeps only the beginning; `"error"` raises `ConfigError` at construction time if the field can exceed the limit (useful as a safety check). Default is `"head_tail"`.
+`score_field` must be a plain key name (non-empty, no `.`). A value like `"extras.score"` raises `ConfigError` at load time — the field is always written to `item.extras[score_field]`.
+
+`truncate_strategy`:
+- `"head_tail"`: keeps the first half and last half of the input field (default).
+- `"head"`: keeps only the beginning.
+- `"error"`: if the field value exceeds `max_input_chars` at runtime, treat it as a per-item failure governed by `on_parse_error` (same policy, not a `ConfigError`).
+
+### LLM and Provider Failure Handling
+
+Network errors, rate-limit errors, and provider-exhausted errors from the LLM call are treated as per-item failures and apply the same `on_parse_error` policy. In dry-run mode, these failures are only logged and do not write to `failed_items`.
+
+`score_tag` respects both `RunBudget.max_llm_calls` and `RunBudget.max_usd`. The cost preflight logs projected call count and estimated USD before starting, identical to `llm_stage`.
 
 ### LLM Output Contract
 
-The LLM must return a JSON object. The prompt template should instruct the model to output **only** JSON with no extra text:
+The LLM must return a JSON object:
 
 ```json
 {"score": 7, "tags": ["AI", "开源", "编译器"]}
@@ -168,39 +182,54 @@ The LLM must return a JSON object. The prompt template should instruct the model
 
 ### JSON Parsing Rules
 
-1. Strip leading/trailing whitespace from the raw LLM output.
-2. If the output starts with ` ```json` or ` ``` ` (markdown fence), strip the opening fence line and the closing ` ``` ` line before parsing.
-3. Call `json.loads()`.
-4. Extract `score`:
-   - Must be present; if missing → parse error.
-   - Must be a number (int or float); if not → parse error.
-   - Cast to `int`, clamp to `[1, 10]`.
-5. Extract `tags`:
-   - If missing → treat as `[]` (not a parse error).
-   - Must be a list; if not a list → parse error.
-   - Each element must be a string; non-string elements are silently dropped from the list.
-6. On any parse error, apply `on_parse_error` policy.
+**Fence stripping:** If the first non-empty line of the output matches `` ```json `` or ` ``` `, and the last non-empty line is ` ``` `, strip those two fence lines before parsing. If there is non-fence text outside the fenced block, treat the entire output as unfenced (attempt `json.loads()` on the full string).
 
-### Parse Error Policy
+**Parsing:**
+1. Strip leading/trailing whitespace.
+2. Apply fence stripping as described above.
+3. Call `json.loads()`. A JSON parse error → apply `on_parse_error`.
+
+**Extracting `score`:**
+- Must be present; if missing → parse error.
+- Accept JSON number (`int`, `float`) or a numeric string (`"7"`, `"7.2"`).
+- Convert to `float`. Reject non-finite values (`NaN`, `Inf`) → parse error.
+- Round to nearest integer (`round()`), then clamp to `[1, 10]`.
+- Conversion failure (e.g. `"high"`, `"N/A"`) → parse error.
+
+**Extracting `tags`:**
+- If missing → treat as `[]` (not a parse error).
+- Must be a list; if not → parse error.
+- Each element must be a string; non-string elements are silently dropped.
+- Strip whitespace from each tag string; discard empty strings after stripping.
+- No deduplication at parse time — deduplication happens during merge (see below).
+
+### Parse / LLM Error Policy
 
 | `on_parse_error` | Behaviour |
 |---|---|
 | `"skip"` | Item passes through unchanged; `score_field` and `tags` are not modified. |
-| `"fail"` | Item is recorded in `failed_items` (if failures store is available); item is removed from `ctx.items`. |
-| `"default"` | `default_score` and `default_tags` are applied as if parsing had succeeded. |
+| `"fail"` | Item is recorded in `failed_items` and removed from `ctx.items`. In dry-run: logged only, not written. |
+| `"default"` | `default_score` (clamped int) and `default_tags` (cleaned list) are applied. |
 
-This is per-item handling. A single item's parse failure does not affect other items in the batch.
+This policy applies to both parse failures and LLM call failures. One item's failure never affects other items in the batch.
 
 ### Output Fields
 
-- `item.extras[score_field]` → `int` in `[1, 10]`
-- `item.tags`:
-  - `"append"`: new tags appended and deduplicated (preserving existing order, then new tags in received order).
-  - `"replace"`: existing tags overwritten with the new list.
+**Score:** `item.extras[score_field]` → `int` in `[1, 10]`.
+
+**Tags — `tags_merge = "append"`:**
+1. Strip and filter new tags (non-empty strings only).
+2. Append each new tag to `item.tags` if not already present (exact case-sensitive match).
+3. Result: original tags in original order, followed by new tags not already in the list.
+
+**Tags — `tags_merge = "replace"`:**
+1. Strip and filter new tags (non-empty strings only).
+2. Deduplicate in received order (case-sensitive, first occurrence wins).
+3. Overwrite `item.tags` with the cleaned list.
 
 ### LLM Infrastructure
 
-Reuses `ProviderPool`, `RunBudget`, and the worker semaphore from `LLMStageProcessor`. `score_tag` respects `RunBudget.max_usd` and logs projected call count and estimated USD before starting.
+Reuses `ProviderPool`, `RunBudget`, and the worker semaphore from `LLMStageProcessor`. No new LLM plumbing required.
 
 ### Example Prompt Template
 
@@ -223,7 +252,8 @@ JSON 格式：{"score": <1-10整数>, "tags": [<标签列表>]}
 ## Example Pipeline Placement
 
 ```toml
-# Recommended order: html_strip → cross_dedupe → filter → score_tag → dedupe → llm_stage
+# Recommended order:
+# html_strip → cross_dedupe → fetcher_apply → filter → score_tag → dedupe → llm_stage
 
 [[stages]]
 name = "strip_html"
@@ -235,6 +265,11 @@ name = "cross_dedupe"
 type = "cross_dedupe"
 title_similarity_threshold = 0.85
 source_priority = ["rss_hn"]
+
+[[stages]]
+name = "fetch_fulltext"
+type = "fetcher_apply"
+write_field = "fulltext"
 
 [[stages]]
 name = "prefilter"
@@ -268,13 +303,18 @@ type = "dedupe"
 
 ## Acceptance Criteria
 
-- `cross_dedupe` removes items with identical URLs, keeping the preferred-source item and merging tags when `merge_tags = true`.
-- `cross_dedupe` removes items whose title ratio ≥ threshold using greedy pairwise matching; output order matches original batch order of kept items.
-- `html_strip` discards `<script>`/`<style>`/`<template>` content, converts block/heading/br tags to newlines, decodes entities, and collapses whitespace.
-- `html_strip` dot-path supports exactly one level of `extras.<key>`; deeper paths raise `ConfigError`.
-- `score_tag` writes `extras.score` (int 1–10, clamped) and updates `item.tags` per `tags_merge` mode.
-- `score_tag` strips markdown fences before JSON parsing.
-- `score_tag` `on_parse_error = "skip"` leaves item unchanged; `"fail"` records to `failed_items` and removes item; `"default"` applies configured defaults.
-- `score_tag` per-item parse failure does not affect other items in the batch.
-- `cross_dedupe` and `html_strip` run in dry-run mode (in-memory only). `score_tag` also runs in dry-run and makes real LLM calls.
+- `cross_dedupe` skips URL round for items with empty `url`; skips title round for items with empty `title`.
+- `cross_dedupe` removes items with identical non-empty URLs, keeping preferred-source item; merges tags in kept-item-first, dropped-item-original order, case-sensitive exact dedup.
+- `cross_dedupe` uses greedy pairwise title matching; output order matches original batch order of kept items.
+- `html_strip` rejects dotted paths other than `extras.<key>` with `ConfigError` at load time.
+- `html_strip` discards `<script>/<style>/<template>` tag content; converts block/heading/br tags to newlines; decodes entities; collapses whitespace.
+- `score_tag` `score_field` containing a dot raises `ConfigError` at load time.
+- `score_tag` accepts numeric strings (`"7"`, `"7.2"`); rounds to nearest int; clamps to `[1, 10]`; rejects non-finite values.
+- `score_tag` fence-strips only when the entire output is fenced; non-fence text outside the block → no stripping.
+- `score_tag` applies `on_parse_error` policy to both parse failures and LLM call failures.
+- `score_tag` per-item failure does not affect other items.
+- `score_tag` `truncate_strategy = "error"` triggers `on_parse_error` at runtime (not a load-time error).
+- `score_tag` `tags_merge = "append"` preserves original tag order then appends new, case-sensitive exact dedup.
+- `score_tag` `tags_merge = "replace"` deduplicates new tags in received order before overwriting.
+- `score_tag` respects both `RunBudget.max_llm_calls` and `RunBudget.max_usd`.
 - No new pip dependencies introduced by `cross_dedupe` or `html_strip`.
