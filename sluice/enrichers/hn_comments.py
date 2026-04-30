@@ -61,15 +61,22 @@ class HnCommentsEnricher:
     async def close(self):
         await self._client.aclose()
 
-    async def _get_json(self, url: str) -> dict:
-        await self._bucket_for(httpx.URL(url).host).acquire()
+    async def _get_json_direct(self, url: str) -> dict:
+        """Fetch JSON without rate limiting — for official APIs."""
         resp = await self._client.get(url)
         resp.raise_for_status()
         return resp.json()
 
+    async def _get_raw(self, url: str) -> httpx.Response:
+        """Fetch with rate limiting — for scraped pages."""
+        await self._bucket_for(httpx.URL(url).host).acquire()
+        resp = await self._client.get(url)
+        resp.raise_for_status()
+        return resp
+
     async def _fetch_via_api(self, item_id: str) -> str:
-        """Primary: HN Firebase API — structured JSON, author + text."""
-        data = await self._get_json(f"{_HN_API}/item/{item_id}.json")
+        """Primary: HN Firebase API — no rate limiting, concurrent comment fetch."""
+        data = await self._get_json_direct(f"{_HN_API}/item/{item_id}.json")
         if not data:
             raise EnricherParseError(f"hn api: item {item_id} not found")
         kids = data.get("kids", [])
@@ -78,7 +85,7 @@ class HnCommentsEnricher:
 
         async def fetch_comment(kid_id: int) -> dict:
             try:
-                return await self._get_json(f"{_HN_API}/item/{kid_id}.json") or {}
+                return await self._get_json_direct(f"{_HN_API}/item/{kid_id}.json") or {}
             except Exception:
                 return {}
 
