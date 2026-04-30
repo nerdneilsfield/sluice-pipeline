@@ -72,8 +72,13 @@ article URL being scraped.
 
 All `api_headers` values support existing `env:` resolution.
 
-`extra_headers` may remain as a backward-compatible alias if already used by
-local configs, but docs and examples should prefer `api_headers`.
+Resolution happens in `build_fetcher_chain()` before fetcher construction, at
+the same layer that already resolves `api_key`. Fetcher implementations receive
+only concrete header values, never raw `env:...` strings.
+
+`extra_headers` is not a public alias for this feature. Existing fetcher
+constructors do not consistently accept that parameter, so the public contract
+is only `api_headers`.
 
 ### Firecrawl
 
@@ -91,8 +96,13 @@ Rules:
 - Default `api_version` is `"v2"`.
 - `api_version = "v2"` sends `POST {base_url}/v2/scrape`.
 - `api_version = "v1"` sends `POST {base_url}/v1/scrape`.
-- If `base_url` already ends with `/v1` or `/v2`, Sluice must not duplicate the
-  version path.
+- `base_url` is normally the service root, for example
+  `https://api.firecrawl.dev`.
+- If `base_url` already ends with `/v1` or `/v2`, Sluice treats it as a
+  versioned root and sends `POST {base_url}/scrape`.
+- If a versioned `base_url` conflicts with explicit `api_version`, config
+  loading fails with `ConfigError`. Example: `base_url =
+  "https://api.firecrawl.dev/v1"` plus `api_version = "v2"` is invalid.
 - Request headers are:
   - `Content-Type: application/json`
   - `api_headers`
@@ -145,11 +155,17 @@ Content-Type: application/json
 }
 ```
 
-If `/crawl` returns markdown synchronously, the fetcher returns it immediately.
+Response handling order:
 
-If `/crawl` returns a `task_id` or `job_id`, the fetcher polls. Polling checks
-configured `poll_paths` in order, substituting `{task_id}` with the returned
-identifier.
+1. Parse inline markdown from the `/crawl` response. If non-empty markdown is
+   found, return it immediately.
+2. If no inline markdown exists, look for a polling identifier in this order:
+   `task_id`, then `job_id`, then `id`.
+3. If an identifier is found, poll. Polling checks configured `poll_paths` in
+   order, substituting `{task_id}` with the selected identifier regardless of
+   the original field name.
+4. If no inline markdown and no identifier exists, raise a fetch error with the
+   response shape summarized.
 
 Polling success statuses:
 
@@ -168,16 +184,19 @@ Unknown in-progress statuses continue until `poll_timeout`.
 ## Markdown Extraction Contract
 
 Both synchronous and polling responses should be parsed defensively. The
-fetcher should accept the following shapes, in priority order:
+fetcher should accept the following shapes:
 
 1. `results[0].markdown`
-2. `results[0].markdown.raw_markdown`
-3. `results[0].markdown.fit_markdown`
-4. `result.markdown`
-5. `result.markdown.raw_markdown`
-6. `result.markdown.fit_markdown`
-7. `data.markdown`
-8. top-level `markdown`
+2. `result.markdown`
+3. `data.markdown`
+4. top-level `markdown`
+
+For each `markdown` value:
+
+- If the value is a non-empty string, return it.
+- If the value is a dict, try `raw_markdown`, then `fit_markdown`, then
+  `markdown`.
+- Any other type is ignored and parsing continues.
 
 If the response indicates success but no markdown can be found, the fetcher
 raises a fetch error. The chain may then fall back to the next fetcher.
@@ -247,7 +266,11 @@ timeout = 120
 
 ## Implementation Notes
 
-- Add a small helper to resolve header maps, including `env:` values.
+- Add a small helper in `builders.py` to resolve header maps, including `env:`
+  values.
+- `build_fetcher_chain()` must resolve `api_headers` before calling the fetcher
+  constructor. This mirrors the existing `api_key` resolution point and avoids
+  sending literal `env:...` strings to Firecrawl or Crawl4AI.
 - Keep `api_key` fallback local to service fetchers.
 - Avoid using the name `headers` for service API headers in public examples,
   because Firecrawl already uses `headers` in its scrape body for target-page
