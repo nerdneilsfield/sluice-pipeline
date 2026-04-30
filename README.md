@@ -2,8 +2,8 @@
 
 # 🚰 sluice
 
-**Code-native, configurable information pipelines —
-the "code version of n8n" for RSS, LLMs, and Notion.**
+**Code-native pipelines for information. Wire up RSS, LLMs,
+and Notion in plain TOML — think of it as n8n in code form.**
 
 [![PyPI version](https://img.shields.io/pypi/v/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
@@ -17,11 +17,12 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 
 </div>
 
-> **slu·ice** /sluːs/ — *a water gate that controls flow.*
+> **slu·ice** /sluːs/ — *a water gate. You decide what flows through.*
 
-That's exactly what this project does, but with **information** instead of water:
-choose which sources let the stream in, when to open the gate, what processing
-channels the water passes through, and which downstream reservoirs it ends up in.
+That's the metaphor. Pick your sources, set when the gate opens, route through
+processing channels, and land everything in downstream reservoirs — except the
+water is **information**, and every gate, channel, and reservoir is code you
+can read.
 
 ```text
             ┌──────────┐    ┌─────────┐    ┌──────────┐    ┌──────────┐
@@ -52,27 +53,29 @@ RSS ───▶── │  Source  │──▶│ Stages  │──▶│  Ren
 
 ## What's new in V1.1
 
-- **Push-channel sinks**: Telegram (MarkdownV2), Feishu (post/text/interactive), Email (fail_fast/best_effort) — all with `sink_delivery_log` audit trail.
-- **Attachment mirroring**: `mirror_attachments` stage downloads images/files to local disk with `file://`, `https://`, or relative URL prefix.
+After months of running sluice daily on real feeds, here's what got better:
+
+- **Swappable output channels**: Telegram (MarkdownV2), Feishu (post/text/interactive), Email (fail_fast/best_effort) — all with `sink_delivery_log` audit trail.
+- **Attachment mirroring**: `mirror_attachments` downloads images/files to local disk with `file://`, `https://`, or relative URL prefix.
 - **Enricher protocol + hn_comments**: pluggable enrichers that augment items with external data (HN comment threads via hckrnws.com).
 - **Sub-daily pipelines**: `run_key_template` with `{run_hour}`, `{run_minute}`, `{run_iso}`, `{run_epoch}` for cron intervals under 24h.
-- **`limit` stage**: `sort_by` / `group_by` / `per_group_max` for capping output.
+- **`limit` stage**: sort, group, and cap output with `sort_by` / `group_by` / `per_group_max`.
 - **`field_filter` ops**: `lower`, `strip`, `regex_replace` in addition to existing `truncate` / `drop`.
-- **Fetcher fallback**: `on_all_failed = "use_raw_summary"` falls back to raw RSS summary when all fetchers fail.
-- **URL cache size cap**: configurable `max_rows` with LRU-style eviction.
-- **GC command**: `sluice gc` reclaims space from `failed_items`, `url_cache`, `attachment_mirror` + orphan file sweep.
-- **Metrics**: custom Prometheus collector + `sluice stats` + `sluice metrics-server` + `sluice deliveries` audit viewer.
-- **Lazy registry**: plugins register via lazy stubs so `pip install sluice-pipeline` (no extras) keeps working.
+- **Smart fetcher fallback**: `on_all_failed = "use_raw_summary"` gracefully falls back to RSS summary text when all fetchers fail.
+- **URL cache size cap**: configurable `max_rows` with LRU eviction — keeps the DB lean.
+- **GC command**: `sluice gc` reclaims storage from `failed_items`, `url_cache`, `attachment_mirror` + orphan file cleanup.
+- **Observability**: custom Prometheus collector, `sluice stats`, `sluice metrics-server`, `sluice deliveries` audit viewer.
+- **Lazy registry**: plugins register via stubs — `pip install sluice-pipeline` (no extras) stays lightweight.
 
 ---
 
 ## Why sluice?
 
-You have a list of RSS feeds. You want **a daily digest in Notion** — articles
-auto-fetched, LLM-summarized, aggregated into a brief, then pushed to a Notion
-database. You want it cheap, observable, and **fully under your control**.
+You track a bunch of RSS feeds. You want **a daily digest in Notion** — each
+article auto-fetched, LLM-summarized, bundled into a brief, then pushed to a
+Notion database. You want it cheap, observable, and **fully under your control**.
 
-Three options most people consider:
+Three approaches you'll look at:
 
 |                            | n8n / Zapier                       | A 200-line Python script               | **sluice**                                                     |
 | -------------------------- | ---------------------------------- | -------------------------------------- | -------------------------------------------------------------- |
@@ -80,12 +83,12 @@ Three options most people consider:
 | Swap LLM provider          | Hope the integration exists        | Hope you wrote it that way             | Edit `providers.toml`, restart                                 |
 | Cost cap per run           | Hard                               | Hand-rolled                            | One-line `max_estimated_cost_usd`                              |
 | Failure handling           | "Retry the whole workflow"         | `try: ... except: pass`                | Per-item failed_items lifecycle, dead-letter, `--retry`        |
-| Self-hosted observability  | n8n web UI (heavy)                 | `print` + grep                         | Rich progress, loguru diagnostics, Prefect run history         |
+| Self-hosted observability  | n8n web UI (resource-heavy)         | `print` + grep                         | Rich progress bar, loguru diagnostics, Prefect run history    |
 | LLM fallback chain         | Manual branching                   | None                                   | 4-tier model chain with weighted routing + key cooldown        |
 | Idempotency                | "Did it already run?"              | "Did the script crash midway?"         | `sink_emissions` table, upsert on retry                        |
 
-sluice is **the code version of n8n**, but with all your business logic in
-plain Python and TOML. No SaaS dependency, no GUI lock-in, no opaque webhooks.
+sluice is **n8n in code**: business logic lives in plain Python and TOML —
+no SaaS lock-in, no GUI walls, no opaque webhooks.
 
 ---
 
@@ -94,8 +97,8 @@ plain Python and TOML. No SaaS dependency, no GUI lock-in, no opaque webhooks.
 ### 1. Install
 
 ```bash
-# PyPI package is named sluice-pipeline (sluice was taken)
-# import and CLI command are still just "sluice"
+# The PyPI package is called sluice-pipeline (sluice was taken).
+# Your imports and CLI commands stay "sluice" — no rename needed.
 pip install sluice-pipeline
 
 # With push-channel sinks (Telegram / Feishu / Email)
@@ -111,8 +114,11 @@ pip install "sluice-pipeline[enrich-hn]"
 pip install "sluice-pipeline[all]"
 ```
 
-> Requires Python 3.11+. Bring your own [Notion integration token](https://developers.notion.com/docs/create-a-notion-integration)
-> and at least one OpenAI-compatible LLM key (DeepSeek, GLM, OpenAI, OpenRouter, …).
+> **Heads-up:** Python 3.11+. You'll need a
+> [Notion integration token](https://developers.notion.com/docs/create-a-notion-integration)
+> and at least one OpenAI-compatible API key (DeepSeek, GLM, OpenAI, OpenRouter — anything
+> that speaks the `/v1/chat/completions` protocol works). If you're only using the RSS
+> source + file_md sink, no LLM key is needed.
 
 ### 2. Project layout
 
@@ -193,8 +199,8 @@ That's it — **a complete daily digest pipeline in 30 lines of TOML**.
 
 ## Concepts
 
-The water-gate metaphor maps directly onto the codebase. Five plugin
-**Protocols** — every pipeline is a composition of these:
+Here's the mental model. The water-gate metaphor maps directly into code —
+five plugin **Protocols**, and every pipeline is just a composition of them:
 
 | Protocol      | What it does                            | Built-in implementations                                                    |
 | ------------- | --------------------------------------- | --------------------------------------------------------------------------- |
@@ -232,11 +238,14 @@ class Item:
         """Dot path: 'fulltext', 'extras.relevance', 'tags.0'"""
 ```
 
-### LLM provider pool — the *real* unfair advantage
+### LLM provider pool — the unfair advantage
 
-This is what separates sluice from a 200-line script. Configure a pool
-of providers, weighted base URLs, weighted API keys, automatic quota
-cooldown, and a **4-tier fallback chain per stage**:
+This is where sluice earns its keep. A 200-line script can call an LLM, sure.
+But can it juggle a pool of weighted providers, cool down quota-exhausted keys
+automatically, and walk a **4-tier fallback chain** per stage — without you
+writing a single retry loop?
+
+That's what the provider pool does.
 
 <details>
 <summary><b>Show full provider config</b></summary>
@@ -692,18 +701,57 @@ feed re-surfacing them.
 </details>
 
 <details>
-<summary><b>📅 Scheduling with Prefect</b></summary>
+<summary><b>📅 Scheduling with Prefect — the production upgrade</b></summary>
 
-`sluice deploy` registers each enabled pipeline as a Prefect deployment with
-its own cron schedule. The Prefect UI gives you per-pipeline run history,
-retry, and per-task observability — basically the n8n web UI you actually
-wanted.
+You can run sluice with raw cron. A one-line crontab entry will do:
 
 ```bash
-prefect server start                # in one terminal
-sluice deploy                       # registers cron deployments
-prefect worker start --pool default # processes scheduled runs
+0 8 * * * cd /app && sluice run ai_news
 ```
+
+That works. But after a few weeks of running real pipelines, you'll start asking
+questions that cron can't answer: Did this morning's run succeed? Which item
+failed and why? Can I retry just that one stage without re-running the whole
+pipeline?
+
+This is where Prefect comes in. `sluice deploy` registers each enabled pipeline
+as a **Prefect deployment** — a scheduled job with its own cron expression,
+run history, and per-task observability baked in. Think of Prefect as the
+missing web UI for your pipelines: not a dependency, not a lock-in, just an
+optional upgrade when cron isn't enough.
+
+**The full setup — three terminals, 30 seconds:**
+
+```bash
+# Terminal 1: Start the Prefect server (API + UI)
+prefect server start
+
+# Terminal 2: Register all your pipelines as scheduled deployments
+sluice deploy
+
+# Terminal 3: Start a worker to pick up scheduled runs
+prefect worker start --pool default
+```
+
+That's it. Your pipelines will fire on their cron schedules, and the Prefect UI
+at **http://localhost:4200** gives you per-pipeline run timelines, retry buttons,
+and per-task logs — basically the operational dashboard you'd build if you had
+a spare weekend.
+
+**A few things worth knowing:**
+
+- `sluice deploy` is idempotent — run it again after editing a pipeline's cron
+  and Prefect will pick up the change.
+- The worker pool name (`--pool default`) is configurable. Create separate pools
+  for GPU-heavy pipelines vs lightweight ones.
+- If Prefect is down, sluice still works fine from the CLI. Prefect wraps sluice;
+  sluice doesn't require Prefect.
+- Run history and logs live in a local SQLite database alongside your sluice
+  state — no external Postgres needed for single-machine setups.
+
+Prefect is fully optional. Start with raw cron if you're just kicking the tires,
+add `sluice deploy` when you want visibility, and upgrade to a Prefect server
+when you have enough pipelines to justify a dashboard.
 
 </details>
 
@@ -711,11 +759,16 @@ prefect worker start --pool default # processes scheduled runs
 
 ## Docker deployment
 
+You don't need Docker to run sluice — a Python venv works perfectly. But when
+you're deploying to a VPS, a home server, or a cron-triggered cloud function,
+containers make life simpler. Here are the two paths.
+
 Docker files live in [`scripts/docker/`](./scripts/docker/).
 
-### Standalone (no Prefect)
+### Path A: Standalone — run once, exit
 
-Run a single pipeline execution and exit — good for cron-triggered containers or one-off runs.
+Good for: serverless cron jobs, CI pipelines, or simply "I want to call sluice
+from a systemd timer without installing Python tooling on the host."
 
 ```bash
 cd scripts/docker
@@ -733,11 +786,16 @@ docker compose run --rm sluice run ai_news --dry-run
 docker compose run --rm sluice validate
 ```
 
-`docker-compose.yml` mounts `./configs` (read-only) and `./data` (writable SQLite state).
+The compose file mounts `./configs` (read-only) and `./data` (writable SQLite
+state). Tweak the cron trigger on your host (systemd timer, Kubernetes CronJob,
+AWS EventBridge — whatever you already use) to invoke `docker compose run --rm`.
+The container starts, runs the pipeline, shuts down. No long-running process,
+no port binding, no stateful server.
 
-### With Prefect scheduler
+### Path B: With Prefect — always-on scheduler
 
-Start a local Prefect server + sluice worker that registers all enabled pipelines as scheduled deployments:
+Good for: multiple pipelines with overlapping schedules, run history you can
+inspect, a UI for retries and debugging.
 
 ```bash
 cd scripts/docker
@@ -746,11 +804,18 @@ cp -r ../../configs ./configs
 docker compose -f docker-compose.prefect.yml up
 ```
 
-- Prefect UI at **http://localhost:4200**
-- `sluice deploy` runs automatically on container start, registering all `cron`-enabled pipelines
-- Data volumes are persisted across restarts
+This starts three things:
+- **Prefect server** — API + dashboard at **http://localhost:4200**
+- **sluice deploy** — auto-registers all cron-enabled pipelines on container start
+- **Prefect worker** — picks up scheduled runs as they arrive
+
+Data (SQLite state, run history, cached articles) is persisted across restarts
+via Docker volumes. If you stop the container and bring it back up next week,
+your pipeline state is intact.
 
 ### Build your own image
+
+If the published image doesn't fit your setup, build from source:
 
 ```bash
 # Build from repo root
@@ -763,40 +828,45 @@ docker run --rm \
   sluice:local run ai_news
 ```
 
+The image includes all optional dependencies (`[all]` extras), so Telegram,
+Feishu, Email sinks, Prometheus metrics, and the HN enricher are ready to go
+out of the box.
+
 ---
 
 ## CI/CD
 
-GitHub Actions workflows live in [`.github/workflows/`](./.github/workflows/).
+We ship sluice with the same workflows we use ourselves. Everything lives in
+[`.github/workflows/`](./.github/workflows/).
 
 ### `ci.yml` — runs on every push and PR
 
 Matrix over Python 3.11 and 3.12:
 
-1. Check the lockfile and install dependencies (`uv lock --check`, `uv sync --all-extras --frozen`)
+1. Lockfile check + install (`uv lock --check`, `uv sync --all-extras --frozen`)
 2. `ruff check .` — lint
 3. `ty check` — type check (0 errors)
 4. `pytest --cov` — 303 tests, 81% coverage
 
-### `publish.yml` — runs on `v*.*.*` tags
+### `publish.yml` — triggered on `v*.*.*` tags
 
-Triggered by pushing a version tag (e.g. `git tag v0.2.0 && git push --tags`):
+Push a version tag (`git tag v0.2.0 && git push --tags`) and the rest is automatic:
 
-1. Runs CI matrix
-2. Verifies the tag matches `pyproject.toml`
+1. CI matrix runs first
+2. Verifies the tag matches `pyproject.toml` version
 3. `uv build` → `dist/`
-4. Publishes to PyPI via **OIDC trusted publishing** (no API token stored in secrets)
+4. Publishes to PyPI via **OIDC trusted publishing** — no API tokens, no secret rotation
 
 **One-time PyPI setup:**
 
 1. Create a `pypi` environment in GitHub → Settings → Environments
 2. On PyPI → [sluice-pipeline](https://pypi.org/project/sluice-pipeline/) → Publishing → add a trusted publisher:
    - Owner: `nerdneilsfield`
-   - Repository: `sluice`
+   - Repository: `sluice-pipeline`
    - Workflow: `publish.yml`
    - Environment: `pypi`
 
-After that, tagging a release is enough — no secret rotation needed.
+After that, every `git push --tags` publishes a release. No manual steps, no expiring secrets.
 
 ---
 
@@ -858,6 +928,6 @@ MIT © [nerdneilsfield](https://github.com/nerdneilsfield)
 
 <div align="center">
 
-— *open the gate, let the right water through* —
+— *open the gate. let the right water through.* —
 
 </div>
