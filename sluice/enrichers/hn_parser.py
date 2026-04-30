@@ -1,3 +1,6 @@
+import html as html_lib
+import re
+
 from bs4 import BeautifulSoup
 
 from sluice.core.errors import SluiceError
@@ -5,6 +8,27 @@ from sluice.core.errors import SluiceError
 
 class EnricherParseError(SluiceError):
     pass
+
+
+def parse_hn_api_items(items: list[dict], top_n: int = 20) -> str:
+    """Convert HN Firebase API comment items to formatted text."""
+    out: list[str] = []
+    for item in items[:top_n]:
+        if item.get("deleted") or item.get("dead"):
+            continue
+        author = item.get("by", "?")
+        raw = item.get("text", "")
+        if not raw:
+            continue
+        # Strip HTML tags and decode entities
+        text = re.sub(r"<[^>]+>", " ", raw)
+        text = html_lib.unescape(text).strip()
+        text = re.sub(r"\s+", " ", text)
+        if text:
+            out.append(f"**{author}**: {text}")
+    if not out:
+        raise EnricherParseError("hn api: no usable comments")
+    return "\n\n".join(out)
 
 
 def parse_hn_thread(html: str, top_n: int = 20) -> str:
