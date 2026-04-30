@@ -4,10 +4,10 @@
 # Mount your TOML configs into /app/configs and persist state under /app/data.
 #
 # Usage:
-#   docker compose run --rm sluice run --pipeline my_pipeline
+#   docker compose run --rm sluice run my_pipeline
 #
 # Override the pipeline at the command line:
-#   docker compose run --rm sluice run --pipeline other_pipeline --dry-run
+#   docker compose run --rm sluice run other_pipeline --dry-run
 #
 # To validate configs without running:
 #   docker compose run --rm sluice validate
@@ -21,7 +21,7 @@ services:
       context: ../../
       dockerfile: scripts/docker/Dockerfile
     # Default command: run a single pipeline. Override with `docker compose run`.
-    command: ["run", "--pipeline", "my_pipeline"]
+    command: ["run", "my_pipeline"]
     volumes:
       # Mount your TOML config files (read-only)
       - ./configs:/app/configs:ro

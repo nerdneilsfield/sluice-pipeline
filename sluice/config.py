@@ -290,6 +290,36 @@ class FeishuSinkConfig(CommonSinkFields):
     card_template: str = ""
     footer_template: str = ""
     between_messages_delay_seconds: float = 0.0
+    # bot_api fields
+    auth_mode: Literal["webhook", "bot_api"] = "webhook"
+    app_id: str | None = None
+    app_secret: str | None = None
+    receive_id: str | None = None
+    receive_id_type: Literal["chat_id", "open_id", "user_id", "email"] = "chat_id"
+
+    @model_validator(mode="after")
+    def _validate_bot_api(self) -> "FeishuSinkConfig":
+        from sluice.core.errors import ConfigError
+
+        if self.auth_mode == "bot_api":
+            missing = [
+                name
+                for name, val in [
+                    ("app_id", self.app_id),
+                    ("app_secret", self.app_secret),
+                    ("receive_id", self.receive_id),
+                ]
+                if val is None
+            ]
+            if missing:
+                raise ConfigError(
+                    f"feishu bot_api mode requires: {', '.join(missing)}"
+                )
+            if self.message_type == "interactive":
+                raise ConfigError(
+                    "feishu bot_api mode does not support message_type='interactive'"
+                )
+        return self
 
 
 class EmailSinkConfig(CommonSinkFields):

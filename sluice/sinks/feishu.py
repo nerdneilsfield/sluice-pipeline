@@ -11,6 +11,8 @@ from jinja2 import Template
 
 from sluice.context import PipelineContext
 from sluice.core.errors import ConfigError
+from sluice.sinks._feishu_bot import FeishuBotClient
+from sluice.sinks._feishu_post_render import convert_to_feishu_post
 from sluice.sinks._feishu_render import render_to_post_array
 from sluice.sinks._markdown_ast import parse_markdown
 from sluice.sinks._push_base import PushBatchItem, PushSinkBase
@@ -72,6 +74,10 @@ def _split_post_line(line: list[dict], max_chars: int) -> list[list[dict]]:
     return chunks
 
 
+def _post_content_size(content: list[list[dict]]) -> int:
+    return sum(len(seg.get("text", "")) for line in content for seg in line)
+
+
 class FeishuSink(PushSinkBase):
     type = "feishu"
 
@@ -93,6 +99,12 @@ class FeishuSink(PushSinkBase):
         delivery_log,
         emit_on_empty: bool = False,
         client: httpx.AsyncClient | None = None,
+        # bot_api params
+        auth_mode: str = "webhook",
+        app_id: str | None = None,
+        app_secret: str | None = None,
+        receive_id: str | None = None,
+        receive_id_type: str = "chat_id",
     ):
         if message_type == "interactive" and on_message_too_long == "split_more":
             raise ConfigError(
@@ -116,10 +128,24 @@ class FeishuSink(PushSinkBase):
         self._delay = between_messages_delay_seconds
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=30.0)
+        self._auth_mode = auth_mode
+        self._receive_id = receive_id
+        self._receive_id_type = receive_id_type
+        self._bot: FeishuBotClient | None = None
+        if auth_mode == "bot_api":
+            if app_id is None or app_secret is None:
+                raise ConfigError("feishu bot_api mode requires app_id and app_secret")
+            self._bot = FeishuBotClient(app_id, app_secret, client=self._client)
 
     async def aclose(self):
+        if self._bot is not None:
+            await self._bot.aclose()
         if self._owns_client:
             await self._client.aclose()
+
+    # ------------------------------------------------------------------
+    # Webhook payload builders
+    # ------------------------------------------------------------------
 
     def _build_payload_post(self, md: str) -> dict | list[dict]:
         toks = parse_markdown(md)
@@ -199,7 +225,77 @@ class FeishuSink(PushSinkBase):
         card = json.loads(rendered)
         return {"msg_type": "interactive", "card": card}
 
+    # ------------------------------------------------------------------
+    # Bot API payload builder
+    # ------------------------------------------------------------------
+
+    def _build_payload_post_for_bot(self, md: str) -> list[dict]:
+        """Build one or more post_content dicts for the bot API.
+
+        Each dict: {"zh_cn": {"title": str, "content": list[list[dict]]}}
+        Title is only included in the first chunk.
+        """
+        post = convert_to_feishu_post(md)
+        zh_cn = post["zh_cn"]
+        title: str = zh_cn["title"]
+        content: list[list[dict]] = zh_cn["content"]
+
+        total = _post_content_size(content)
+
+        if total <= _FEISHU_MAX_POST_CONTENT:
+            return [{"zh_cn": {"title": title, "content": content}}]
+
+        if self._too_long == "fail":
+            raise RuntimeError(
+                f"feishu bot_api post content exceeds {_FEISHU_MAX_POST_CONTENT} chars"
+            )
+
+        if self._too_long == "truncate":
+            truncated = _truncate_post_array(content, _FEISHU_MAX_POST_CONTENT)
+            return [{"zh_cn": {"title": title, "content": truncated}}]
+
+        # split_more
+        chunks: list[dict] = []
+        cur_lines: list[list[dict]] = []
+        cur_chars = 0
+        first_chunk = True
+
+        for line in content:
+            for split_line in _split_post_line(line, _FEISHU_MAX_POST_CONTENT):
+                line_len = sum(len(seg.get("text", "")) for seg in split_line)
+                if cur_lines and cur_chars + line_len > _FEISHU_MAX_POST_CONTENT:
+                    chunk_title = title if first_chunk else ""
+                    chunks.append({"zh_cn": {"title": chunk_title, "content": cur_lines}})
+                    cur_lines = []
+                    cur_chars = 0
+                    first_chunk = False
+                cur_lines.append(split_line)
+                cur_chars += line_len
+
+        if cur_lines:
+            chunk_title = title if first_chunk else ""
+            chunks.append({"zh_cn": {"title": chunk_title, "content": cur_lines}})
+
+        return chunks
+
+    # ------------------------------------------------------------------
+    # Emit helpers
+    # ------------------------------------------------------------------
+
     def _emit_payload(self, md, ctx):
+        if self._auth_mode == "bot_api":
+            if self._mtype == "text":
+                # Plain text: reuse webhook text builder, but wrap payload differently
+                p = self._build_payload_text(md)
+                if isinstance(p, list):
+                    return [PushBatchItem(kind="chunk", payload=item) for item in p]
+                return [PushBatchItem(kind="item", payload=p)]
+            else:
+                # post
+                post_contents = self._build_payload_post_for_bot(md)
+                return [PushBatchItem(kind="chunk", payload=pc) for pc in post_contents]
+
+        # webhook mode (original logic)
         if self._mtype == "post":
             p = self._build_payload_post(md)
         elif self._mtype == "text":
@@ -241,6 +337,23 @@ class FeishuSink(PushSinkBase):
         return out
 
     async def send_one(self, payload, recipient=None) -> str:
+        if self._auth_mode == "bot_api":
+            if self._bot is None or self._receive_id is None:
+                raise RuntimeError("feishu bot_api: bot client or receive_id not configured")
+
+            if self._mtype == "text":
+                # payload is {"msg_type": "text", "content": {"text": "..."}}
+                text = payload.get("content", {}).get("text", "")
+                return await self._bot.send_text(
+                    self._receive_id, self._receive_id_type, text
+                )
+            else:
+                # payload is {"zh_cn": {"title": ..., "content": [...]}}
+                return await self._bot.send_post(
+                    self._receive_id, self._receive_id_type, payload
+                )
+
+        # Webhook mode
         body = dict(payload)
         if self._secret:
             ts = int(time.time())

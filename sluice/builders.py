@@ -351,6 +351,11 @@ def build_sinks(pipe: PipelineConfig, delivery_log=None, root=None):
                     between_messages_delay_seconds=s.between_messages_delay_seconds,
                     delivery_log=delivery_log,
                     emit_on_empty=s.emit_on_empty,
+                    auth_mode=s.auth_mode,
+                    app_id=resolve_env(s.app_id) if s.app_id else None,
+                    app_secret=resolve_env(s.app_secret) if s.app_secret else None,
+                    receive_id=resolve_env(s.receive_id) if s.receive_id else None,
+                    receive_id_type=s.receive_id_type,
                 )
             )
         elif isinstance(s, EmailSinkConfig):

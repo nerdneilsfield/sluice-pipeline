@@ -7,13 +7,13 @@ the "code version of n8n" for RSS, LLMs, and Notion.**
 
 [![PyPI version](https://img.shields.io/pypi/v/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
-[![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
-[![Coverage](https://img.shields.io/badge/coverage-82%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
-[![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
+[![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
+[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
-[**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice)
+[**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice-pipeline)
 
 </div>
 
@@ -724,10 +724,10 @@ cd scripts/docker
 cp -r ../../configs ./configs
 
 # Run once
-docker compose run --rm sluice run --pipeline ai_news
+docker compose run --rm sluice run ai_news
 
 # Dry-run
-docker compose run --rm sluice run --pipeline ai_news --dry-run
+docker compose run --rm sluice run ai_news --dry-run
 
 # Validate configs
 docker compose run --rm sluice validate
@@ -760,7 +760,7 @@ docker build -f scripts/docker/Dockerfile -t sluice:local .
 docker run --rm \
   -v $(pwd)/configs:/app/configs:ro \
   -v $(pwd)/data:/app/data \
-  sluice:local run --pipeline ai_news
+  sluice:local run ai_news
 ```
 
 ---
@@ -773,18 +773,19 @@ GitHub Actions workflows live in [`.github/workflows/`](./.github/workflows/).
 
 Matrix over Python 3.11 and 3.12:
 
-1. Install `uv` and dependencies (`uv sync --all-extras`)
+1. Check the lockfile and install dependencies (`uv lock --check`, `uv sync --all-extras --frozen`)
 2. `ruff check .` — lint
 3. `ty check` — type check (0 errors)
-4. `pytest --cov` — 290 tests, 82% coverage
+4. `pytest --cov` — 290 tests, 83% coverage
 
 ### `publish.yml` — runs on `v*.*.*` tags
 
 Triggered by pushing a version tag (e.g. `git tag v0.2.0 && git push --tags`):
 
 1. Runs CI matrix
-2. `uv build` → `dist/`
-3. Publishes to PyPI via **OIDC trusted publishing** (no API token stored in secrets)
+2. Verifies the tag matches `pyproject.toml`
+3. `uv build` → `dist/`
+4. Publishes to PyPI via **OIDC trusted publishing** (no API token stored in secrets)
 
 **One-time PyPI setup:**
 
@@ -836,7 +837,7 @@ scheduling, SSRF guard.
 ## Development
 
 ```bash
-git clone https://github.com/nerdneilsfield/sluice
+git clone https://github.com/nerdneilsfield/sluice-pipeline
 cd sluice
 uv sync --all-extras                # or pip install -e '.[dev,all]'
 pytest -q                           # 290 tests

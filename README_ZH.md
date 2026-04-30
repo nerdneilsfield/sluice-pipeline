@@ -4,15 +4,15 @@
 
 **代码即配置的信息流水线 —— 用 RSS、LLM 和 Notion 写就的"代码版 n8n"。**
 
-[![PyPI version](https://img.shields.io/pypi/v/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
-[![Python](https://img.shields.io/pypi/pyversions/sluice.svg?color=blue)](https://pypi.org/project/sluice/)
-[![License](https://img.shields.io/github/license/nerdneilsfield/sluice.svg)](https://github.com/nerdneilsfield/sluice/blob/master/LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice/actions)
-[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice)
-[![Tests](https://img.shields.io/badge/tests-257%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice/actions)
-[![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice.svg?style=social)](https://github.com/nerdneilsfield/sluice)
+[![PyPI version](https://img.shields.io/pypi/v/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
+[![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
+[![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Coverage](https://img.shields.io/badge/coverage-83%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
+[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
-[**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice/) · [GitHub](https://github.com/nerdneilsfield/sluice)
+[**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice-pipeline)
 
 </div>
 
@@ -712,11 +712,11 @@ prefect worker start --pool default # 处理调度任务
 ## 本地开发
 
 ```bash
-git clone https://github.com/nerdneilsfield/sluice
+git clone https://github.com/nerdneilsfield/sluice-pipeline
 cd sluice
 uv sync --all-extras                # 或 pip install -e '.[dev]'
-pytest                              # 257 个测试
-pytest --cov=sluice                 # 81% 覆盖率
+pytest                              # 290 个测试
+pytest --cov=sluice                 # 83% 覆盖率
 ruff check .
 ty check .
 ```

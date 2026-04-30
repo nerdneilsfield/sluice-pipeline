@@ -54,11 +54,27 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/nerdneilsfield/sluice"
-Repository = "https://github.com/nerdneilsfield/sluice"
+Homepage = "https://github.com/nerdneilsfield/sluice-pipeline"
+Repository = "https://github.com/nerdneilsfield/sluice-pipeline"
 
 [project.scripts]
 sluice = "sluice.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sluice"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/CHANGELOG.md",
+  "/LICENSE",
+  "/README.md",
+  "/README_ZH.md",
+  "/configs/**/*.example",
+  "/prompts",
+  "/pyproject.toml",
+  "/sluice",
+  "/templates",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
