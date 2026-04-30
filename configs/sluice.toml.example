@@ -23,6 +23,7 @@ attachments_older_than   = "60d"   # mirrored files not accessed for this long a
 # ─── Fetcher chain ────────────────────────────────────────────────────────────
 [fetcher]
 chain         = ["trafilatura", "firecrawl", "jina_reader"]
+# chain       = ["trafilatura", "crawl4ai", "firecrawl", "jina_reader"]
 min_chars     = 500
 on_all_failed = "use_raw_summary"  # "skip" | "continue_empty" | "use_raw_summary"
 
@@ -35,11 +36,22 @@ max_rows = 50000   # LRU eviction when exceeded
 type    = "trafilatura"
 timeout = 120
 
+# [fetchers.crawl4ai]
+# type = "crawl4ai"
+# base_url = "http://localhost:11235"
+# api_headers = { Authorization = "env:CRAWL4AI_AUTH" }
+# timeout = 120
+# poll_interval = 2.0
+# poll_timeout = 120
+
 [fetchers.firecrawl]
-type     = "firecrawl"
-base_url = "http://localhost:3002"
-api_key  = "env:FC_KEY"
-timeout  = 120
+type        = "firecrawl"
+# Self-hosted Firecrawl likely uses: base_url = "http://localhost:3002", api_version = "v1"
+base_url    = "https://api.firecrawl.dev"
+api_version = "v2"
+api_key     = "env:FC_KEY"
+# api_headers = { Authorization = "env:FIRECRAWL_AUTH_HEADER" }  # e.g. "Bearer fc-..."
+timeout     = 120
 
 [fetchers.jina_reader]
 type     = "jina_reader"
