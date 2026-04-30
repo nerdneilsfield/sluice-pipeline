@@ -6,6 +6,9 @@ import httpx
 
 from sluice.core.item import Item
 from sluice.enrichers.hn_parser import parse_hn_thread
+from sluice.logging_setup import get_logger
+
+log = get_logger(__name__)
 
 
 class _HostBucket:
@@ -50,10 +53,17 @@ class HnCommentsEnricher:
         await self._client.aclose()
 
     async def enrich(self, item: Item) -> str | None:
-        m = self._pattern.search(item.url)
+        # HN RSS feeds put the article URL in item.url and the HN
+        # discussion URL in item.guid — check both.
+        candidate = item.url or ""
+        m = self._pattern.search(candidate)
+        if not m and item.guid:
+            m = self._pattern.search(item.guid)
         if not m:
+            log.bind(url=item.url, guid=item.guid).debug("hn_comments.no_match")
             return None
         item_id = m.group(1)
+        log.bind(item_id=item_id, url=item.url).debug("hn_comments.fetching")
         target = f"{self._base}/stories/{item_id}"
         await self._bucket_for(httpx.URL(target).host).acquire()
         resp = await self._client.get(target)

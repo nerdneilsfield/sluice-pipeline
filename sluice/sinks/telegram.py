@@ -198,7 +198,10 @@ class TelegramSink(PushSinkBase):
             "link_preview_options": {"is_disabled": self._lpd},
         }
         resp = await self._client.post(url, json=body)
-        resp.raise_for_status()
+        if not resp.is_success:
+            raise RuntimeError(
+                f"telegram {resp.status_code}: {resp.text[:500]}"
+            )
         data = resp.json()
         if not data.get("ok"):
             raise RuntimeError(f"telegram error: {data}")
