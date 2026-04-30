@@ -129,7 +129,7 @@ my-digest/
 ├── prompts/
 │   ├── summarize_zh.md       # Jinja2 prompt
 │   └── daily_brief_zh.md
-└── templates/
+└── prompts/ (also contains render templates)
     └── daily.md.j2           # 渲染模板
 ```
 
@@ -161,7 +161,7 @@ model        = "openai/gpt-4o-mini"
 [[stages]]
 name = "render"
 type = "render"
-template = "templates/daily.md.j2"
+template = "prompts/daily.md.j2"
 output_field = "context.markdown"
 
 [[sinks]]
@@ -383,7 +383,7 @@ model         = "openrouter/openai/gpt-4o"
 [[stages]]
 name = "render"
 type = "render"
-template     = "templates/daily.md.j2"
+template     = "prompts/daily.md.j2"
 output_field = "context.markdown"
 
 # ─── Sinks（可多个，靠 ID 保证幂等）─────────────────

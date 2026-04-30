@@ -132,7 +132,7 @@ my-digest/
 ├── prompts/
 │   ├── summarize_zh.md       # Jinja2 prompt
 │   └── daily_brief_zh.md
-└── templates/
+└── prompts/ (also contains render templates)
     └── daily.md.j2           # render template
 ```
 
@@ -164,7 +164,7 @@ model        = "openai/gpt-4o-mini"
 [[stages]]
 name = "render"
 type = "render"
-template = "templates/daily.md.j2"
+template = "prompts/daily.md.j2"
 output_field = "context.markdown"
 
 [[sinks]]
@@ -391,7 +391,7 @@ model         = "openrouter/openai/gpt-4o"
 [[stages]]
 name = "render"
 type = "render"
-template     = "templates/daily.md.j2"
+template     = "prompts/daily.md.j2"
 output_field = "context.markdown"
 
 # ─── Sinks (multiple allowed, ID-keyed for idempotency) ─
