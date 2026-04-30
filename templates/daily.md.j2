@@ -11,6 +11,12 @@
 
 {{ it.summary }}
 
+{% if it.extras.hn_comments %}
+**HN 社区讨论**
+
+{{ it.extras.hn_comments }}
+
+{% endif %}
 [原文]({{ it.url }}): {{ it.url }}{% if it.published_at %} · {{ it.published_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
 
 {% endfor %}

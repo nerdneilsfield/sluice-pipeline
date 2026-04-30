@@ -80,6 +80,18 @@ name = "trim_fulltext"
 type = "field_filter"
 ops  = [{ op = "truncate", field = "fulltext", n = 20000 }]
 
+# ── HN comments enricher (optional) ─────────────────────────────────────────
+# MUST run BEFORE summarize so the LLM can incorporate community discussion.
+# Checks item.url and item.guid for news.ycombinator.com/item?id=...
+# Requires: pip install "sluice-pipeline[enrich-hn]"
+# Also add an HN RSS source (https://hnrss.org/frontpage) to get HN items.
+#
+# [[stages]]
+# name     = "hn_comments"
+# type     = "enrich"
+# enricher = "hn_comments"
+# config   = { top_comments = 20, request_delay_seconds = 10.0 }
+
 [[stages]]
 name              = "summarize"
 type              = "llm_stage"
@@ -109,17 +121,6 @@ name    = "cap"
 type    = "limit"
 top_n   = 20
 sort_by = "published_at"
-
-# ── HN comments enricher (optional) ─────────────────────────────────────────
-# Only enriches items whose URL matches news.ycombinator.com/item?id=...
-# Requires: pip install "sluice-pipeline[enrich-hn]"
-#
-# [[stages]]
-# name     = "hn_comments"
-# type     = "enrich"
-# enricher = "hn_comments"
-# config   = { top_comments = 20, request_delay_seconds = 10.0 }
-# # on_failure = "skip"  # default: silently skip items that fail enrichment
 
 [[stages]]
 name           = "daily_analysis"
