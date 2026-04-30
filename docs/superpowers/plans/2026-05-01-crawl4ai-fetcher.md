@@ -885,31 +885,13 @@ git commit -m "feat(fetchers): add Crawl4AIFetcher with sync and poll extraction
 
 **Files:**
 - Modify: `sluice/cli.py`
-- Test: `tests/fetchers/test_crawl4ai.py` (add one more test)
 
-- [ ] **Step 1: Write registry test**
+Note: no pytest for this step — any in-process test in `test_crawl4ai.py` is
+already contaminated by the module-level `from sluice.fetchers.crawl4ai import
+...` import which registers the fetcher before `_import_all()` runs. The smoke
+command below runs in a fresh subprocess and is the real gate.
 
-Add to `tests/fetchers/test_crawl4ai.py`:
-
-```python
-def test_crawl4ai_registered_via_cli_import_all():
-    """_import_all() (the CLI path) must register crawl4ai in the fetcher registry."""
-    from sluice.cli import _import_all
-    from sluice.registry import get_fetcher
-    _import_all()
-    cls = get_fetcher("crawl4ai")
-    assert cls is Crawl4AIFetcher
-```
-
-- [ ] **Step 2: Run to confirm it fails**
-
-```bash
-uv run pytest tests/fetchers/test_crawl4ai.py::test_crawl4ai_registered_via_cli_import_all -v
-```
-
-Expected: FAIL — `crawl4ai` not in registry yet (cli.py import not updated).
-
-- [ ] **Step 3: Add crawl4ai to CLI explicit import**
+- [ ] **Step 1: Add crawl4ai to CLI explicit import**
 
 In `sluice/cli.py`, find line 28:
 
@@ -923,15 +905,7 @@ Change to:
 from sluice.fetchers import trafilatura_fetcher, firecrawl, jina_reader, crawl4ai  # noqa
 ```
 
-- [ ] **Step 4: Run the registry test — should now pass**
-
-```bash
-uv run pytest tests/fetchers/test_crawl4ai.py::test_crawl4ai_registered_via_cli_import_all -v
-```
-
-Expected: PASS.
-
-- [ ] **Step 4b: CLI smoke test**
+- [ ] **Step 2: Verify with fresh subprocess smoke test**
 
 ```bash
 uv run python -c "from sluice.cli import _import_all; _import_all(); from sluice.registry import get_fetcher; print('OK:', get_fetcher('crawl4ai'))"
@@ -939,7 +913,9 @@ uv run python -c "from sluice.cli import _import_all; _import_all(); from sluice
 
 Expected output: `OK: <class 'sluice.fetchers.crawl4ai.Crawl4AIFetcher'>`
 
-- [ ] **Step 5: Run full suite**
+If you get `KeyError: 'crawl4ai'`, the import in cli.py is missing or wrong.
+
+- [ ] **Step 3: Run full suite**
 
 ```bash
 uv run pytest -q
@@ -947,10 +923,10 @@ uv run pytest -q
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add sluice/cli.py tests/fetchers/test_crawl4ai.py
+git add sluice/cli.py
 git commit -m "feat(cli): add crawl4ai to explicit fetcher import list"
 ```
 
@@ -1032,7 +1008,7 @@ git commit -m "docs(configs): add crawl4ai and api_headers examples; fix firecra
 | Invalid `api_version` raises | Task 2 (`test_invalid_api_version_raises`) |
 | Versioned base_url conflict raises | Task 2 (`test_versioned_base_url_conflicts_with_api_version_raises`) |
 | SSRF guard on article URL | `guard(url)` in both `extract()` methods |
-| CLI resolves `crawl4ai` type | Task 4 (`test_crawl4ai_registered_in_registry` + CLI smoke test) |
+| CLI resolves `crawl4ai` type | Task 4 (subprocess smoke test) |
 | `_extract_markdown` dict-vs-string safe | Task 3 (`_extract_markdown` with `isinstance` checks) |
 
 **Placeholder scan:** None found. All code blocks complete.
