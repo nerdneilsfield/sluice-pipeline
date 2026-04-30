@@ -1,6 +1,7 @@
 import pytest
 
 from sluice.core.item import Item
+from sluice.sinks import _email_render
 from sluice.sinks._email_render import render_to_html
 from sluice.sinks._markdown_ast import parse_markdown
 from sluice.sinks.email import EmailSink
@@ -26,7 +27,7 @@ def test_render_html_strips_script():
 
 
 def test_render_html_propagates_cleaner_runtime_errors(monkeypatch):
-    lxml_html_clean = pytest.importorskip("lxml_html_clean")
+    pytest.importorskip("lxml_html_clean")
 
     class BrokenCleaner:
         def __init__(self, **kwargs):
@@ -35,7 +36,7 @@ def test_render_html_propagates_cleaner_runtime_errors(monkeypatch):
         def clean_html(self, raw):
             raise RuntimeError("cleaner broke")
 
-    monkeypatch.setattr(lxml_html_clean, "Cleaner", BrokenCleaner)
+    monkeypatch.setattr(_email_render, "Cleaner", BrokenCleaner)
     toks = parse_markdown("hello")
     with pytest.raises(RuntimeError, match="cleaner broke"):
         render_to_html(toks)
