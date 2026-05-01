@@ -39,6 +39,9 @@ timeout = 120
 # [fetchers.crawl4ai]
 # type = "crawl4ai"
 # base_url = "http://localhost:11235"
+# Security: Sluice guards the initial URL before handing it to Crawl4AI, but
+# Crawl4AI follows redirects inside its own service/container. Run it with
+# network egress controls if feeds are untrusted.
 # api_headers = { Authorization = "env:CRAWL4AI_AUTH" }
 # timeout = 120
 # poll_interval = 2.0
@@ -50,6 +53,8 @@ type        = "firecrawl"
 base_url    = "https://api.firecrawl.dev"
 api_version = "v2"
 api_key     = "env:FC_KEY"
+# api_headers are sent to the Firecrawl API itself, not to target pages.
+# Target-page headers/cookies should use a separate page_headers option once added.
 # api_headers = { Authorization = "env:FIRECRAWL_AUTH_HEADER" }  # e.g. "Bearer fc-..."
 timeout     = 120
 

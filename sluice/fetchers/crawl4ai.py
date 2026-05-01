@@ -120,6 +120,7 @@ class Crawl4AIFetcher:
 
             paths_to_try = [working_path] if working_path else self.poll_paths
             found_working_path = False
+            saw_retryable_error = False
 
             for path_template in paths_to_try:
                 poll_url = self.base_url + path_template.replace("{task_id}", task_id)
@@ -131,10 +132,23 @@ class Crawl4AIFetcher:
                         task_id=task_id,
                         exception_type=type(exc).__name__,
                     ).debug("crawl4ai.poll_request_error")
-                    continue
+                    working_path = path_template
+                    found_working_path = True
+                    saw_retryable_error = True
+                    break
 
                 if response.status_code == 404:
                     continue
+                if response.status_code >= 500:
+                    log.bind(
+                        fetcher="crawl4ai",
+                        task_id=task_id,
+                        status_code=response.status_code,
+                    ).debug("crawl4ai.poll_retryable_http_status")
+                    working_path = path_template
+                    found_working_path = True
+                    saw_retryable_error = True
+                    break
 
                 response.raise_for_status()
                 data = response.json()
@@ -156,7 +170,7 @@ class Crawl4AIFetcher:
                 found_working_path = True
                 break
 
-            if not found_working_path and working_path is None:
+            if not found_working_path and working_path is None and not saw_retryable_error:
                 raise RuntimeError(f"crawl4ai: no poll path responded for task {task_id!r}")
 
             await asyncio.sleep(self.poll_interval)

@@ -290,6 +290,24 @@ async def test_poll_success_without_markdown_raises(allow_public_dns, no_sleep):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_poll_retries_5xx_until_success(allow_public_dns, no_sleep):
+    respx.post("http://localhost:11235/crawl/job").mock(
+        return_value=httpx.Response(200, json={"task_id": "t-retry"})
+    )
+    route = respx.get("http://localhost:11235/crawl/job/t-retry").mock(
+        side_effect=[
+            httpx.Response(502),
+            httpx.Response(200, json={"status": "completed", "markdown": "recovered"}),
+        ]
+    )
+    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+
+    assert await f.extract("https://example.com/article") == "recovered"
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_poll_timeout_raises(allow_public_dns, no_sleep, monkeypatch):
     tick = [0.0]
 
