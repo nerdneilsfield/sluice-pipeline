@@ -261,10 +261,10 @@ async def test_empty_url_items_not_url_grouped_together():
 
 @pytest.mark.asyncio
 async def test_title_dedup_above_threshold():
-    a = make_item(url="https://x.com/a", title="GCC 16 released")
-    b = make_item(url="https://y.com/b", title="GCC 16 has been released")
+    a = make_item(url="https://x.com/a", title="GCC 16 released today")
+    b = make_item(url="https://y.com/b", title="GCC 16 released")
     ratio = difflib.SequenceMatcher(None, a.title.lower(), b.title.lower()).ratio()
-    assert ratio >= 0.85
+    assert ratio >= 0.85, f"expected >= 0.85 but got {ratio}"
     ctx = await _proc(title_similarity_threshold=0.85).process(make_ctx(items=[a, b]))
     assert len(ctx.items) == 1
 
@@ -309,6 +309,23 @@ async def test_output_preserves_relative_order_of_kept_items():
     c = make_item(url="https://x.com/c", title="C")
     ctx = await _proc().process(make_ctx(items=[a, b, c]))
     assert [it.url for it in ctx.items] == ["https://x.com/a", "https://x.com/b", "https://x.com/c"]
+
+
+@pytest.mark.asyncio
+async def test_priority_winner_keeps_its_own_original_position():
+    """Winner is inserted at its own original position, not at first-occurrence position."""
+    low = make_item(url="https://x.com/dup", source_id="rss_low", title="Dup")
+    unique = make_item(url="https://x.com/unique", source_id="rss_0", title="Unique")
+    priority = make_item(url="https://x.com/dup", source_id="rss_hn", title="Dup")
+    # Original: [low, unique, priority]
+    # rss_hn wins the dup group; low is dropped.
+    # priority was at position 2 → output should be [unique, priority]
+    ctx = await _proc(source_priority=["rss_hn"]).process(
+        make_ctx(items=[low, unique, priority])
+    )
+    assert len(ctx.items) == 2
+    assert ctx.items[0].url == "https://x.com/unique"
+    assert ctx.items[1].source_id == "rss_hn"
 
 
 # ── Config validation ─────────────────────────────────────────────────────────
@@ -398,32 +415,44 @@ class CrossDedupeProcessor:
                 url_order.append(it.url)
             url_to_group[it.url].append(it)
 
-        # Build after_r1 in order of first URL appearance, interleaved with no-URL items
-        # Preserve relative positions by iterating original items
-        url_winners: dict[str, Item] = {}
+        # Determine winner for each URL group
+        url_winner_item: dict[str, Item] = {}
+        url_winner_id: dict[str, int] = {}  # url -> id() of winning original item
         for url in url_order:
             group = url_to_group[url]
             if len(group) == 1:
-                url_winners[url] = group[0]
+                url_winner_item[url] = group[0]
+                url_winner_id[url] = id(group[0])
             else:
                 kept, rest = self._pick(group)
                 merged = self._merge_tags(kept, rest)
-                url_winners[url] = merged
+                url_winner_item[url] = merged
+                url_winner_id[url] = id(kept)  # winner's original position
                 log.bind(
                     stage=self.name, method="url", url=url,
                     kept_source=merged.source_id,
                     dropped_sources=[d.source_id for d in rest],
                 ).debug("cross_dedupe.merged")
 
+        # Build after_r1 in winner's original position order
+        # A winner placed at its own original position (not first-occurrence position)
+        dropped_ids: set[int] = set()
+        for url in url_order:
+            winner_id = url_winner_id[url]
+            for it in url_to_group[url]:
+                if id(it) != winner_id:
+                    dropped_ids.add(id(it))
+
         seen_urls: set[str] = set()
         after_r1: list[Item] = []
         for it in items:
+            if id(it) in dropped_ids:
+                continue  # non-winner duplicate, drop
             if not it.url:
                 after_r1.append(it)
             elif it.url not in seen_urls:
                 seen_urls.add(it.url)
-                after_r1.append(url_winners[it.url])
-            # else: duplicate URL item is already represented by its winner
+                after_r1.append(url_winner_item[it.url])  # merged winner
 
         # Round 2: Title similarity (greedy pairwise, non-empty titles only)
         result: list[Item] = []
@@ -595,7 +624,7 @@ def test_heading_produces_newlines():
 
 def test_decodes_html_entities():
     proc = _proc(["raw_summary"])
-    assert proc._convert("AT&amp;T &lt;3 &nbsp;spaces") == "AT&T <3  spaces"
+    assert proc._convert("AT&amp;T &lt;3 &nbsp;spaces") == "AT&T <3 spaces"
 
 
 # ── Whitespace normalisation ──────────────────────────────────────────────────
@@ -929,7 +958,7 @@ def test_parse_fence_stripped_before_parse():
 def _make_proc(llm_output: str, on_parse_error="skip", **kw) -> ScoreTagProcessor:
     mock_llm = MagicMock()
     mock_llm.chat = AsyncMock(return_value=llm_output)
-    return ScoreTagProcessor(
+    defaults = dict(
         name="st",
         input_field="fulltext",
         prompt_file="prompts/score_tag.md",
@@ -948,8 +977,9 @@ def _make_proc(llm_output: str, on_parse_error="skip", **kw) -> ScoreTagProcesso
         max_retries=3,
         model_spec="test/model",
         price_lookup=lambda _: (0.0, 0.0),
-        **kw,
     )
+    defaults.update(kw)
+    return ScoreTagProcessor(**defaults)
 
 
 @pytest.mark.asyncio
@@ -1034,6 +1064,31 @@ async def test_one_item_failure_does_not_affect_others():
     assert scored.extras["score"] == 9
 
 
+def test_parse_null_tags_raises():
+    """tags: null is not a list — should be a parse error, not silently []."""
+    with pytest.raises(ValueError, match="tags"):
+        _parse_score_tag('{"score": 7, "tags": null}')
+
+
+# ── Budget preflight ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_budget_max_calls_blocks_llm():
+    from unittest.mock import MagicMock
+    budget = MagicMock()
+    budget.project.return_value = False  # budget exhausted
+
+    mock_llm = MagicMock()
+    mock_llm.chat = AsyncMock(return_value='{"score": 7}')
+    proc = _make_proc('{"score": 7}', budget=budget)
+    proc.budget = budget
+
+    from sluice.core.errors import BudgetExceeded
+    with pytest.raises(BudgetExceeded):
+        await proc.process(make_ctx(items=[make_item(fulltext="text")]))
+    mock_llm.chat.assert_not_called()
+
+
 # ── Config validation ─────────────────────────────────────────────────────────
 
 def test_score_field_with_dot_raises():
@@ -1075,6 +1130,7 @@ from sluice.logging_setup import get_logger
 log = get_logger(__name__)
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*)\n```\s*$", re.DOTALL)
+_SENTINEL = object()  # distinguishes missing "tags" key from explicit null
 
 
 def _strip_fence(text: str) -> str:
@@ -1106,11 +1162,13 @@ def _parse_score_tag(raw: str) -> tuple[int, list[str]]:
         raise ValueError(f"score {raw_score!r} is not finite")
     score = max(1, min(10, round(score_float)))
 
-    raw_tags = data.get("tags", [])
-    if raw_tags is not None and not isinstance(raw_tags, list):
+    raw_tags = data.get("tags", _SENTINEL)
+    if raw_tags is _SENTINEL:
+        raw_tags = []
+    elif not isinstance(raw_tags, list):
         raise ValueError(f"tags must be a list, got {type(raw_tags).__name__}")
     tags: list[str] = []
-    for t in (raw_tags or []):
+    for t in raw_tags:
         if isinstance(t, str):
             clean = t.strip()
             if clean:
@@ -1206,17 +1264,13 @@ class ScoreTagProcessor:
                     seen.add(t)
 
     def _apply_default(self, item):
-        item.extras[self.score_field] = self.default_score
-        seen: set[str] = set(item.tags)
-        for t in self.default_tags:
-            if t not in seen:
-                item.tags.append(t)
-                seen.add(t)
+        """Apply default_score and default_tags using the same merge logic as a parse success."""
+        self._apply_result(item, self.default_score, list(self.default_tags))
 
     async def process(self, ctx: PipelineContext) -> PipelineContext:
         items = list(ctx.items)
 
-        # Render prompts and truncate
+        # Render prompts with truncated input (mirrors LLMStageProcessor._render_one)
         rendered: list[str | None] = []
         total_chars = 0
         for it in items:
@@ -1225,7 +1279,19 @@ class ScoreTagProcessor:
             if text is None:
                 rendered.append(None)  # truncate error → per-item failure
                 continue
-            prompt = self.template.render(item=it)
+            # Create a view with the truncated field so the prompt sees truncated text
+            item_view = replace(
+                it,
+                attachments=list(it.attachments),
+                extras=dict(it.extras),
+                tags=list(it.tags),
+            )
+            item_view.extras[self.input_field] = text  # for extras.* fields
+            try:
+                object.__setattr__(item_view, self.input_field, text)
+            except AttributeError:
+                pass  # field is in extras, already set above
+            prompt = self.template.render(item=item_view)
             rendered.append(prompt)
             total_chars += len(prompt)
 
@@ -1260,8 +1326,7 @@ class ScoreTagProcessor:
                     llm = self.llm_factory()
                     raw_out = await llm.chat([{"role": "user", "content": prompt}])
                     score, tags = _parse_score_tag(raw_out)
-                    if self.budget is not None:
-                        self.budget.record(calls=1, usd=self._project_usd(len(prompt)))
+                    # LLMClient records actual cost; no manual budget.record() needed here
                     self._apply_result(it, score, tags)
                     return it
                 except Exception as e:
