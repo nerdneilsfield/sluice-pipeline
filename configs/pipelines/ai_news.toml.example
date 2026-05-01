@@ -58,6 +58,17 @@ timeout = 60
 name = "dedupe"
 type = "dedupe"
 
+# ── Cross-source dedup (optional) ────────────────────────────────────────────
+# Removes duplicate items pointing to the same article across sources.
+# Place before fetcher_apply to avoid fetching the same article twice.
+#
+# [[stages]]
+# name = "cross_dedupe"
+# type = "cross_dedupe"
+# title_similarity_threshold = 0.85
+# source_priority = ["rss_hn"]
+# merge_tags = true
+
 [[stages]]
 name                      = "fetch_fulltext"
 type                      = "fetcher_apply"
@@ -80,6 +91,14 @@ name = "trim_fulltext"
 type = "field_filter"
 ops  = [{ op = "truncate", field = "fulltext", n = 20000 }]
 
+# ── HTML strip (optional) ─────────────────────────────────────────────────────
+# Strip HTML tags from feed fields before LLM processing.
+#
+# [[stages]]
+# name = "strip_html"
+# type = "html_strip"
+# fields = ["raw_summary"]
+
 # ── HN comments enricher (optional) ─────────────────────────────────────────
 # MUST run BEFORE summarize so the LLM can incorporate community discussion.
 # Checks item.url and item.guid for news.ycombinator.com/item?id=...
@@ -91,6 +110,28 @@ ops  = [{ op = "truncate", field = "fulltext", n = 20000 }]
 # type     = "enrich"
 # enricher = "hn_comments"
 # config   = { top_comments = 20, request_delay_seconds = 10.0 }
+
+# ── Score + tag (optional) ────────────────────────────────────────────────────
+# One LLM call per item: writes extras.score (1-10) and item.tags.
+# Use relevance_filter after this to drop low-scored items before summarization.
+# Requires: prompts/score_tag.md
+#
+# [[stages]]
+# name = "score_and_tag"
+# type = "score_tag"
+# input_field    = "fulltext"
+# prompt_file    = "prompts/score_tag.md"
+# model          = "glm/glm-4-flash"
+# workers        = 8
+# on_parse_error = "skip"
+# score_field    = "score"
+# tags_merge     = "append"
+
+# [[stages]]
+# name = "relevance_filter"
+# type = "filter"
+# mode = "keep_if_all"
+# rules = [{ field = "extras.score", op = "gte", value = 6 }]
 
 [[stages]]
 name              = "summarize"
