@@ -45,7 +45,6 @@ class _PlainTextHTMLParser(HTMLParser):
     def handle_startendtag(self, tag: str, _attrs: Any) -> None:  # ty: ignore[invalid-method-override]
         normalized = tag.lower()
         if normalized in _DROP_CONTENT_TAGS:
-            self._drop_depth += 1
             return
         if self._drop_depth:
             return

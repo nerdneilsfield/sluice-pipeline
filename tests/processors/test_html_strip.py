@@ -79,7 +79,7 @@ async def test_self_closing_drop_content_tag_does_not_leak_following_text():
 
     ctx = await _proc("raw_summary").process(make_ctx(items=[item]))
 
-    assert ctx.items[0].raw_summary == ""
+    assert ctx.items[0].raw_summary == "visible"
 
 
 def test_html_strip_config_accepts_top_level_and_extras_paths():
