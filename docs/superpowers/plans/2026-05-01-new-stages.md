@@ -105,11 +105,13 @@ class HtmlStripConfig(BaseModel):
                     f"html_strip: field {f!r} is not a valid path; "
                     f"only top-level fields or 'extras.<key>' are supported"
                 )
-            if f.startswith("extras.") and f.count(".") > 1:
-                raise ConfigError(
-                    f"html_strip: field {f!r} has more than one level of nesting; "
-                    f"only 'extras.<key>' is supported"
-                )
+            if f.startswith("extras."):
+                key = f[len("extras."):]
+                if not key or "." in key:
+                    raise ConfigError(
+                        f"html_strip: field {f!r} must be 'extras.<key>' with a "
+                        f"non-empty key and no further dots"
+                    )
         return self
 
 
@@ -261,8 +263,8 @@ async def test_empty_url_items_not_url_grouped_together():
 
 @pytest.mark.asyncio
 async def test_title_dedup_above_threshold():
-    a = make_item(url="https://x.com/a", title="GCC 16 released today")
-    b = make_item(url="https://y.com/b", title="GCC 16 released")
+    a = make_item(url="https://x.com/a", title="GCC 16 released")
+    b = make_item(url="https://y.com/b", title="GCC 16 released!")
     ratio = difflib.SequenceMatcher(None, a.title.lower(), b.title.lower()).ratio()
     assert ratio >= 0.85, f"expected >= 0.85 but got {ratio}"
     ctx = await _proc(title_similarity_threshold=0.85).process(make_ctx(items=[a, b]))
@@ -313,19 +315,34 @@ async def test_output_preserves_relative_order_of_kept_items():
 
 @pytest.mark.asyncio
 async def test_priority_winner_keeps_its_own_original_position():
-    """Winner is inserted at its own original position, not at first-occurrence position."""
+    """URL round: winner is at its own original position, not first-occurrence."""
     low = make_item(url="https://x.com/dup", source_id="rss_low", title="Dup")
     unique = make_item(url="https://x.com/unique", source_id="rss_0", title="Unique")
     priority = make_item(url="https://x.com/dup", source_id="rss_hn", title="Dup")
-    # Original: [low, unique, priority]
-    # rss_hn wins the dup group; low is dropped.
-    # priority was at position 2 → output should be [unique, priority]
+    # Original: [low, unique, priority]; rss_hn wins → drop low
+    # priority was at position 2 → output: [unique, priority]
     ctx = await _proc(source_priority=["rss_hn"]).process(
         make_ctx(items=[low, unique, priority])
     )
     assert len(ctx.items) == 2
     assert ctx.items[0].url == "https://x.com/unique"
     assert ctx.items[1].source_id == "rss_hn"
+
+
+@pytest.mark.asyncio
+async def test_title_priority_winner_keeps_its_own_original_position():
+    """Title round: winner is at its own original position, not anchor position."""
+    low = make_item(url="https://x.com/a", source_id="rss_low", title="GCC 16 released")
+    unique = make_item(url="https://x.com/b", source_id="rss_0", title="Unrelated article")
+    priority = make_item(url="https://x.com/c", source_id="rss_hn", title="GCC 16 released!")
+    # Original: [low, unique, priority]; low~priority (title); rss_hn wins → drop low
+    # priority was at position 2 → output: [unique, priority]
+    ctx = await _proc(
+        source_priority=["rss_hn"], title_similarity_threshold=0.85
+    ).process(make_ctx(items=[low, unique, priority]))
+    assert len(ctx.items) == 2
+    assert ctx.items[0].url == "https://x.com/b"   # unique
+    assert ctx.items[1].source_id == "rss_hn"       # priority winner
 
 
 # ── Config validation ─────────────────────────────────────────────────────────
@@ -458,26 +475,29 @@ class CrossDedupeProcessor:
         result: list[Item] = []
         dropped_ids: set[int] = set()
 
+        # Identify title groups (greedy pairwise) and their winners
+        title_winner_of: dict[int, Item] = {}  # id(item) -> merged winner
+        title_dropped: set[int] = set()
+
         for i, anchor in enumerate(after_r1):
-            if id(anchor) in dropped_ids:
-                continue
-            if not anchor.title:
-                result.append(anchor)
+            if id(anchor) in title_dropped or not anchor.title:
                 continue
             group = [anchor]
             for other in after_r1[i + 1:]:
-                if id(other) in dropped_ids or not other.title:
+                if id(other) in title_dropped or not other.title:
                     continue
                 ratio = difflib.SequenceMatcher(
                     None, anchor.title.lower(), other.title.lower()
                 ).ratio()
                 if ratio >= self.threshold:
                     group.append(other)
-                    dropped_ids.add(id(other))
+                    title_dropped.add(id(other))
 
             if len(group) > 1:
                 kept, rest = self._pick(group)
                 merged = self._merge_tags(kept, rest)
+                for m in group:
+                    title_winner_of[id(m)] = merged
                 for r in rest:
                     log.bind(
                         stage=self.name, method="title",
@@ -487,9 +507,26 @@ class CrossDedupeProcessor:
                         kept_source=kept.source_id,
                         dropped_source=r.source_id,
                     ).debug("cross_dedupe.merged")
-                result.append(merged)
+                    title_dropped.add(id(r))
+                # The non-winner members of the group are dropped;
+                # only the winner's original position should emit
+                for m in group:
+                    if m is not kept:
+                        title_dropped.add(id(m))
+
+        # Build result in original order; emit winner at its own position
+        emitted_winners: set[int] = set()
+        for it in after_r1:
+            if id(it) in title_dropped:
+                continue
+            if id(it) in title_winner_of:
+                winner = title_winner_of[id(it)]
+                winner_id = id(winner) if winner is not it else id(it)
+                if winner_id not in emitted_winners:
+                    result.append(winner)
+                    emitted_winners.add(winner_id)
             else:
-                result.append(anchor)
+                result.append(it)
 
         ctx.items = result
         return ctx
@@ -693,6 +730,13 @@ def test_deep_extras_path_raises_at_load():
     with pytest.raises(ConfigError):
         from sluice.config import HtmlStripConfig
         HtmlStripConfig(type="html_strip", name="x", fields=["extras.a.b"])
+
+
+def test_empty_extras_key_raises_at_load():
+    from sluice.core.errors import ConfigError
+    with pytest.raises(ConfigError):
+        from sluice.config import HtmlStripConfig
+        HtmlStripConfig(type="html_strip", name="x", fields=["extras."])
 ```
 
 - [ ] **Step 2: Run to confirm fail**
@@ -856,7 +900,6 @@ git commit -m "feat(processors): add html_strip stage"
 Create `tests/processors/test_score_tag.py`:
 
 ```python
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from tests.conftest import make_ctx, make_item
@@ -1078,15 +1121,23 @@ async def test_budget_max_calls_blocks_llm():
     budget = MagicMock()
     budget.project.return_value = False  # budget exhausted
 
-    mock_llm = MagicMock()
-    mock_llm.chat = AsyncMock(return_value='{"score": 7}')
+    # Capture the mock LLM that _make_proc injects so we can assert it was not called
+    captured: list = []
+    chat_mock = AsyncMock(return_value='{"score": 7}')
+
+    def make_llm():
+        m = MagicMock()
+        m.chat = chat_mock
+        captured.append(m)
+        return m
+
     proc = _make_proc('{"score": 7}', budget=budget)
-    proc.budget = budget
+    proc.llm_factory = make_llm  # override with capturing factory
 
     from sluice.core.errors import BudgetExceeded
     with pytest.raises(BudgetExceeded):
         await proc.process(make_ctx(items=[make_item(fulltext="text")]))
-    mock_llm.chat.assert_not_called()
+    chat_mock.assert_not_called()
 
 
 # ── Config validation ─────────────────────────────────────────────────────────
@@ -1280,17 +1331,22 @@ class ScoreTagProcessor:
                 rendered.append(None)  # truncate error → per-item failure
                 continue
             # Create a view with the truncated field so the prompt sees truncated text
+            # (mirrors LLMStageProcessor._render_one / _set_path logic)
             item_view = replace(
                 it,
                 attachments=list(it.attachments),
                 extras=dict(it.extras),
                 tags=list(it.tags),
             )
-            item_view.extras[self.input_field] = text  # for extras.* fields
-            try:
-                object.__setattr__(item_view, self.input_field, text)
-            except AttributeError:
-                pass  # field is in extras, already set above
+            field = self.input_field
+            if field.startswith("extras."):
+                key = field[len("extras."):]
+                item_view.extras[key] = text
+            else:
+                try:
+                    object.__setattr__(item_view, field, text)
+                except AttributeError:
+                    item_view.extras[field] = text
             prompt = self.template.render(item=item_view)
             rendered.append(prompt)
             total_chars += len(prompt)
