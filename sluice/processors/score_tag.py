@@ -90,8 +90,6 @@ def _truncate(text: str, limit: int, strategy: str) -> str:
 
 
 class ScoreTagProcessor:
-    name = "score_tag"
-
     _CHARS_PER_TOKEN = 3.0
     _ESTIMATED_OUTPUT_TOKENS = 128
 

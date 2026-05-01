@@ -67,6 +67,7 @@ class CrossDedupeProcessor:
                     stage=self.name,
                     method="url",
                     url=url,
+                    ratio=1.0,
                     kept_source=kept.source_id,
                     dropped_source=item.source_id,
                 ).debug("cross_dedupe.merged")
