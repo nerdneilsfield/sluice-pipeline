@@ -2,13 +2,10 @@ import httpx
 
 from sluice.core.errors import ConfigError
 from sluice.fetchers._ssrf import guard
+from sluice.fetchers._utils import has_auth_header
 from sluice.fetchers.base import register_fetcher
 
 _VALID_VERSIONS = ("v1", "v2")
-
-
-def _has_auth_header(headers: dict) -> bool:
-    return any(key.lower() == "authorization" for key in headers)
 
 
 def _build_endpoint(base_url: str, api_version: str) -> str:
@@ -53,7 +50,7 @@ class FirecrawlFetcher:
     def _build_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
         headers.update(self.api_headers)
-        if self.api_key and not _has_auth_header(headers):
+        if self.api_key and not has_auth_header(headers):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
