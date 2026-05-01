@@ -2,10 +2,12 @@ import asyncio
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from sluice.fetchers._ssrf import guard
+from sluice.fetchers._utils import has_auth_header
 from sluice.fetchers.base import register_fetcher
 from sluice.logging_setup import get_logger
 
@@ -14,14 +16,10 @@ log = get_logger(__name__)
 _SUCCESS_STATUSES = {"completed", "success", "done"}
 _FAILURE_STATUSES = {"failed", "error", "cancelled"}
 _DEFAULT_POLL_PATHS = [
-    "/crawl/job/{task_id}",
     "/task/{task_id}",
-    "/job/{task_id}",
+    "/jobs/{task_id}",
 ]
-
-
-def _has_auth_header(headers: Mapping[str, Any]) -> bool:
-    return any(key.lower() == "authorization" for key in headers)
+_LOCAL_SERVICE_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 
 
 def _markdown_value(value: Any) -> str | None:
@@ -76,6 +74,13 @@ def _get_task_id(data: dict) -> str | None:
     return None
 
 
+def _guard_poll_url(poll_url: str) -> None:
+    host = urlsplit(poll_url).hostname
+    if host is not None and host.rstrip(".").lower() in _LOCAL_SERVICE_HOSTS:
+        return
+    guard(poll_url)
+
+
 @register_fetcher("crawl4ai")
 class Crawl4AIFetcher:
     name = "crawl4ai"
@@ -102,7 +107,7 @@ class Crawl4AIFetcher:
     def _build_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
         headers.update(self.api_headers)
-        if self.api_key and not _has_auth_header(headers):
+        if self.api_key and not has_auth_header(headers):
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
@@ -124,6 +129,7 @@ class Crawl4AIFetcher:
 
             for path_template in paths_to_try:
                 poll_url = self.base_url + path_template.replace("{task_id}", task_id)
+                _guard_poll_url(poll_url)
                 try:
                     response = await client.get(poll_url, headers=headers)
                 except httpx.HTTPError as exc:
@@ -132,10 +138,8 @@ class Crawl4AIFetcher:
                         task_id=task_id,
                         exception_type=type(exc).__name__,
                     ).debug("crawl4ai.poll_request_error")
-                    working_path = path_template
-                    found_working_path = True
                     saw_retryable_error = True
-                    break
+                    continue
 
                 if response.status_code == 404:
                     continue
@@ -181,16 +185,10 @@ class Crawl4AIFetcher:
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
-                f"{self.base_url}/crawl/job",
+                f"{self.base_url}/crawl",
                 headers=headers,
                 json={"urls": [url]},
             )
-            if response.status_code == 404:
-                response = await client.post(
-                    f"{self.base_url}/crawl",
-                    headers=headers,
-                    json={"urls": [url]},
-                )
             response.raise_for_status()
             data = response.json()
 
