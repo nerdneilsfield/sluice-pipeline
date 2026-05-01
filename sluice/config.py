@@ -267,6 +267,51 @@ class ScoreTagConfig(BaseModel):
         return self
 
 
+class SummarizeScoreTagConfig(BaseModel):
+    type: Literal["summarize_score_tag"]
+    name: str
+    input_field: str
+    prompt_file: str
+    model: str
+    retry_model: str | None = None
+    fallback_model: str | None = None
+    fallback_model_2: str | None = None
+    workers: int = 8
+    timeout: float = 60.0
+    score_field: str = "score"
+    summary_field: str = "summary"
+    tags_merge: Literal["append", "replace"] = "append"
+    on_parse_error: Literal["skip", "fail", "default"] = "skip"
+    default_score: int = 5
+    default_tags: list[str] = Field(default_factory=list)
+    default_summary: str = ""
+    max_input_chars: int = 8000
+    truncate_strategy: Literal["head_tail", "head", "error"] = "head_tail"
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "SummarizeScoreTagConfig":
+        from sluice.core.errors import ConfigError
+
+        for field_name, value in (
+            ("score_field", self.score_field),
+            ("summary_field", self.summary_field),
+        ):
+            if not value or "." in value:
+                raise ConfigError(
+                    f"summarize_score_tag {field_name}={value!r} must be a plain key name "
+                    "(non-empty, no dot) - it is written to item.extras[field]"
+                )
+        return self
+
+
+class SortStageConfig(BaseModel):
+    type: Literal["sort"]
+    name: str
+    sort_by: str
+    sort_order: Literal["desc", "asc"] = "desc"
+    sort_missing: Literal["first", "last", "drop"] = "last"
+
+
 class LimitStage(BaseModel):
     type: Literal["limit"]
     name: str
@@ -318,6 +363,8 @@ StageConfig = Annotated[
         MirrorAttachmentsStage,
         RenderConfig,
         ScoreTagConfig,
+        SortStageConfig,
+        SummarizeScoreTagConfig,
     ],
     Field(discriminator="type"),
 ]

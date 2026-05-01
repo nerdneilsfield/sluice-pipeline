@@ -20,6 +20,8 @@ from sluice.config import (
     RenderConfig,
     RssSourceConfig,
     ScoreTagConfig,
+    SortStageConfig,
+    SummarizeScoreTagConfig,
     TelegramSinkConfig,
 )
 from sluice.core.errors import ConfigError
@@ -284,6 +286,51 @@ def build_processors(
                     max_retries=pipe.failures.max_retries,
                     model_spec=st.model,
                     price_lookup=lambda spec, pool=llm_pool: model_price(pool, spec),
+                )
+            )
+        elif isinstance(st, SummarizeScoreTagConfig):
+            from sluice.processors.summarize_score_tag import SummarizeScoreTagProcessor
+
+            stage_llm = StageLLMConfig(
+                model=st.model,
+                retry_model=st.retry_model,
+                fallback_model=st.fallback_model,
+                fallback_model_2=st.fallback_model_2,
+                timeout=st.timeout,
+            )
+            procs.append(
+                SummarizeScoreTagProcessor(
+                    name=st.name,
+                    input_field=st.input_field,
+                    prompt_file=st.prompt_file,
+                    llm_factory=lambda cfg=stage_llm: LLMClient(llm_pool, cfg, budget),
+                    workers=st.workers,
+                    score_field=st.score_field,
+                    summary_field=st.summary_field,
+                    tags_merge=st.tags_merge,
+                    on_parse_error=st.on_parse_error,
+                    default_score=st.default_score,
+                    default_tags=st.default_tags,
+                    default_summary=st.default_summary,
+                    max_input_chars=st.max_input_chars,
+                    truncate_strategy=st.truncate_strategy,
+                    budget=budget,
+                    failures=eff_failures,
+                    pipeline_id=pipe.id,
+                    max_retries=pipe.failures.max_retries,
+                    model_spec=st.model,
+                    price_lookup=lambda spec, pool=llm_pool: model_price(pool, spec),
+                )
+            )
+        elif isinstance(st, SortStageConfig):
+            from sluice.processors.sort import SortProcessor
+
+            procs.append(
+                SortProcessor(
+                    name=st.name,
+                    sort_by=st.sort_by,
+                    sort_order=st.sort_order,
+                    sort_missing=st.sort_missing,
                 )
             )
         elif isinstance(st, LimitStage):
