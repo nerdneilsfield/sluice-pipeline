@@ -13,6 +13,7 @@ from sluice.builders import (
     build_sources,
 )
 from sluice.config import (
+    CrossDedupeConfig,
     DedupeConfig,
     EmailSinkConfig,
     FetcherImplConfig,
@@ -20,8 +21,10 @@ from sluice.config import (
     FilterConfig,
     FilterRule,
     GlobalConfig,
+    HtmlStripConfig,
     PipelineConfig,
     RssSourceConfig,
+    ScoreTagConfig,
 )
 from tests.conftest import make_ctx
 
@@ -95,6 +98,47 @@ async def test_build_processors():
         )
         assert len(procs) == 1
         assert procs[0].name == "f"
+
+
+@pytest.mark.asyncio
+async def test_build_new_stage_processors(tmp_path):
+    from sluice.state.db import open_db
+    from sluice.state.failures import FailureStore
+    from sluice.state.seen import SeenStore
+
+    prompt = tmp_path / "score_tag.md"
+    prompt.write_text("{{ item.fulltext }}")
+    g = GlobalConfig()
+    p = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x")],
+        stages=[
+            HtmlStripConfig(type="html_strip", name="html", fields=["raw_summary"]),
+            CrossDedupeConfig(type="cross_dedupe", name="cross"),
+            ScoreTagConfig(
+                type="score_tag",
+                name="score",
+                input_field="fulltext",
+                prompt_file=str(prompt),
+                model="p/m",
+            ),
+        ],
+        sinks=[FileMdSinkConfig(id="x", type="file_md", input="context.markdown", path="./x.md")],
+    )
+    async with open_db(":memory:") as db:
+        seen = SeenStore(db)
+        failures = FailureStore(db)
+        procs = build_processors(
+            pipe=p,
+            global_cfg=g,
+            seen=seen,
+            failures=failures,
+            fetcher_chain=None,
+            llm_pool=None,
+            budget=None,
+        )
+    assert [proc.name for proc in procs] == ["html", "cross", "score"]
 
 
 def test_resolve_template_reads_file(tmp_path):

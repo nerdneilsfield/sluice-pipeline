@@ -394,6 +394,83 @@ async def test_priced_primary_allows_free_fallback_model(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_score_tag_primary_missing_price_rejected_when_usd_cap_enabled(tmp_path):
+    from sluice.config import (
+        BaseEndpoint,
+        FileMdSinkConfig,
+        KeyConfig,
+        ModelEntry,
+        PipelineLimits,
+        Provider,
+        ScoreTagConfig,
+    )
+
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items | length }}")
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("{{ item.fulltext }}")
+
+    global_cfg = GlobalConfig(
+        state=StateConfig(db_path=str(tmp_path / "test.db")),
+        runtime=RuntimeConfig(timezone="UTC"),
+    )
+    providers = ProvidersConfig(
+        providers=[
+            Provider(
+                name="openrouter",
+                type="openai_compatible",
+                base=[BaseEndpoint(url="https://llm.example", key=[KeyConfig(value="K")])],
+                models=[ModelEntry(model_name="glm")],
+            )
+        ]
+    )
+    pipe = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[
+            ScoreTagConfig(
+                type="score_tag",
+                name="score",
+                input_field="fulltext",
+                prompt_file=str(prompt_path),
+                model="openrouter/glm",
+            ),
+            RenderConfig(
+                type="render",
+                name="render",
+                template=str(template_path),
+                output_field="context.markdown",
+            ),
+        ],
+        sinks=[
+            FileMdSinkConfig(
+                id="out",
+                type="file_md",
+                input="context.markdown",
+                path=str(tmp_path / "{run_date}.md"),
+            )
+        ],
+        limits=PipelineLimits(max_estimated_cost_usd=1.0),
+    )
+    bundle = ConfigBundle(
+        global_cfg=global_cfg,
+        providers=providers,
+        pipelines={"p": pipe},
+        root=tmp_path,
+    )
+
+    with patch("sluice.runner.build_sources", return_value=[FakeSource([])]):
+        result = await run_pipeline(
+            bundle, pipeline_id="p", now=datetime(2026, 4, 28, 12, 0, 0, tzinfo=timezone.utc)
+        )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert "primary model 'openrouter/glm' has no" in result.error
+
+
+@pytest.mark.asyncio
 async def test_dry_run_writes_nothing_external(tmp_path):
     from sluice.state.db import open_db
     from sluice.state.seen import SeenStore
