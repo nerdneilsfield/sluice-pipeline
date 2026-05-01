@@ -1,5 +1,8 @@
+from datetime import datetime, timezone
+
 import pytest
 
+from sluice.core.errors import ConfigError
 from sluice.processors.sort import SortProcessor
 from tests.conftest import make_ctx, make_item
 
@@ -10,7 +13,11 @@ def _proc(**kwargs) -> SortProcessor:
 
 def _items_with_scores(*scores):
     return [
-        make_item(url=f"https://x.com/{i}", guid=str(i), extras={"score": s} if s is not None else {})
+        make_item(
+            url=f"https://x.com/{i}",
+            guid=str(i),
+            extras={"score": s} if s is not None else {},
+        )
         for i, s in enumerate(scores)
     ]
 
@@ -86,3 +93,76 @@ async def test_sort_stable_on_equal_scores():
     ctx = make_ctx(items=items)
     ctx = await proc.process(ctx)
     assert len(ctx.items) == 3
+
+
+@pytest.mark.asyncio
+async def test_sort_by_string_field():
+    proc = _proc(sort_by="title", sort_order="asc")
+    items = [
+        make_item(title="Beta", url="https://x.com/b", guid="b"),
+        make_item(title="Alpha", url="https://x.com/a", guid="a"),
+    ]
+
+    ctx = await proc.process(make_ctx(items=items))
+
+    assert [it.title for it in ctx.items] == ["Alpha", "Beta"]
+
+
+@pytest.mark.asyncio
+async def test_sort_type_string_keeps_numeric_titles_lexical():
+    proc = _proc(sort_by="title", sort_type="string", sort_order="asc")
+    items = [
+        make_item(title="2", url="https://x.com/2", guid="2"),
+        make_item(title="10", url="https://x.com/10", guid="10"),
+    ]
+
+    ctx = await proc.process(make_ctx(items=items))
+
+    assert [it.title for it in ctx.items] == ["10", "2"]
+
+
+@pytest.mark.asyncio
+async def test_sort_type_number_sorts_numeric_strings():
+    proc = _proc(sort_by="extras.score", sort_type="number", sort_order="asc")
+    items = [
+        make_item(url="https://x.com/10", guid="10", extras={"score": "10"}),
+        make_item(url="https://x.com/2", guid="2", extras={"score": "2"}),
+    ]
+
+    ctx = await proc.process(make_ctx(items=items))
+
+    assert [it.extras["score"] for it in ctx.items] == ["2", "10"]
+
+
+@pytest.mark.asyncio
+async def test_sort_by_datetime_field_desc():
+    proc = _proc(sort_by="published_at", sort_type="datetime", sort_order="desc")
+    old = make_item(url="https://x.com/old", guid="old")
+    old.published_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    new = make_item(url="https://x.com/new", guid="new")
+    new.published_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+
+    ctx = await proc.process(make_ctx(items=[old, new]))
+
+    assert [it.guid for it in ctx.items] == ["new", "old"]
+
+
+@pytest.mark.asyncio
+async def test_sort_raises_on_unsupported_value_type():
+    proc = _proc(sort_by="extras.sort_key")
+    item = make_item(extras={"sort_key": {"nested": 1}})
+
+    with pytest.raises(ConfigError, match="sort"):
+        await proc.process(make_ctx(items=[item]))
+
+
+@pytest.mark.asyncio
+async def test_sort_raises_on_mixed_value_types():
+    proc = _proc(sort_by="extras.sort_key")
+    items = [
+        make_item(url="https://x.com/n", guid="n", extras={"sort_key": 1}),
+        make_item(url="https://x.com/s", guid="s", extras={"sort_key": "alpha"}),
+    ]
+
+    with pytest.raises(ConfigError, match="mixed"):
+        await proc.process(make_ctx(items=items))

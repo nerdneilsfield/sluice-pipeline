@@ -148,7 +148,7 @@ ops  = [{ op = "truncate", field = "fulltext", n = 20000 }]
 # workers         = 8
 # timeout         = 120
 # score_field     = "score"          # written to item.extras.score
-# summary_field   = "summary"        # written to item.extras.summary
+# summary_field   = "summary"        # written to item.summary; use extras.<key> for extras
 # tags_merge      = "append"
 # on_parse_error  = "skip"           # skip | fail | default
 # default_score   = 5
@@ -187,7 +187,7 @@ rules = [
 ]
 
 # ── Sort by score (optional) ──────────────────────────────────────────────────
-# Sort all items by a field without dropping any.
+# Sort all items by a numeric, string, or datetime field without dropping any.
 # Useful after scoring to rank items before the limit stage.
 # Unlike "limit", sort does not cap item count.
 #
@@ -195,6 +195,7 @@ rules = [
 # name         = "sort_by_score"
 # type         = "sort"
 # sort_by      = "extras.score"
+# sort_type    = "auto"          # auto | number | string | datetime
 # sort_order   = "desc"          # desc | asc
 # sort_missing = "last"          # first | last | drop
 

@@ -115,6 +115,8 @@ class ScoreTagProcessor:
         model_spec: str = "",
         price_lookup: Callable = lambda _: (0.0, 0.0),
     ):
+        if workers < 1:
+            raise ValueError("score_tag workers must be >= 1")
         self.name = name
         self.input_field = input_field
         self.template = Template(Path(prompt_file).read_text())

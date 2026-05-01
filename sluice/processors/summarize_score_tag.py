@@ -1,6 +1,5 @@
 import asyncio
 import math
-import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -87,6 +86,8 @@ class SummarizeScoreTagProcessor:
         model_spec: str = "",
         price_lookup: Callable = lambda _: (0.0, 0.0),
     ):
+        if workers < 1:
+            raise ValueError("summarize_score_tag workers must be >= 1")
         self.name = name
         self.input_field = input_field
         self.template = Template(Path(prompt_file).read_text())
@@ -153,9 +154,19 @@ class SummarizeScoreTagProcessor:
 
     def _apply_result(self, item, score: int, tags: list[str], summary: str):
         item.extras[self.score_field] = score
-        item.extras[self.summary_field] = summary
+        self._write_summary(item, summary)
         self._merge_tags(item, tags)
         return item
+
+    def _write_summary(self, item, summary: str) -> None:
+        if self.summary_field == "summary":
+            item.summary = summary
+            return
+        if self.summary_field.startswith("extras."):
+            key = self.summary_field[len("extras."):]
+            item.extras[key] = summary
+            return
+        item.extras[self.summary_field] = summary
 
     def _apply_default(self, item):
         return self._apply_result(

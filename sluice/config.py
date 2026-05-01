@@ -259,6 +259,8 @@ class ScoreTagConfig(BaseModel):
     def _validate_score_field(self) -> "ScoreTagConfig":
         from sluice.core.errors import ConfigError
 
+        if self.workers < 1:
+            raise ConfigError("score_tag workers must be >= 1")
         if not self.score_field or "." in self.score_field:
             raise ConfigError(
                 f"score_tag score_field={self.score_field!r} must be a plain key name "
@@ -292,14 +294,25 @@ class SummarizeScoreTagConfig(BaseModel):
     def _validate_fields(self) -> "SummarizeScoreTagConfig":
         from sluice.core.errors import ConfigError
 
-        for field_name, value in (
-            ("score_field", self.score_field),
-            ("summary_field", self.summary_field),
-        ):
-            if not value or "." in value:
+        if self.workers < 1:
+            raise ConfigError("summarize_score_tag workers must be >= 1")
+        if not self.score_field or "." in self.score_field:
+            raise ConfigError(
+                f"summarize_score_tag score_field={self.score_field!r} must be a plain key name "
+                "(non-empty, no dot) - it is written to item.extras[score_field]"
+            )
+        if not self.summary_field:
+            raise ConfigError("summarize_score_tag summary_field must be non-empty")
+        if "." in self.summary_field:
+            key = (
+                self.summary_field[len("extras."):]
+                if self.summary_field.startswith("extras.")
+                else ""
+            )
+            if not key or "." in key:
                 raise ConfigError(
-                    f"summarize_score_tag {field_name}={value!r} must be a plain key name "
-                    "(non-empty, no dot) - it is written to item.extras[field]"
+                    f"summarize_score_tag summary_field={self.summary_field!r} must be "
+                    '"summary", a plain extras key, or one-level extras.<key>'
                 )
         return self
 
@@ -308,6 +321,7 @@ class SortStageConfig(BaseModel):
     type: Literal["sort"]
     name: str
     sort_by: str
+    sort_type: Literal["auto", "number", "string", "datetime"] = "auto"
     sort_order: Literal["desc", "asc"] = "desc"
     sort_missing: Literal["first", "last", "drop"] = "last"
 

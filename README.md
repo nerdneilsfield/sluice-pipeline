@@ -59,9 +59,9 @@ After months of running sluice daily on real feeds, here's what got better:
 - **Attachment mirroring**: `mirror_attachments` downloads images/files to local disk with `file://`, `https://`, or relative URL prefix.
 - **Enricher protocol + hn_comments**: pluggable enrichers that augment items with external data (HN comment threads via the HN Firebase API, with official HN site as fallback). Run this stage **before** `summarize` so the LLM can incorporate community discussion.
 - **Sub-daily pipelines**: `run_key_template` with `{run_hour}`, `{run_minute}`, `{run_iso}`, `{run_epoch}` for cron intervals under 24h.
-- **`limit` stage**: sort, group, and cap output with `sort_by` / `group_by` / `per_group_max`.
+- **Ranking stages**: `sort` orders by numeric/string/datetime fields; `limit` can sort, group, and cap with `sort_by` / `group_by` / `per_group_max`.
 - **`field_filter` ops**: `lower`, `strip`, `regex_replace` in addition to existing `truncate` / `drop`.
-- **New cleanup + scoring stages**: `cross_dedupe`, `html_strip`, and `score_tag` help deduplicate across feeds, normalize HTML-ish RSS fields, and score/tag items before expensive summarization.
+- **New cleanup + scoring stages**: `cross_dedupe`, `html_strip`, `score_tag`, and `summarize_score_tag` help deduplicate across feeds, normalize RSS fields, and combine scoring/tagging/summarization before downstream filtering.
 - **Smart fetcher fallback**: `on_all_failed = "use_raw_summary"` gracefully falls back to RSS summary text when all fetchers fail.
 - **URL cache size cap**: configurable `max_rows` with LRU eviction — keeps the DB lean.
 - **GC command**: `sluice gc` reclaims storage from `failed_items`, `url_cache`, `attachment_mirror` + orphan file cleanup.
@@ -207,7 +207,7 @@ five plugin **Protocols**, and every pipeline is just a composition of them:
 | ------------- | --------------------------------------- | --------------------------------------------------------------------------- |
 | `Source`      | Bring items into the stream             | `rss`                                                                       |
 | `Fetcher`     | Hydrate an article URL → markdown       | `trafilatura`, `crawl4ai`, `firecrawl`, `jina_reader`                       |
-| `Processor`   | Transform the stream                    | `dedupe`, `cross_dedupe`, `fetcher_apply`, `html_strip`, `filter`, `field_filter`, `score_tag`, `llm_stage`, `render`, `limit`, `enrich`, `mirror_attachments` |
+| `Processor`   | Transform the stream                    | `dedupe`, `cross_dedupe`, `fetcher_apply`, `html_strip`, `filter`, `field_filter`, `score_tag`, `summarize_score_tag`, `sort`, `llm_stage`, `render`, `limit`, `enrich`, `mirror_attachments` |
 | `Sink`        | Push items downstream                   | `file_md`, `notion`, `telegram`, `feishu`, `email`                                                         |
 | `LLMProvider` | Talk to an OpenAI-compatible endpoint   | weighted base/key pool with 4-tier fallback chain                           |
 
@@ -472,7 +472,7 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 </details>
 
 <details>
-<summary><b>⚙️ Processors (the twelve stage types)</b></summary>
+<summary><b>⚙️ Processors</b></summary>
 
 | `type`                | Purpose                                                                       |
 | --------------------- | ----------------------------------------------------------------------------- |
@@ -483,6 +483,8 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 | `filter`              | Rule-based keep/drop. 17 operators incl. regex, length, time windows. ReDoS-guarded. |
 | `field_filter`        | Mutate fields (truncate, drop, lower, strip, regex_replace) — e.g. trim `fulltext` to 20k chars before an expensive LLM call. |
 | `score_tag`           | Per-item LLM scorer that writes `extras.<score_field>` and appends/replaces tags. Handles JSON fences, numeric strings, truncation, and per-item failures. |
+| `summarize_score_tag` | Per-item LLM stage that writes a summary, `extras.<score_field>`, and tags in one call. Default `summary_field = "summary"` writes `item.summary`; use `extras.<key>` for extras. |
+| `sort`                | Order all items by a numeric, string, or datetime field. `sort_type = "auto"` keeps score-like strings numeric; use `string` for lexical title sorting. |
 | `llm_stage`           | LLM call, `per_item` (fan out) or `aggregate` (single call over all items). JSON parsing, max input chars, head-tail truncation, 4-tier fallback chain, cost preflight. |
 | `render`              | Jinja2 template → markdown into `context.<key>`. Receives a fixed context (items, stats, run_date, …). |
 | `limit`               | Sort and cap output. `sort_by`, `group_by`, `per_group_max`, `top_n`.        |
@@ -561,6 +563,14 @@ mode = "keep_if_all"
 rules = [
   { field = "extras.relevance", op = "gte", value = 6 },
 ]
+
+[[stages]]
+name = "rank_relevant"
+type = "sort"
+sort_by = "extras.relevance"
+sort_type = "number"  # auto | number | string | datetime
+sort_order = "desc"
+sort_missing = "last"
 
 # 3. Tag whitelist + URL blacklist combo
 [[stages]]
@@ -842,6 +852,41 @@ The image includes all optional dependencies (`[all]` extras), so Telegram,
 Feishu, Email sinks, Prometheus metrics, and the HN enricher are ready to go
 out of the box.
 
+### Generating an `Authorization: Basic` header value
+
+Some self-hosted services (crawl4ai, private Firecrawl instances, internal
+proxies) use HTTP Basic Authentication. The header value is
+`Basic <base64(username:password)>`. Generate it with any of these:
+
+```bash
+# Python (no dependencies)
+python3 -c "import base64; print('Basic ' + base64.b64encode(b'alice:s3cr3t').decode())"
+
+# OpenSSL
+printf 'alice:s3cr3t' | openssl base64 | tr -d '\n' | sed 's/^/Basic /'
+
+# GNU coreutils
+printf 'alice:s3cr3t' | base64 | tr -d '\n' | sed 's/^/Basic /'
+```
+
+All three produce the same result: `Basic YWxpY2U6czNjcjN0`
+
+Store the full string (including `Basic `) in your `.env`, then reference it
+from the fetcher config:
+
+```bash
+# .env
+CRAWL4AI_AUTH=Basic YWxpY2U6czNjcjN0
+```
+
+```toml
+# configs/sluice.toml  — [fetcher.crawl4ai] section
+api_headers = { Authorization = "env:CRAWL4AI_AUTH" }
+```
+
+> **Never put raw credentials in TOML files or commit them to version control.**
+> Always use the `env:VAR_NAME` indirection shown above.
+
 ---
 
 ## CI/CD
@@ -891,9 +936,9 @@ scheduling, SSRF guard.
 - [x] Attachment mirroring (`mirror_attachments` stage)
 - [x] Enricher protocol + `hn_comments`
 - [x] Sub-daily pipelines (`run_key_template`)
-- [x] `limit` stage
+- [x] `sort` and `limit` stages
 - [x] `field_filter` ops: lower, strip, regex_replace
-- [x] `cross_dedupe`, `html_strip`, and `score_tag` stages
+- [x] `cross_dedupe`, `html_strip`, `score_tag`, and `summarize_score_tag` stages
 - [x] Crawl4AI fetcher support
 - [x] Fetcher fallback (`on_all_failed`)
 - [x] URL cache size cap

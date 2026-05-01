@@ -1,12 +1,14 @@
-import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-from sluice.processors.summarize_score_tag import SummarizeScoreTagProcessor, _parse_result
+from sluice.core.errors import ConfigError
+from sluice.processors.summarize_score_tag import (
+    SummarizeScoreTagProcessor,
+    _parse_result,
+)
 from tests.conftest import make_ctx, make_item
-
 
 # ── parser tests ────────────────────────────────────────────────────────────
 
@@ -95,7 +97,8 @@ async def test_process_writes_score_summary_tags(tmp_path):
     assert len(ctx.items) == 1
     item = ctx.items[0]
     assert item.extras["score"] == 9
-    assert item.extras["summary"] == "Important paper."
+    assert item.summary == "Important paper."
+    assert "summary" not in item.extras
     assert "ML" in item.tags
 
 
@@ -108,6 +111,17 @@ async def test_custom_score_and_summary_fields(tmp_path):
     item = ctx.items[0]
     assert item.extras["relevance"] == 6
     assert item.extras["tldr"] == "Decent."
+
+
+@pytest.mark.asyncio
+async def test_summary_field_can_target_extras_dotpath(tmp_path):
+    llm_out = '{"score": 6, "tags": [], "summary": "Decent."}'
+    proc = _make_processor(tmp_path, llm_out, summary_field="extras.tldr")
+    ctx = make_ctx(items=[make_item()])
+    ctx = await proc.process(ctx)
+    item = ctx.items[0]
+    assert item.extras["tldr"] == "Decent."
+    assert item.summary is None
 
 
 @pytest.mark.asyncio
@@ -133,7 +147,7 @@ async def test_on_parse_error_default_applies_defaults(tmp_path):
     ctx = await proc.process(ctx)
     item = ctx.items[0]
     assert item.extras["score"] == 3
-    assert item.extras["summary"] == "no summary"
+    assert item.summary == "no summary"
     assert "fallback" in item.tags
 
 
@@ -175,3 +189,32 @@ async def test_empty_batch_passes_through(tmp_path):
     ctx = make_ctx(items=[])
     ctx = await proc.process(ctx)
     assert ctx.items == []
+
+
+def test_config_rejects_zero_workers():
+    from sluice.config import SummarizeScoreTagConfig
+
+    with pytest.raises(ConfigError):
+        SummarizeScoreTagConfig(
+            type="summarize_score_tag",
+            name="x",
+            input_field="fulltext",
+            prompt_file="p.md",
+            model="m",
+            workers=0,
+        )
+
+
+def test_config_allows_summary_extras_dotpath():
+    from sluice.config import SummarizeScoreTagConfig
+
+    cfg = SummarizeScoreTagConfig(
+        type="summarize_score_tag",
+        name="x",
+        input_field="fulltext",
+        prompt_file="p.md",
+        model="m",
+        summary_field="extras.tldr",
+    )
+
+    assert cfg.summary_field == "extras.tldr"

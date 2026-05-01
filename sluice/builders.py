@@ -329,6 +329,7 @@ def build_processors(
                 SortProcessor(
                     name=st.name,
                     sort_by=st.sort_by,
+                    sort_type=st.sort_type,
                     sort_order=st.sort_order,
                     sort_missing=st.sort_missing,
                 )

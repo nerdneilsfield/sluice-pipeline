@@ -356,3 +356,18 @@ def test_score_field_with_dot_raises():
             model="m",
             score_field="extras.score",
         )
+
+
+def test_score_tag_config_rejects_zero_workers():
+    from sluice.config import ScoreTagConfig
+    from sluice.core.errors import ConfigError
+
+    with pytest.raises(ConfigError):
+        ScoreTagConfig(
+            type="score_tag",
+            name="x",
+            input_field="fulltext",
+            prompt_file="p.md",
+            model="m",
+            workers=0,
+        )
