@@ -73,6 +73,15 @@ async def test_entities_and_nbsp_collapse_to_single_spaces():
     assert ctx.items[0].raw_summary == "A B \xa9 <tag>"
 
 
+@pytest.mark.asyncio
+async def test_self_closing_drop_content_tag_does_not_leak_following_text():
+    item = make_item(raw_summary="<template/>visible")
+
+    ctx = await _proc("raw_summary").process(make_ctx(items=[item]))
+
+    assert ctx.items[0].raw_summary == ""
+
+
 def test_html_strip_config_accepts_top_level_and_extras_paths():
     cfg = HtmlStripConfig(type="html_strip", name="html", fields=["fulltext", "extras.body"])
 
@@ -82,3 +91,16 @@ def test_html_strip_config_accepts_top_level_and_extras_paths():
 def test_html_strip_config_rejects_empty_extras_key():
     with pytest.raises(ConfigError):
         HtmlStripConfig(type="html_strip", name="html", fields=["extras."])
+
+
+def test_html_strip_config_rejects_empty_fields():
+    with pytest.raises(ConfigError):
+        HtmlStripConfig(type="html_strip", name="html", fields=[])
+
+
+def test_html_strip_config_rejects_deep_paths():
+    with pytest.raises(ConfigError):
+        HtmlStripConfig(type="html_strip", name="html", fields=["a.b.c"])
+
+    with pytest.raises(ConfigError):
+        HtmlStripConfig(type="html_strip", name="html", fields=["extras.body.html"])
