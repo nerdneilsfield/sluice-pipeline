@@ -190,6 +190,83 @@ class RenderConfig(BaseModel):
     output_field: str
 
 
+class CrossDedupeConfig(BaseModel):
+    type: Literal["cross_dedupe"]
+    name: str
+    title_similarity_threshold: float = 0.85
+    source_priority: list[str] = Field(default_factory=list)
+    merge_tags: bool = True
+
+    @model_validator(mode="after")
+    def _validate_threshold(self) -> "CrossDedupeConfig":
+        from sluice.core.errors import ConfigError
+
+        if not 0.0 <= self.title_similarity_threshold <= 1.0:
+            raise ConfigError(
+                "cross_dedupe title_similarity_threshold must be in [0.0, 1.0], "
+                f"got {self.title_similarity_threshold}"
+            )
+        return self
+
+
+class HtmlStripConfig(BaseModel):
+    type: Literal["html_strip"]
+    name: str
+    fields: list[str]
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> "HtmlStripConfig":
+        from sluice.core.errors import ConfigError
+
+        if not self.fields:
+            raise ConfigError("html_strip: fields must be non-empty")
+        for field in self.fields:
+            if "." in field and not field.startswith("extras."):
+                raise ConfigError(
+                    f"html_strip: field {field!r} is not a valid path; "
+                    "only top-level fields or 'extras.<key>' are supported"
+                )
+            if field.startswith("extras."):
+                key = field[len("extras.") :]
+                if not key or "." in key:
+                    raise ConfigError(
+                        f"html_strip: field {field!r} must be 'extras.<key>' with a "
+                        "non-empty key and no further dots"
+                    )
+        return self
+
+
+class ScoreTagConfig(BaseModel):
+    type: Literal["score_tag"]
+    name: str
+    input_field: str
+    prompt_file: str
+    model: str
+    retry_model: str | None = None
+    fallback_model: str | None = None
+    fallback_model_2: str | None = None
+    workers: int = 8
+    timeout: float = 60.0
+    score_field: str = "score"
+    tags_merge: Literal["append", "replace"] = "append"
+    on_parse_error: Literal["skip", "fail", "default"] = "skip"
+    default_score: int = 5
+    default_tags: list[str] = Field(default_factory=list)
+    max_input_chars: int = 8000
+    truncate_strategy: Literal["head_tail", "head", "error"] = "head_tail"
+
+    @model_validator(mode="after")
+    def _validate_score_field(self) -> "ScoreTagConfig":
+        from sluice.core.errors import ConfigError
+
+        if not self.score_field or "." in self.score_field:
+            raise ConfigError(
+                f"score_tag score_field={self.score_field!r} must be a plain key name "
+                "(non-empty, no dot) - it is written to item.extras[score_field]"
+            )
+        return self
+
+
 class LimitStage(BaseModel):
     type: Literal["limit"]
     name: str
@@ -229,15 +306,18 @@ class EnrichStage(BaseModel):
 
 StageConfig = Annotated[
     Union[
+        CrossDedupeConfig,
         DedupeConfig,
         EnrichStage,
         FetcherApplyConfig,
         FilterConfig,
         FieldFilterConfig,
+        HtmlStripConfig,
         LLMStageConfig,
         LimitStage,
         MirrorAttachmentsStage,
         RenderConfig,
+        ScoreTagConfig,
     ],
     Field(discriminator="type"),
 ]

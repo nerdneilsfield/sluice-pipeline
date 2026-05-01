@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from sluice.config import (
+    CrossDedupeConfig,
     DedupeConfig,
     EmailSinkConfig,
     EnrichStage,
@@ -10,6 +11,7 @@ from sluice.config import (
     FileMdSinkConfig,
     FilterConfig,
     GlobalConfig,
+    HtmlStripConfig,
     LimitStage,
     LLMStageConfig,
     MirrorAttachmentsStage,
@@ -17,6 +19,7 @@ from sluice.config import (
     PipelineConfig,
     RenderConfig,
     RssSourceConfig,
+    ScoreTagConfig,
     TelegramSinkConfig,
 )
 from sluice.core.errors import ConfigError
@@ -177,6 +180,17 @@ def build_processors(
                     requeued_keys=requeued_keys,
                 )
             )
+        elif isinstance(st, CrossDedupeConfig):
+            from sluice.processors.cross_dedupe import CrossDedupeProcessor
+
+            procs.append(
+                CrossDedupeProcessor(
+                    name=st.name,
+                    title_similarity_threshold=st.title_similarity_threshold,
+                    source_priority=st.source_priority,
+                    merge_tags=st.merge_tags,
+                )
+            )
         elif isinstance(st, FetcherApplyConfig):
             from sluice.processors.fetcher_apply import FetcherApplyProcessor
 
@@ -203,6 +217,10 @@ def build_processors(
             from sluice.processors.field_filter import FieldFilterProcessor
 
             procs.append(FieldFilterProcessor(name=st.name, ops=st.ops))
+        elif isinstance(st, HtmlStripConfig):
+            from sluice.processors.html_strip import HtmlStripProcessor
+
+            procs.append(HtmlStripProcessor(name=st.name, fields=st.fields))
         elif isinstance(st, LLMStageConfig):
             from sluice.processors.llm_stage import LLMStageProcessor
 
@@ -230,6 +248,38 @@ def build_processors(
                     workers=st.workers,
                     failures=eff_failures,
                     budget=budget,
+                    pipeline_id=pipe.id,
+                    max_retries=pipe.failures.max_retries,
+                    model_spec=st.model,
+                    price_lookup=lambda spec, pool=llm_pool: model_price(pool, spec),
+                )
+            )
+        elif isinstance(st, ScoreTagConfig):
+            from sluice.processors.score_tag import ScoreTagProcessor
+
+            stage_llm = StageLLMConfig(
+                model=st.model,
+                retry_model=st.retry_model,
+                fallback_model=st.fallback_model,
+                fallback_model_2=st.fallback_model_2,
+                timeout=st.timeout,
+            )
+            procs.append(
+                ScoreTagProcessor(
+                    name=st.name,
+                    input_field=st.input_field,
+                    prompt_file=st.prompt_file,
+                    llm_factory=lambda cfg=stage_llm: LLMClient(llm_pool, cfg, budget),
+                    workers=st.workers,
+                    score_field=st.score_field,
+                    tags_merge=st.tags_merge,
+                    on_parse_error=st.on_parse_error,
+                    default_score=st.default_score,
+                    default_tags=st.default_tags,
+                    max_input_chars=st.max_input_chars,
+                    truncate_strategy=st.truncate_strategy,
+                    budget=budget,
+                    failures=eff_failures,
                     pipeline_id=pipe.id,
                     max_retries=pipe.failures.max_retries,
                     model_spec=st.model,

@@ -9,7 +9,13 @@ from sluice.builders import (
     build_sinks,
     build_sources,
 )
-from sluice.config import FetcherApplyConfig, GlobalConfig, PipelineConfig
+from sluice.config import (
+    FetcherApplyConfig,
+    GlobalConfig,
+    LLMStageConfig,
+    PipelineConfig,
+    ScoreTagConfig,
+)
 from sluice.context import PipelineContext, RunStats
 from sluice.core.errors import ConfigError as _ConfigError
 from sluice.llm.budget import RunBudget
@@ -117,12 +123,9 @@ async def run_pipeline(
             needs_fetcher_chain = any(isinstance(st, FetcherApplyConfig) for st in pipe.stages)
             chain = build_fetcher_chain(global_cfg, pipe, cache) if needs_fetcher_chain else None
 
-            from sluice.config import LLMStageConfig as _LLMStageConfig
-            from sluice.core.errors import ConfigError as _ConfigError
-
             if pipe.limits.max_estimated_cost_usd > 0:
                 for st in pipe.stages:
-                    if not isinstance(st, _LLMStageConfig):
+                    if not isinstance(st, (LLMStageConfig, ScoreTagConfig)):
                         continue
                     ip, op = model_price(pool, st.model)
                     if ip == 0.0 and op == 0.0:
