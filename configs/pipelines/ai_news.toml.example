@@ -172,10 +172,18 @@ prompt_file       = "prompts/summarize_zh.md"
 model             = "glm/glm-4-flash"
 fallback_model    = "deepseek/deepseek-chat"
 fallback_model_2  = "ollama/qwen2.5:14b"
+long_context_model = "glm/glm-4-plus"
 workers           = 8
 concurrency       = 4
 timeout           = 120
-max_input_chars   = 20000
+same_model_retries = 2
+same_model_retry_backoff = 1.0
+overflow_trim_step_tokens = 100000
+long_context_threshold_ratio = 0.8
+# Keep this high enough for long-context routing; processor-side truncation happens
+# before LLM middleware sees the prompt. With the example token caps, 400k chars is
+# enough to exceed glm-4-flash's 80% threshold and route to glm-4-plus.
+max_input_chars   = 400000
 truncate_strategy = "head_tail"
 
 [[stages]]

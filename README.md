@@ -85,7 +85,7 @@ Three approaches you'll look at:
 | Cost cap per run           | Hard                               | Hand-rolled                            | One-line `max_estimated_cost_usd`                              |
 | Failure handling           | "Retry the whole workflow"         | `try: ... except: pass`                | Per-item failed_items lifecycle, dead-letter, `--retry`        |
 | Self-hosted observability  | n8n web UI (resource-heavy)         | `print` + grep                         | Rich progress bar, loguru diagnostics, Prefect run history    |
-| LLM fallback chain         | Manual branching                   | None                                   | 4-tier model chain with weighted routing + key cooldown        |
+| LLM fallback chain         | Manual branching                   | None                                   | model fallback + long-context routing with key cooldown        |
 | Idempotency                | "Did it already run?"              | "Did the script crash midway?"         | `sink_emissions` table, upsert on retry                        |
 
 sluice is **n8n in code**: business logic lives in plain Python and TOML —
@@ -243,8 +243,9 @@ class Item:
 
 This is where sluice earns its keep. A 200-line script can call an LLM, sure.
 But can it juggle a pool of weighted providers, cool down quota-exhausted keys
-automatically, and walk a **4-tier fallback chain** per stage — without you
-writing a single retry loop?
+automatically, retry transient failures in place, walk a fallback chain, and
+jump oversized prompts to a long-context model — without you writing a single
+retry loop?
 
 That's what the provider pool does.
 
@@ -263,8 +264,7 @@ weight = 3
 
 key = [
   { value = "env:OR_KEY_1", weight = 2 },
-  { value = "env:OR_KEY_2", weight = 1, quota_duration = 18000,
-    quota_error_tokens = ["exceed", "quota"] },
+  { value = "env:OR_KEY_2", weight = 1, quota_duration = 18000, quota_error_tokens = ["exceed", "quota"] },
 ]
 active_windows  = ["00:00-08:00"]   # only use this base off-peak
 active_timezone = "Asia/Shanghai"
@@ -273,6 +273,15 @@ active_timezone = "Asia/Shanghai"
 model_name          = "openai/gpt-4o-mini"
 input_price_per_1k  = 0.00015
 output_price_per_1k = 0.0006
+max_input_tokens    = 32000
+max_output_tokens   = 4096
+
+[[providers.models]]
+model_name          = "openai/gpt-4o"
+input_price_per_1k  = 0.0025
+output_price_per_1k = 0.01
+max_input_tokens    = 128000
+max_output_tokens   = 16384
 
 [[providers]]
 name = "ollama"
@@ -282,6 +291,8 @@ url = "http://localhost:11434/v1"
 key = [{ value = "local" }]
 [[providers.models]]
 model_name = "llama3"
+max_input_tokens  = 8192
+max_output_tokens = 2048
 # free local — no price needed
 ```
 
@@ -292,12 +303,18 @@ model            = "openrouter/openai/gpt-4o-mini"
 retry_model      = "openrouter/openai/gpt-4o-mini"   # same tier, retry on transient failures
 fallback_model   = "openrouter/google/gemini-flash"   # cheaper backup
 fallback_model_2 = "ollama/llama3"                    # last-resort local
+long_context_model = "openrouter/openai/gpt-4o"        # large prompt / overflow recovery
+
+same_model_retries = 2
+overflow_trim_step_tokens = 100000
+long_context_threshold_ratio = 0.8
 ```
 
-The chain walks main → retry → fallback → fallback_2. Each tier has
-independent worker/concurrency caps. Quota-exhausted keys are cooled down
-automatically. Time-window routing lets you push expensive traffic to
-off-peak hours.
+The chain walks main → retry → fallback → fallback_2. Large prompts route
+directly to `long_context_model`, and context-overflow errors jump straight
+there instead of trying intermediate fallbacks. Each tier has independent
+worker/concurrency caps. Quota-exhausted keys are cooled down automatically.
+Time-window routing lets you push expensive traffic to off-peak hours.
 
 </details>
 
@@ -376,8 +393,9 @@ output_field   = "summary"
 prompt_file    = "prompts/summarize_zh.md"
 model          = "openrouter/openai/gpt-4o-mini"
 fallback_model = "ollama/llama3"
+long_context_model = "openrouter/openai/gpt-4o"
 workers        = 8
-max_input_chars   = 20000
+max_input_chars   = 400000
 truncate_strategy = "head_tail"
 
 [[stages]]
@@ -485,7 +503,7 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 | `score_tag`           | Per-item LLM scorer that writes `extras.<score_field>` and appends/replaces tags. Handles JSON fences, numeric strings, truncation, and per-item failures. |
 | `summarize_score_tag` | Per-item LLM stage that writes a summary, `extras.<score_field>`, and tags in one call. Default `summary_field = "summary"` writes `item.summary`; use `extras.<key>` for extras. |
 | `sort`                | Order all items by a numeric, string, or datetime field. `sort_type = "auto"` keeps score-like strings numeric; use `string` for lexical title sorting. |
-| `llm_stage`           | LLM call, `per_item` (fan out) or `aggregate` (single call over all items). JSON parsing, max input chars, head-tail truncation, 4-tier fallback chain, cost preflight. |
+| `llm_stage`           | LLM call, `per_item` (fan out) or `aggregate` (single call over all items). JSON parsing, max input chars, head-tail truncation, same-model retries, fallback chain, long-context routing, overflow trimming, cost preflight. |
 | `render`              | Jinja2 template → markdown into `context.<key>`. Receives a fixed context (items, stats, run_date, …). |
 | `limit`               | Sort and cap output. `sort_by`, `group_by`, `per_group_max`, `top_n`.        |
 | `enrich`              | Plug in enrichers that augment items with external data (e.g. HN comments).  |

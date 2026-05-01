@@ -13,19 +13,22 @@ url    = "https://open.bigmodel.cn/api/paas/v4"
 weight = 1
 key = [
   { value = "env:GLM_API_KEY",   weight = 3 },
-  { value = "env:GLM_API_KEY_2", weight = 1, quota_duration = 18000,
-    quota_error_tokens = ["exceed", "quota", "rate limit"] },
+  { value = "env:GLM_API_KEY_2", weight = 1, quota_duration = 18000, quota_error_tokens = ["exceed", "quota", "rate limit"] },
 ]
 
 [[providers.models]]
 model_name          = "glm-4-flash"
 input_price_per_1k  = 0.0001
 output_price_per_1k = 0.0001
+max_input_tokens    = 32000
+max_output_tokens   = 4096
 
 [[providers.models]]
 model_name          = "glm-4-plus"
 input_price_per_1k  = 0.007
 output_price_per_1k = 0.007
+max_input_tokens    = 128000
+max_output_tokens   = 4096
 
 # ── DeepSeek ──────────────────────────────────────────────────────────────────
 [[providers]]
@@ -43,11 +46,15 @@ key = [
 model_name          = "deepseek-chat"
 input_price_per_1k  = 0.00027
 output_price_per_1k = 0.0011
+max_input_tokens    = 64000
+max_output_tokens   = 4096
 
 [[providers.models]]
 model_name          = "deepseek-reasoner"
 input_price_per_1k  = 0.00055
 output_price_per_1k = 0.0022
+max_input_tokens    = 64000
+max_output_tokens   = 8192
 
 # ── OpenAI ────────────────────────────────────────────────────────────────────
 [[providers]]
@@ -65,11 +72,15 @@ key = [
 model_name          = "gpt-4o-mini"
 input_price_per_1k  = 0.00015
 output_price_per_1k = 0.0006
+max_input_tokens    = 128000
+max_output_tokens   = 16384
 
 [[providers.models]]
 model_name          = "gpt-4o"
 input_price_per_1k  = 0.0025
 output_price_per_1k = 0.01
+max_input_tokens    = 128000
+max_output_tokens   = 16384
 
 # ── Ollama (local, free) ──────────────────────────────────────────────────────
 # Last-resort fallback — no price set means cost cap won't apply to this tier.
@@ -84,4 +95,6 @@ key    = [{ value = "local" }]
 
 [[providers.models]]
 model_name = "qwen2.5:14b"
+max_input_tokens  = 32768
+max_output_tokens = 4096
 # No price — local model, cost tracking disabled for this provider.
