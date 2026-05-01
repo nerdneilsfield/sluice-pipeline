@@ -30,5 +30,12 @@ class ProviderPool:
             raise ConfigError(f"unknown provider: {prov}")
         return self.runtimes[prov].pick_endpoint(model, rng=self._rng)
 
+    def model_entry(self, model_spec: str):
+        prov, model = parse_model_spec(model_spec)
+        runtime = self.runtimes.get(prov)
+        if runtime is None:
+            return None
+        return runtime.get_model_entry(model)
+
     def cool_down(self, ep: Endpoint):
         self.runtimes[ep.provider_name].cool_down_key(ep._base_ref, ep._key_ref)

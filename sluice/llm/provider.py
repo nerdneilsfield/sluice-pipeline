@@ -149,6 +149,9 @@ class ProviderRuntime:
             _key_ref=k,
         )
 
+    def get_model_entry(self, model: str) -> ModelEntry | None:
+        return self._models.get(model)
+
     def cool_down_key(self, base_ref: BaseEndpoint, key_ref: KeyConfig):
         now = time.time()
         for bi, b in enumerate(self.provider.base):

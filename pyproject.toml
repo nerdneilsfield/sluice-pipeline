@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sluice-pipeline"
-version = "0.2.4"
+version = "0.2.5"
 description = "Code-native, configurable RSS-to-Notion pipeline"
 readme = "README.md"
 license = { text = "MIT" }
@@ -33,6 +33,7 @@ dependencies = [
   "loguru>=0.7",
   "aiofiles>=23.0",
   "croniter>=2.0",
+  "tiktoken>=0.7",
 ]
 
 [project.optional-dependencies]

@@ -26,7 +26,8 @@ from sluice.config import (
 )
 from sluice.core.errors import ConfigError
 from sluice.fetchers.chain import FetcherChain
-from sluice.llm.client import LLMClient, StageLLMConfig
+from sluice.llm.client import StageLLMConfig
+from sluice.llm.middleware import LLMMiddleware
 from sluice.llm.pool import ProviderPool
 from sluice.pricing import model_price
 from sluice.registry import (
@@ -46,9 +47,7 @@ def _resolve_api_headers(headers: dict) -> dict:
     from sluice.loader import resolve_env
 
     return {
-        key: (
-            resolve_env(value) if isinstance(value, str) and value.startswith("env:") else value
-        )
+        key: (resolve_env(value) if isinstance(value, str) and value.startswith("env:") else value)
         for key, value in headers.items()
     }
 
@@ -64,6 +63,7 @@ def _resolve_template(root, value: str) -> str:
             if p.is_file():
                 return p.read_text()
         from sluice.logging_setup import get_logger as _get_logger
+
         _get_logger(__name__).bind(path=str(candidates[0]), value=value).warning(
             "builders.template_file_not_found"
         )
@@ -231,7 +231,12 @@ def build_processors(
                 retry_model=st.retry_model,
                 fallback_model=st.fallback_model,
                 fallback_model_2=st.fallback_model_2,
+                long_context_model=st.long_context_model,
                 timeout=st.timeout,
+                same_model_retries=st.same_model_retries,
+                same_model_retry_backoff=st.same_model_retry_backoff,
+                overflow_trim_step_tokens=st.overflow_trim_step_tokens,
+                long_context_threshold_ratio=st.long_context_threshold_ratio,
             )
             procs.append(
                 LLMStageProcessor(
@@ -241,7 +246,7 @@ def build_processors(
                     output_field=st.output_field,
                     output_target=st.output_target,
                     prompt_file=st.prompt_file,
-                    llm_factory=lambda cfg=stage_llm: LLMClient(llm_pool, cfg, budget),
+                    llm_factory=lambda cfg=stage_llm: LLMMiddleware(llm_pool, cfg, budget),
                     output_parser=st.output_parser,
                     on_parse_error=st.on_parse_error,
                     on_parse_error_default=st.on_parse_error_default,
@@ -264,14 +269,19 @@ def build_processors(
                 retry_model=st.retry_model,
                 fallback_model=st.fallback_model,
                 fallback_model_2=st.fallback_model_2,
+                long_context_model=st.long_context_model,
                 timeout=st.timeout,
+                same_model_retries=st.same_model_retries,
+                same_model_retry_backoff=st.same_model_retry_backoff,
+                overflow_trim_step_tokens=st.overflow_trim_step_tokens,
+                long_context_threshold_ratio=st.long_context_threshold_ratio,
             )
             procs.append(
                 ScoreTagProcessor(
                     name=st.name,
                     input_field=st.input_field,
                     prompt_file=st.prompt_file,
-                    llm_factory=lambda cfg=stage_llm: LLMClient(llm_pool, cfg, budget),
+                    llm_factory=lambda cfg=stage_llm: LLMMiddleware(llm_pool, cfg, budget),
                     workers=st.workers,
                     score_field=st.score_field,
                     tags_merge=st.tags_merge,
@@ -296,14 +306,19 @@ def build_processors(
                 retry_model=st.retry_model,
                 fallback_model=st.fallback_model,
                 fallback_model_2=st.fallback_model_2,
+                long_context_model=st.long_context_model,
                 timeout=st.timeout,
+                same_model_retries=st.same_model_retries,
+                same_model_retry_backoff=st.same_model_retry_backoff,
+                overflow_trim_step_tokens=st.overflow_trim_step_tokens,
+                long_context_threshold_ratio=st.long_context_threshold_ratio,
             )
             procs.append(
                 SummarizeScoreTagProcessor(
                     name=st.name,
                     input_field=st.input_field,
                     prompt_file=st.prompt_file,
-                    llm_factory=lambda cfg=stage_llm: LLMClient(llm_pool, cfg, budget),
+                    llm_factory=lambda cfg=stage_llm: LLMMiddleware(llm_pool, cfg, budget),
                     workers=st.workers,
                     score_field=st.score_field,
                     summary_field=st.summary_field,

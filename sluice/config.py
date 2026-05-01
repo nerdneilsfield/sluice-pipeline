@@ -27,6 +27,8 @@ class ModelEntry(BaseModel):
     is_support_json_object: bool = False
     input_price_per_1k: float = 0.0
     output_price_per_1k: float = 0.0
+    max_input_tokens: int = 128_000
+    max_output_tokens: int = 4_096
 
 
 class Provider(BaseModel):
@@ -158,6 +160,11 @@ class LLMStageConfig(BaseModel):
     retry_model: str | None = None
     fallback_model: str | None = None
     fallback_model_2: str | None = None
+    long_context_model: str | None = None
+    same_model_retries: int = 2
+    same_model_retry_backoff: float = 1.0
+    overflow_trim_step_tokens: int = 100_000
+    long_context_threshold_ratio: float = 0.8
     workers: int = 4
     concurrency: int = 4
     retry_workers: int | None = None
@@ -245,6 +252,11 @@ class ScoreTagConfig(BaseModel):
     retry_model: str | None = None
     fallback_model: str | None = None
     fallback_model_2: str | None = None
+    long_context_model: str | None = None
+    same_model_retries: int = 2
+    same_model_retry_backoff: float = 1.0
+    overflow_trim_step_tokens: int = 100_000
+    long_context_threshold_ratio: float = 0.8
     workers: int = 8
     timeout: float = 60.0
     score_field: str = "score"
@@ -278,6 +290,11 @@ class SummarizeScoreTagConfig(BaseModel):
     retry_model: str | None = None
     fallback_model: str | None = None
     fallback_model_2: str | None = None
+    long_context_model: str | None = None
+    same_model_retries: int = 2
+    same_model_retry_backoff: float = 1.0
+    overflow_trim_step_tokens: int = 100_000
+    long_context_threshold_ratio: float = 0.8
     workers: int = 8
     timeout: float = 60.0
     score_field: str = "score"
@@ -305,7 +322,7 @@ class SummarizeScoreTagConfig(BaseModel):
             raise ConfigError("summarize_score_tag summary_field must be non-empty")
         if "." in self.summary_field:
             key = (
-                self.summary_field[len("extras."):]
+                self.summary_field[len("extras.") :]
                 if self.summary_field.startswith("extras.")
                 else ""
             )
@@ -351,7 +368,7 @@ class EnrichStage(BaseModel):
     type: Literal["enrich"]
     name: str
     enricher: str
-    output_field: str = ""   # defaults to extras.<enricher> if omitted
+    output_field: str = ""  # defaults to extras.<enricher> if omitted
     on_failure: Literal["skip", "fail"] = "skip"
     cache: bool = True
     max_chars: int = 8000
@@ -457,13 +474,9 @@ class FeishuSinkConfig(CommonSinkFields):
                 if val is None
             ]
             if missing:
-                raise ConfigError(
-                    f"feishu bot_api mode requires: {', '.join(missing)}"
-                )
+                raise ConfigError(f"feishu bot_api mode requires: {', '.join(missing)}")
             if self.message_type == "interactive":
-                raise ConfigError(
-                    "feishu bot_api mode does not support message_type='interactive'"
-                )
+                raise ConfigError("feishu bot_api mode does not support message_type='interactive'")
         return self
 
 
