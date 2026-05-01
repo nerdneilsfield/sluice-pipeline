@@ -5,6 +5,7 @@ import httpx
 import pytest
 import respx
 
+from sluice.fetchers._ssrf import SSRFError
 from sluice.fetchers.crawl4ai import (
     Crawl4AIFetcher,
     _extract_markdown,
@@ -32,7 +33,7 @@ def test_default_configuration():
     assert f.timeout == 120
     assert f.poll_interval == 2.0
     assert f.poll_timeout == 120
-    assert f.poll_paths == ["/crawl/job/{task_id}", "/task/{task_id}", "/job/{task_id}"]
+    assert f.poll_paths == ["/task/{task_id}", "/jobs/{task_id}"]
 
 
 def test_extract_results_list():
@@ -87,7 +88,7 @@ def test_get_task_id_lookup_order():
 @pytest.mark.asyncio
 @respx.mock
 async def test_sync_results_response(allow_public_dns):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"results": [{"markdown": "article text"}]})
     )
     f = Crawl4AIFetcher()
@@ -100,7 +101,7 @@ async def test_sync_results_response(allow_public_dns):
 @pytest.mark.asyncio
 @respx.mock
 async def test_sync_data_response(allow_public_dns):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"data": {"markdown": "data md"}})
     )
     f = Crawl4AIFetcher()
@@ -112,22 +113,25 @@ async def test_sync_data_response(allow_public_dns):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_falls_back_to_sync_crawl_when_job_endpoint_missing(allow_public_dns):
-    respx.post("http://localhost:11235/crawl/job").mock(return_value=httpx.Response(404))
+async def test_initial_request_does_not_probe_job_endpoint(allow_public_dns):
+    job_route = respx.post("http://localhost:11235/crawl/job").mock(
+        return_value=httpx.Response(500)
+    )
     respx.post("http://localhost:11235/crawl").mock(
-        return_value=httpx.Response(200, json={"results": [{"markdown": "sync fallback"}]})
+        return_value=httpx.Response(200, json={"results": [{"markdown": "sync crawl"}]})
     )
     f = Crawl4AIFetcher()
 
     out = await f.extract("https://example.com/article")
 
-    assert out == "sync fallback"
+    assert out == "sync crawl"
+    assert job_route.call_count == 0
 
 
 @pytest.mark.asyncio
 @respx.mock
 async def test_initial_request_posts_urls_array(allow_public_dns):
-    route = respx.post("http://localhost:11235/crawl/job").mock(
+    route = respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"results": [{"markdown": "x"}]})
     )
     f = Crawl4AIFetcher()
@@ -140,7 +144,7 @@ async def test_initial_request_posts_urls_array(allow_public_dns):
 @pytest.mark.asyncio
 @respx.mock
 async def test_api_headers_on_initial_request(allow_public_dns):
-    route = respx.post("http://localhost:11235/crawl/job").mock(
+    route = respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"results": [{"markdown": "x"}]})
     )
     f = Crawl4AIFetcher(api_headers={"Authorization": "Bearer secret"})
@@ -153,7 +157,7 @@ async def test_api_headers_on_initial_request(allow_public_dns):
 @pytest.mark.asyncio
 @respx.mock
 async def test_api_key_fallback(allow_public_dns):
-    route = respx.post("http://localhost:11235/crawl/job").mock(
+    route = respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"results": [{"markdown": "x"}]})
     )
     f = Crawl4AIFetcher(api_key="mykey")
@@ -166,7 +170,7 @@ async def test_api_key_fallback(allow_public_dns):
 @pytest.mark.asyncio
 @respx.mock
 async def test_api_key_skipped_when_lowercase_auth_present(allow_public_dns):
-    route = respx.post("http://localhost:11235/crawl/job").mock(
+    route = respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"results": [{"markdown": "x"}]})
     )
     f = Crawl4AIFetcher(api_key="ignored", api_headers={"authorization": "Bearer lower"})
@@ -178,12 +182,20 @@ async def test_api_key_skipped_when_lowercase_auth_present(allow_public_dns):
 
 
 @pytest.mark.asyncio
+async def test_blocks_private_target_url():
+    f = Crawl4AIFetcher()
+
+    with pytest.raises(SSRFError):
+        await f.extract("http://169.254.169.254/latest/meta-data/")
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_poll_task_id(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t1"})
     )
-    respx.get("http://localhost:11235/crawl/job/t1").mock(
+    respx.get("https://crawl.example/task/t1").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -192,18 +204,32 @@ async def test_poll_task_id(allow_public_dns, no_sleep):
             },
         )
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     assert await f.extract("https://example.com/article") == "polled"
 
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_poll_allows_default_local_service_base_url(allow_public_dns, no_sleep):
+    respx.post("http://localhost:11235/crawl").mock(
+        return_value=httpx.Response(200, json={"task_id": "local-task"})
+    )
+    respx.get("http://localhost:11235/task/local-task").mock(
+        return_value=httpx.Response(200, json={"status": "completed", "markdown": "local poll"})
+    )
+    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+
+    assert await f.extract("https://example.com/article") == "local poll"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_poll_job_id_field(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"job_id": "j1"})
     )
-    respx.get("http://localhost:11235/crawl/job/j1").mock(
+    respx.get("https://crawl.example/task/j1").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -212,7 +238,7 @@ async def test_poll_job_id_field(allow_public_dns, no_sleep):
             },
         )
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     assert await f.extract("https://example.com/article") == "job polled"
 
@@ -220,10 +246,10 @@ async def test_poll_job_id_field(allow_public_dns, no_sleep):
 @pytest.mark.asyncio
 @respx.mock
 async def test_poll_id_field(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"id": "i1"})
     )
-    respx.get("http://localhost:11235/crawl/job/i1").mock(
+    respx.get("https://crawl.example/task/i1").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -232,7 +258,7 @@ async def test_poll_id_field(allow_public_dns, no_sleep):
             },
         )
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     assert await f.extract("https://example.com/article") == "id polled"
 
@@ -240,11 +266,11 @@ async def test_poll_id_field(allow_public_dns, no_sleep):
 @pytest.mark.asyncio
 @respx.mock
 async def test_poll_fallback_path_on_404(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t2"})
     )
-    respx.get("http://localhost:11235/crawl/job/t2").mock(return_value=httpx.Response(404))
-    respx.get("http://localhost:11235/task/t2").mock(
+    respx.get("https://crawl.example/task/t2").mock(return_value=httpx.Response(404))
+    respx.get("https://crawl.example/jobs/t2").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -253,21 +279,64 @@ async def test_poll_fallback_path_on_404(allow_public_dns, no_sleep):
             },
         )
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     assert await f.extract("https://example.com/article") == "fallback path"
 
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_poll_http_error_does_not_lock_bad_path(allow_public_dns, no_sleep):
+    respx.post("https://crawl.example/crawl").mock(
+        return_value=httpx.Response(200, json={"task_id": "t-http-error"})
+    )
+    bad_route = respx.get("https://crawl.example/task/t-http-error").mock(
+        side_effect=httpx.ConnectError("temporary network failure")
+    )
+    fallback_route = respx.get("https://crawl.example/jobs/t-http-error").mock(
+        return_value=httpx.Response(200, json={"status": "completed", "markdown": "fallback"})
+    )
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
+
+    assert await f.extract("https://example.com/article") == "fallback"
+    assert bad_route.call_count == 1
+    assert fallback_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_poll_url_is_ssrf_guarded_before_get(allow_public_dns, no_sleep, monkeypatch):
+    guarded_urls = []
+
+    def fake_guard(url):
+        guarded_urls.append(url)
+
+    monkeypatch.setattr("sluice.fetchers.crawl4ai.guard", fake_guard)
+    respx.post("https://crawl.example/crawl").mock(
+        return_value=httpx.Response(200, json={"task_id": "t-guard"})
+    )
+    respx.get("https://crawl.example/task/t-guard").mock(
+        return_value=httpx.Response(200, json={"status": "completed", "markdown": "guarded"})
+    )
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
+
+    assert await f.extract("https://example.com/article") == "guarded"
+    assert guarded_urls == [
+        "https://example.com/article",
+        "https://crawl.example/task/t-guard",
+    ]
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_poll_failure_status_raises(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t3"})
     )
-    respx.get("http://localhost:11235/crawl/job/t3").mock(
+    respx.get("https://crawl.example/task/t3").mock(
         return_value=httpx.Response(200, json={"status": "failed"})
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     with pytest.raises(RuntimeError, match="failed"):
         await f.extract("https://example.com/article")
@@ -276,13 +345,13 @@ async def test_poll_failure_status_raises(allow_public_dns, no_sleep):
 @pytest.mark.asyncio
 @respx.mock
 async def test_poll_success_without_markdown_raises(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t-success-empty"})
     )
-    respx.get("http://localhost:11235/crawl/job/t-success-empty").mock(
+    respx.get("https://crawl.example/task/t-success-empty").mock(
         return_value=httpx.Response(200, json={"status": "completed"})
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     with pytest.raises(RuntimeError, match="completed but no markdown"):
         await f.extract("https://example.com/article")
@@ -291,16 +360,16 @@ async def test_poll_success_without_markdown_raises(allow_public_dns, no_sleep):
 @pytest.mark.asyncio
 @respx.mock
 async def test_poll_retries_5xx_until_success(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t-retry"})
     )
-    route = respx.get("http://localhost:11235/crawl/job/t-retry").mock(
+    route = respx.get("https://crawl.example/task/t-retry").mock(
         side_effect=[
             httpx.Response(502),
             httpx.Response(200, json={"status": "completed", "markdown": "recovered"}),
         ]
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     assert await f.extract("https://example.com/article") == "recovered"
     assert route.call_count == 2
@@ -316,13 +385,13 @@ async def test_poll_timeout_raises(allow_public_dns, no_sleep, monkeypatch):
         return tick[0]
 
     monkeypatch.setattr("sluice.fetchers.crawl4ai.time.monotonic", fake_monotonic)
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t4"})
     )
-    respx.get("http://localhost:11235/crawl/job/t4").mock(
+    respx.get("https://crawl.example/task/t4").mock(
         return_value=httpx.Response(200, json={"status": "running"})
     )
-    f = Crawl4AIFetcher(poll_interval=0.0, poll_timeout=0.05)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.0, poll_timeout=0.05)
 
     with pytest.raises(RuntimeError, match="timeout"):
         await f.extract("https://example.com/article")
@@ -331,7 +400,7 @@ async def test_poll_timeout_raises(allow_public_dns, no_sleep, monkeypatch):
 @pytest.mark.asyncio
 @respx.mock
 async def test_no_markdown_and_no_task_id_raises(allow_public_dns):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("http://localhost:11235/crawl").mock(
         return_value=httpx.Response(200, json={"status": "queued"})
     )
     f = Crawl4AIFetcher()
@@ -343,10 +412,10 @@ async def test_no_markdown_and_no_task_id_raises(allow_public_dns):
 @pytest.mark.asyncio
 @respx.mock
 async def test_api_headers_sent_on_poll(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t5"})
     )
-    poll_route = respx.get("http://localhost:11235/crawl/job/t5").mock(
+    poll_route = respx.get("https://crawl.example/task/t5").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -356,6 +425,7 @@ async def test_api_headers_sent_on_poll(allow_public_dns, no_sleep):
         )
     )
     f = Crawl4AIFetcher(
+        base_url="https://crawl.example",
         api_headers={"Authorization": "Bearer tok"},
         poll_interval=0.01,
         poll_timeout=5.0,
@@ -369,10 +439,10 @@ async def test_api_headers_sent_on_poll(allow_public_dns, no_sleep):
 @pytest.mark.asyncio
 @respx.mock
 async def test_poll_inline_markdown_in_poll_response_skips_status(allow_public_dns, no_sleep):
-    respx.post("http://localhost:11235/crawl/job").mock(
+    respx.post("https://crawl.example/crawl").mock(
         return_value=httpx.Response(200, json={"task_id": "t6"})
     )
-    respx.get("http://localhost:11235/crawl/job/t6").mock(
+    respx.get("https://crawl.example/task/t6").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -381,7 +451,7 @@ async def test_poll_inline_markdown_in_poll_response_skips_status(allow_public_d
             },
         )
     )
-    f = Crawl4AIFetcher(poll_interval=0.01, poll_timeout=5.0)
+    f = Crawl4AIFetcher(base_url="https://crawl.example", poll_interval=0.01, poll_timeout=5.0)
 
     out = await f.extract("https://example.com/article")
 
