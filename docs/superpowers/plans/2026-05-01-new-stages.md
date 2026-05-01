@@ -491,7 +491,7 @@ class CrossDedupeProcessor:
                 ).ratio()
                 if ratio >= self.threshold:
                     group.append(other)
-                    title_dropped.add(id(other))
+                    # Do NOT add to title_dropped yet — winner may be one of these
 
             if len(group) > 1:
                 kept, rest = self._pick(group)
@@ -507,9 +507,7 @@ class CrossDedupeProcessor:
                         kept_source=kept.source_id,
                         dropped_source=r.source_id,
                     ).debug("cross_dedupe.merged")
-                    title_dropped.add(id(r))
-                # The non-winner members of the group are dropped;
-                # only the winner's original position should emit
+                # Only mark non-winners as dropped AFTER _pick() has run
                 for m in group:
                     if m is not kept:
                         title_dropped.add(id(m))
