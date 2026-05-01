@@ -1,14 +1,16 @@
+"""Raw single-shot client tests. Retry/fallback semantics live in test_middleware.py."""
+
 import httpx
 import pytest
 import respx
 
 from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider, ProvidersConfig
-from sluice.core.errors import AllProvidersExhausted
-from sluice.llm.client import LLMClient, StageLLMConfig
+from sluice.core.errors import QuotaExhausted, RateLimitError
+from sluice.llm.client import raw_chat
 from sluice.llm.pool import ProviderPool
 
 
-def make_pool(monkeypatch):
+def make_pool(monkeypatch, *, quota_tokens: list[str] | None = None) -> ProviderPool:
     monkeypatch.setenv("K", "v")
     return ProviderPool(
         ProvidersConfig(
@@ -18,20 +20,18 @@ def make_pool(monkeypatch):
                     type="openai_compatible",
                     base=[
                         BaseEndpoint(
-                            url="https://main", weight=1, key=[KeyConfig(value="env:K", weight=1)]
+                            url="https://main",
+                            weight=1,
+                            key=[
+                                KeyConfig(
+                                    value="env:K",
+                                    weight=1,
+                                    quota_error_tokens=quota_tokens or [],
+                                )
+                            ],
                         )
                     ],
                     models=[ModelEntry(model_name="m1")],
-                ),
-                Provider(
-                    name="p2",
-                    type="openai_compatible",
-                    base=[
-                        BaseEndpoint(
-                            url="https://fb", weight=1, key=[KeyConfig(value="env:K", weight=1)]
-                        )
-                    ],
-                    models=[ModelEntry(model_name="m2")],
                 ),
             ]
         )
@@ -39,9 +39,8 @@ def make_pool(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_success(monkeypatch):
+async def test_raw_chat_success(monkeypatch):
     pool = make_pool(monkeypatch)
-    cfg = StageLLMConfig(model="p1/m1")
     with respx.mock(base_url="https://main") as r:
         r.post("/chat/completions").mock(
             return_value=httpx.Response(
@@ -52,71 +51,35 @@ async def test_chat_success(monkeypatch):
                 },
             )
         )
-        client = LLMClient(pool, cfg)
-        out = await client.chat([{"role": "user", "content": "hello"}])
-        assert out == "hi"
+        res = await raw_chat(pool, "p1/m1", [{"role": "user", "content": "x"}], timeout=5)
+        assert res.text == "hi"
+        assert res.cost.prompt_tokens == 10
 
 
 @pytest.mark.asyncio
-async def test_falls_through_to_fallback(monkeypatch):
+async def test_raw_chat_429_rate_limit(monkeypatch):
     pool = make_pool(monkeypatch)
-    cfg = StageLLMConfig(model="p1/m1", fallback_model="p2/m2")
-    with respx.mock() as r:
-        r.post("https://main/chat/completions").mock(return_value=httpx.Response(429))
-        r.post("https://fb/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "choices": [{"message": {"content": "fb"}}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            )
-        )
-        out = await LLMClient(pool, cfg).chat([{"role": "user", "content": "x"}])
-        assert out == "fb"
+    with respx.mock(base_url="https://main") as r:
+        r.post("/chat/completions").mock(return_value=httpx.Response(429, text="slow down"))
+        with pytest.raises(RateLimitError):
+            await raw_chat(pool, "p1/m1", [{"role": "user", "content": "x"}], timeout=5)
 
 
 @pytest.mark.asyncio
-async def test_500_errors_trigger_fallback(monkeypatch):
-    pool = make_pool(monkeypatch)
-    cfg = StageLLMConfig(model="p1/m1", fallback_model="p2/m2")
-    with respx.mock() as r:
-        r.post("https://main/chat/completions").mock(
-            return_value=httpx.Response(500, text="internal error")
+async def test_raw_chat_429_quota_exhausted(monkeypatch):
+    pool = make_pool(monkeypatch, quota_tokens=["quota_exceeded"])
+    with respx.mock(base_url="https://main") as r:
+        r.post("/chat/completions").mock(
+            return_value=httpx.Response(429, text="quota_exceeded for today")
         )
-        r.post("https://fb/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "choices": [{"message": {"content": "fb-recovery"}}],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-                },
-            )
-        )
-        out = await LLMClient(pool, cfg).chat([{"role": "user", "content": "x"}])
-    assert out == "fb-recovery"
+        with pytest.raises(QuotaExhausted):
+            await raw_chat(pool, "p1/m1", [{"role": "user", "content": "x"}], timeout=5)
 
 
 @pytest.mark.asyncio
-async def test_all_exhausted_raises(monkeypatch):
+async def test_raw_chat_4xx_raises_status(monkeypatch):
     pool = make_pool(monkeypatch)
-    cfg = StageLLMConfig(model="p1/m1", fallback_model="p2/m2")
-    with respx.mock() as r:
-        r.post("https://main/chat/completions").mock(return_value=httpx.Response(429))
-        r.post("https://fb/chat/completions").mock(return_value=httpx.Response(429))
-        with pytest.raises(AllProvidersExhausted):
-            await LLMClient(pool, cfg).chat([{"role": "user", "content": "x"}])
-
-
-@pytest.mark.asyncio
-async def test_401_403_fail_fast_no_fallback(monkeypatch):
-    """4xx client errors (except 429) should fail immediately, not burn fallback quota."""
-    pool = make_pool(monkeypatch)
-    cfg = StageLLMConfig(model="p1/m1", fallback_model="p2/m2")
-    with respx.mock(assert_all_mocked=False) as r:
-        r.post("https://main/chat/completions").mock(
-            return_value=httpx.Response(401, text="unauthorized")
-        )
-        # fallback should NOT be called — don't register it in respx
+    with respx.mock(base_url="https://main") as r:
+        r.post("/chat/completions").mock(return_value=httpx.Response(401, text="unauthorized"))
         with pytest.raises(httpx.HTTPStatusError):
-            await LLMClient(pool, cfg).chat([{"role": "user", "content": "x"}])
+            await raw_chat(pool, "p1/m1", [{"role": "user", "content": "x"}], timeout=5)
