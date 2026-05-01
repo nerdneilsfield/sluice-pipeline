@@ -80,9 +80,8 @@ name = "prefilter"
 type = "filter"
 mode = "keep_if_all"
 rules = [
-  { field = "fulltext",     op = "min_length",  value = 300 },
-  { field = "title",        op = "not_matches",
-    value = "(?i)sponsored|advertisement|广告|赞助|招聘|hiring" },
+  { field = "fulltext",     op = "min_length", value = 300 },
+  { field = "title",        op = "not_matches", value = "(?i)sponsored|advertisement|广告|赞助|招聘|hiring" },
   { field = "published_at", op = "newer_than",  value = "48h" },
 ]
 
@@ -133,6 +132,36 @@ ops  = [{ op = "truncate", field = "fulltext", n = 20000 }]
 # mode = "keep_if_all"
 # rules = [{ field = "extras.score", op = "gte", value = 6 }]
 
+# ── Summarize + score + tag in one call (optional, replaces score_tag + summarize) ──
+# Single LLM call per item that writes summary, score, and tags simultaneously.
+# Saves cost vs. running score_tag and llm_stage(summarize) separately.
+# Prompt must return JSON: {"score": 1-10, "tags": [...], "summary": "..."}
+# Requires: prompts/summarize_score_tag.md
+#
+# [[stages]]
+# name            = "enrich"
+# type            = "summarize_score_tag"
+# input_field     = "fulltext"
+# prompt_file     = "prompts/summarize_score_tag.md"
+# model           = "glm/glm-4-flash"
+# fallback_model  = "deepseek/deepseek-chat"
+# workers         = 8
+# timeout         = 120
+# score_field     = "score"          # written to item.extras.score
+# summary_field   = "summary"        # written to item.extras.summary
+# tags_merge      = "append"
+# on_parse_error  = "skip"           # skip | fail | default
+# default_score   = 5
+# default_summary = ""
+# max_input_chars = 8000
+#
+# # Drop low-relevance items after scoring
+# [[stages]]
+# name = "relevance_filter"
+# type = "filter"
+# mode = "keep_if_all"
+# rules = [{ field = "extras.score", op = "gte", value = 6 }]
+
 [[stages]]
 name              = "summarize"
 type              = "llm_stage"
@@ -156,6 +185,18 @@ mode = "keep_if_all"
 rules = [
   { field = "summary", op = "min_length", value = 30 },
 ]
+
+# ── Sort by score (optional) ──────────────────────────────────────────────────
+# Sort all items by a field without dropping any.
+# Useful after scoring to rank items before the limit stage.
+# Unlike "limit", sort does not cap item count.
+#
+# [[stages]]
+# name         = "sort_by_score"
+# type         = "sort"
+# sort_by      = "extras.score"
+# sort_order   = "desc"          # desc | asc
+# sort_missing = "last"          # first | last | drop
 
 [[stages]]
 name    = "cap"
