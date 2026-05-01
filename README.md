@@ -10,7 +10,7 @@ and Notion in plain TOML — think of it as n8n in code form.**
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
 [![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
-[![Tests](https://img.shields.io/badge/tests-303%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Tests](https://img.shields.io/badge/tests-408%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice-pipeline)
@@ -61,6 +61,7 @@ After months of running sluice daily on real feeds, here's what got better:
 - **Sub-daily pipelines**: `run_key_template` with `{run_hour}`, `{run_minute}`, `{run_iso}`, `{run_epoch}` for cron intervals under 24h.
 - **`limit` stage**: sort, group, and cap output with `sort_by` / `group_by` / `per_group_max`.
 - **`field_filter` ops**: `lower`, `strip`, `regex_replace` in addition to existing `truncate` / `drop`.
+- **New cleanup + scoring stages**: `cross_dedupe`, `html_strip`, and `score_tag` help deduplicate across feeds, normalize HTML-ish RSS fields, and score/tag items before expensive summarization.
 - **Smart fetcher fallback**: `on_all_failed = "use_raw_summary"` gracefully falls back to RSS summary text when all fetchers fail.
 - **URL cache size cap**: configurable `max_rows` with LRU eviction — keeps the DB lean.
 - **GC command**: `sluice gc` reclaims storage from `failed_items`, `url_cache`, `attachment_mirror` + orphan file cleanup.
@@ -205,8 +206,8 @@ five plugin **Protocols**, and every pipeline is just a composition of them:
 | Protocol      | What it does                            | Built-in implementations                                                    |
 | ------------- | --------------------------------------- | --------------------------------------------------------------------------- |
 | `Source`      | Bring items into the stream             | `rss`                                                                       |
-| `Fetcher`     | Hydrate an article URL → markdown       | `trafilatura`, `firecrawl`, `jina_reader`                                   |
-| `Processor`   | Transform the stream                    | `dedupe`, `fetcher_apply`, `filter`, `field_filter`, `llm_stage`, `render`, `limit`, `enrich`, `mirror_attachments`  |
+| `Fetcher`     | Hydrate an article URL → markdown       | `trafilatura`, `crawl4ai`, `firecrawl`, `jina_reader`                       |
+| `Processor`   | Transform the stream                    | `dedupe`, `cross_dedupe`, `fetcher_apply`, `html_strip`, `filter`, `field_filter`, `score_tag`, `llm_stage`, `render`, `limit`, `enrich`, `mirror_attachments` |
 | `Sink`        | Push items downstream                   | `file_md`, `notion`, `telegram`, `feishu`, `email`                                                         |
 | `LLMProvider` | Talk to an OpenAI-compatible endpoint   | weighted base/key pool with 4-tier fallback chain                           |
 
@@ -436,6 +437,7 @@ mode           = "upsert"          # upsert | create_once | create_new
 | `type`         | Use when                                                |
 | -------------- | ------------------------------------------------------- |
 | `trafilatura`  | Pure Python, no extra service. Fast. Default first try. |
+| `crawl4ai`     | Self-hosted Crawl4AI. Uses `POST /crawl`, then polls `/task/{task_id}` or `/jobs/{task_id}` when the service returns a task id. |
 | `firecrawl`    | Self-hosted Firecrawl for JS-rendered pages.            |
 | `jina_reader`  | Hosted Jina Reader fallback when self-hosting fails.    |
 
@@ -445,9 +447,9 @@ cache:
 
 ```toml
 [fetcher]
-chain         = ["trafilatura", "firecrawl", "jina_reader"]
+chain         = ["trafilatura", "crawl4ai", "firecrawl", "jina_reader"]
 min_chars     = 500
-on_all_failed = "skip"             # or "continue_empty"
+on_all_failed = "skip"             # or "continue_empty" / "use_raw_summary"
 
 [fetcher.cache]
 enabled = true
@@ -470,14 +472,17 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 </details>
 
 <details>
-<summary><b>⚙️ Processors (the nine stage types)</b></summary>
+<summary><b>⚙️ Processors (the twelve stage types)</b></summary>
 
 | `type`                | Purpose                                                                       |
 | --------------------- | ----------------------------------------------------------------------------- |
 | `dedupe`              | Drop items already in `seen_items` for this pipeline.                         |
+| `cross_dedupe`        | Merge duplicates across sources by URL first, then title similarity. Keeps source-priority winners and can merge tags. |
 | `fetcher_apply`       | Walk the fetcher chain to populate `item.fulltext`.                           |
-| `filter`              | Rule-based keep/drop. 14 operators incl. regex, length, time windows. ReDoS-guarded. |
+| `html_strip`          | Strip HTML from top-level fields or `extras.<key>`, preserving paragraph/header line breaks and dropping script/style/template content. |
+| `filter`              | Rule-based keep/drop. 17 operators incl. regex, length, time windows. ReDoS-guarded. |
 | `field_filter`        | Mutate fields (truncate, drop, lower, strip, regex_replace) — e.g. trim `fulltext` to 20k chars before an expensive LLM call. |
+| `score_tag`           | Per-item LLM scorer that writes `extras.<score_field>` and appends/replaces tags. Handles JSON fences, numeric strings, truncation, and per-item failures. |
 | `llm_stage`           | LLM call, `per_item` (fan out) or `aggregate` (single call over all items). JSON parsing, max input chars, head-tail truncation, 4-tier fallback chain, cost preflight. |
 | `render`              | Jinja2 template → markdown into `context.<key>`. Receives a fixed context (items, stats, run_date, …). |
 | `limit`               | Sort and cap output. `sort_by`, `group_by`, `per_group_max`, `top_n`.        |
@@ -538,17 +543,16 @@ rules = [
   { field = "published_at", op = "newer_than", value = "48h" },
 ]
 
-# 2. LLM-driven filter — upstream llm_stage scores relevance 0-10,
+# 2. LLM-driven filter — score_tag scores relevance 1-10,
 #    then `filter` drops anything below 6.
 [[stages]]
-name = "rate_relevance"
-type = "llm_stage"
-mode = "per_item"
-input_field    = "summary"
-output_field   = "extras.relevance"
-prompt_file    = "prompts/rate.md"
-output_parser  = "json"
-model          = "openrouter/openai/gpt-4o-mini"
+name = "score_and_tag"
+type = "score_tag"
+input_field = "fulltext"
+prompt_file = "prompts/score_tag.md"
+model       = "openrouter/openai/gpt-4o-mini"
+score_field = "relevance"
+tags_merge  = "append"
 
 [[stages]]
 name = "drop_irrelevant"
@@ -571,8 +575,8 @@ rules = [
 ```
 
 **Why "rule-based filter + LLM scorer" beats pure LLM filtering:** scoring
-costs LLM tokens, so do it once via `llm_stage`, write the score into a
-field, and let cheap deterministic rules fan it out. Same prompt money,
+costs LLM tokens, so do it once via `score_tag`, write the score into
+`extras`, and let cheap deterministic rules fan it out. Same prompt money,
 unlimited filter combinations downstream.
 
 </details>
@@ -877,7 +881,7 @@ After that, every `git push --tags` publishes a release. No manual steps, no exp
 
 ## Roadmap
 
-✅ **v1 (now)** — RSS source, Notion sink, file_md sink, 6 processors, 4-tier
+✅ **v1 (now)** — RSS source, Notion sink, file_md sink, core processors, 4-tier
 LLM fallback, idempotent retries, dry-run, loguru diagnostics, Prefect
 scheduling, SSRF guard.
 
@@ -889,6 +893,8 @@ scheduling, SSRF guard.
 - [x] Sub-daily pipelines (`run_key_template`)
 - [x] `limit` stage
 - [x] `field_filter` ops: lower, strip, regex_replace
+- [x] `cross_dedupe`, `html_strip`, and `score_tag` stages
+- [x] Crawl4AI fetcher support
 - [x] Fetcher fallback (`on_all_failed`)
 - [x] URL cache size cap
 - [x] GC command + metrics + CLI audit viewer
@@ -915,7 +921,7 @@ scheduling, SSRF guard.
 git clone https://github.com/nerdneilsfield/sluice-pipeline
 cd sluice-pipeline
 uv sync --all-extras                # or pip install -e '.[dev,all]'
-pytest -q                           # 303 tests
+pytest -q                           # 408 tests
 pytest --cov=sluice                 # 80% coverage
 ruff check .
 ty check                            # 0 errors
