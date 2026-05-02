@@ -3,3 +3,5 @@
 [{{ item.url }}]({{ item.url }})
 
 {{ item.summary or item.raw_summary or "(无摘要)" }}
+
+{% if item.tags %}🏷 {% for tag in item.tags %}#{{ tag }}{% if not loop.last %} {% endif %}{% endfor %}{% endif %}

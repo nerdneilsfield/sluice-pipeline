@@ -17,7 +17,7 @@
 {{ it.extras.hn_comments }}
 
 {% endif %}
-{% if it.tags %}🏷 {{ it.tags | join(" · ") }}{% endif %}
+{% if it.tags %}🏷 {% for tag in it.tags %}#{{ tag }}{% if not loop.last %} {% endif %}{% endfor %}{% endif %}
 [原文]({{ it.url }}): {{ it.url }}{% if it.published_at %} · {{ it.published_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
 
 {% endfor %}
