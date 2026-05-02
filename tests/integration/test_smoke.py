@@ -136,12 +136,12 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
 
     bundle = load_all(cfg)
     fake_now = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
-    with respx.mock() as r:
+    with respx.mock(assert_all_called=False) as r:
         r.get("https://feed.example/rss").mock(return_value=httpx.Response(200, text=RSS))
         r.get("https://o.example/x").mock(return_value=httpx.Response(200, text=ART))
         r.get("https://a.example/y").mock(return_value=httpx.Response(200, text=ART))
         # 2 per_item summarize calls + 1 aggregate brief
-        r.post("https://llm.example/chat/completions").mock(
+        llm_route = r.post("https://llm.example/chat/completions").mock(
             side_effect=[
                 httpx.Response(
                     200,
@@ -167,6 +167,7 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
             ]
         )
         result = await run_pipeline(bundle, pipeline_id="p", now=fake_now)
+        assert llm_route.call_count == 3
 
     assert result.status == "success" and result.items_out == 2
     out = (tmp_path / "out_2026-04-28.md").read_text()
