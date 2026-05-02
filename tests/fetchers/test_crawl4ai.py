@@ -1,3 +1,4 @@
+import json
 import socket
 from unittest.mock import AsyncMock
 
@@ -139,6 +140,30 @@ async def test_initial_request_posts_urls_array(allow_public_dns):
     await f.extract("https://example.com/article")
 
     assert route.calls[0].request.read() == b'{"urls":["https://example.com/article"]}'
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_initial_request_sends_wait_options(allow_public_dns):
+    route = respx.post("http://localhost:11235/crawl").mock(
+        return_value=httpx.Response(200, json={"results": [{"markdown": "x"}]})
+    )
+    f = Crawl4AIFetcher(
+        wait_for="css:.article",
+        wait_for_timeout=10000,
+        wait_until="networkidle",
+        delay_before_return_html=1.0,
+    )
+
+    await f.extract("https://example.com/article")
+
+    assert json.loads(route.calls[0].request.content) == {
+        "urls": ["https://example.com/article"],
+        "wait_for": "css:.article",
+        "wait_for_timeout": 10000,
+        "wait_until": "networkidle",
+        "delay_before_return_html": 1.0,
+    }
 
 
 @pytest.mark.asyncio

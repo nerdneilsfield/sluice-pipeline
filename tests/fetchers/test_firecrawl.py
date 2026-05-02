@@ -1,3 +1,4 @@
+import json
 import socket
 
 import httpx
@@ -136,6 +137,27 @@ async def test_legacy_api_key_config(allow_public_dns):
     f = FirecrawlFetcher(base_url="https://fc.local", api_key="fc-key", api_version="v1")
     out = await f.extract("https://example.com/")
     assert out == "ok"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_wait_options_sent_in_request_body(allow_public_dns):
+    route = respx.post("https://fc.example/v2/scrape").mock(
+        return_value=httpx.Response(200, json={"data": {"markdown": "waited"}})
+    )
+    f = FirecrawlFetcher(
+        base_url="https://fc.example",
+        wait_for_ms=3000,
+        wait_for_selector=".article",
+    )
+
+    out = await f.extract("https://example.com/article")
+
+    assert out == "waited"
+    assert json.loads(route.calls[0].request.content)["wait"] == {
+        "milliseconds": 3000,
+        "selector": ".article",
+    }
 
 
 # Existing failure behavior
