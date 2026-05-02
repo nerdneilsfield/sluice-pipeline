@@ -32,6 +32,12 @@ def test_parse_integer_score():
     assert tags == ["AI"]
 
 
+def test_parse_repairs_malformed_json():
+    score, tags = _parse_score_tag("{'score': 7, 'tags': ['AI',],}")
+    assert score == 7
+    assert tags == ["AI"]
+
+
 def test_parse_float_score_rounds_to_nearest():
     score, _ = _parse_score_tag('{"score": 7.4}')
     assert score == 7

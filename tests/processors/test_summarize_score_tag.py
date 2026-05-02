@@ -21,6 +21,14 @@ def test_parse_returns_score_tags_summary():
     assert summary == "Great article."
 
 
+def test_parse_repairs_malformed_json():
+    raw = "{'score': 8, 'tags': ['AI',], 'summary': 'Great article.',}"
+    score, tags, summary = _parse_result(raw)
+    assert score == 8
+    assert tags == ["AI"]
+    assert summary == "Great article."
+
+
 def test_parse_strips_fence():
     raw = '```json\n{"score": 7, "tags": [], "summary": "Neat."}\n```'
     score, tags, summary = _parse_result(raw)
@@ -221,3 +229,26 @@ def test_config_allows_summary_extras_dotpath():
     )
 
     assert cfg.summary_field == "extras.tldr"
+
+
+def test_default_prompt_includes_hn_comments():
+    proc = SummarizeScoreTagProcessor(
+        name="test_sst",
+        input_field="fulltext",
+        prompt_file="prompts/summarize_score_tag.md",
+        llm_factory=lambda: None,
+    )
+    item = make_item(
+        title="HN story",
+        fulltext="Article body",
+        extras={"hn_comments": "alice: this changes the tradeoff"},
+    )
+
+    prompt = proc._render_one(item)
+
+    assert "HN 社区评论" in prompt
+    assert "alice: this changes the tradeoff" in prompt
+    assert "条目综合价值分" in prompt
+    assert "5W+1H" in prompt
+    assert "正面 / 反面 / 中立或补充" in prompt
+    assert "【模型评论】" in prompt

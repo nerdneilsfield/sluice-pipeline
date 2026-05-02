@@ -99,6 +99,29 @@ async def test_json_parser_writes_dict(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_json_parser_repairs_malformed_json(tmp_path):
+    prompt = tmp_path / "p.md"
+    prompt.write_text("rate: {{ item.summary }}")
+    llm = FakeLLM(replies=["{'score': 7,}"])
+    p = LLMStageProcessor(
+        name="rate",
+        mode="per_item",
+        input_field="summary",
+        output_field="extras.relevance",
+        prompt_file=str(prompt),
+        llm_factory=lambda: llm,
+        output_parser="json",
+        max_input_chars=1000,
+        truncate_strategy="head_tail",
+        workers=1,
+    )
+    it = mk(0)
+    it.summary = "abc"
+    ctx = await p.process(PipelineContext("p", "p/r", "2026-04-28", [it], {}))
+    assert ctx.items[0].extras["relevance"] == {"score": 7}
+
+
+@pytest.mark.asyncio
 async def test_truncate_head_tail(tmp_path):
     prompt = tmp_path / "p.md"
     prompt.write_text("{{ item.fulltext }}")
