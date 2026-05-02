@@ -33,8 +33,13 @@ def _markdown_value(value: Any) -> str | None:
     return None
 
 
-def _extract_markdown(data: dict) -> str | None:
-    """Return the first non-empty markdown string from known Crawl4AI shapes."""
+def _raw_value(value: Any) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _candidate_mappings(data: dict) -> list[Mapping]:
     candidates: list[Any] = []
     results = data.get("results")
     if isinstance(results, Sequence) and not isinstance(results, (str, bytes)) and results:
@@ -46,10 +51,12 @@ def _extract_markdown(data: dict) -> str | None:
             candidates.append(value)
 
     candidates.append(data)
+    return [candidate for candidate in candidates if isinstance(candidate, Mapping)]
 
-    for candidate in candidates:
-        if not isinstance(candidate, Mapping):
-            continue
+
+def _extract_markdown(data: dict) -> str | None:
+    """Return the first non-empty markdown string from known Crawl4AI shapes."""
+    for candidate in _candidate_mappings(data):
         markdown = _markdown_value(candidate.get("markdown"))
         if markdown:
             return markdown
@@ -63,6 +70,27 @@ def _extract_markdown(data: dict) -> str | None:
             markdown = _markdown_value(nested_results[0].get("markdown"))
             if markdown:
                 return markdown
+    return None
+
+
+def _extract_raw(data: dict) -> str | None:
+    """Return the first non-empty raw HTML/XML string from known Crawl4AI shapes."""
+    for candidate in _candidate_mappings(data):
+        for key in ("html", "raw_html", "cleaned_html", "content"):
+            raw = _raw_value(candidate.get(key))
+            if raw:
+                return raw
+        nested_results = candidate.get("results")
+        if (
+            isinstance(nested_results, Sequence)
+            and not isinstance(nested_results, (str, bytes))
+            and nested_results
+            and isinstance(nested_results[0], Mapping)
+        ):
+            for key in ("html", "raw_html", "cleaned_html", "content"):
+                raw = _raw_value(nested_results[0].get(key))
+                if raw:
+                    return raw
     return None
 
 
@@ -119,7 +147,26 @@ class Crawl4AIFetcher:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    async def _poll(self, client: httpx.AsyncClient, task_id: str) -> str:
+    def _build_payload(self, url: str) -> dict:
+        payload = {"urls": [url]}
+        if self.wait_for is not None:
+            payload["wait_for"] = self.wait_for
+        if self.wait_for_timeout is not None:
+            payload["wait_for_timeout"] = self.wait_for_timeout
+        if self.wait_until is not None:
+            payload["wait_until"] = self.wait_until
+        if self.delay_before_return_html is not None:
+            payload["delay_before_return_html"] = self.delay_before_return_html
+        return payload
+
+    async def _poll(
+        self,
+        client: httpx.AsyncClient,
+        task_id: str,
+        *,
+        extractor,
+        content_label: str,
+    ) -> str:
         headers = self._build_headers()
         start = time.monotonic()
         working_path: str | None = None
@@ -165,9 +212,9 @@ class Crawl4AIFetcher:
                 response.raise_for_status()
                 data = response.json()
 
-                markdown = _extract_markdown(data)
-                if markdown:
-                    return markdown
+                content = extractor(data)
+                if content:
+                    return content
 
                 status = str(data.get("status", "")).lower()
                 if status in _FAILURE_STATUSES:
@@ -175,7 +222,7 @@ class Crawl4AIFetcher:
 
                 if status in _SUCCESS_STATUSES:
                     raise RuntimeError(
-                        f"crawl4ai: task {task_id!r} completed but no markdown in response"
+                        f"crawl4ai: task {task_id!r} completed but no {content_label} in response"
                     )
 
                 working_path = path_template
@@ -190,15 +237,7 @@ class Crawl4AIFetcher:
     async def extract(self, url: str) -> str:
         guard(url)
         headers = self._build_headers()
-        payload = {"urls": [url]}
-        if self.wait_for is not None:
-            payload["wait_for"] = self.wait_for
-        if self.wait_for_timeout is not None:
-            payload["wait_for_timeout"] = self.wait_for_timeout
-        if self.wait_until is not None:
-            payload["wait_until"] = self.wait_until
-        if self.delay_before_return_html is not None:
-            payload["delay_before_return_html"] = self.delay_before_return_html
+        payload = self._build_payload(url)
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
@@ -221,4 +260,42 @@ class Crawl4AIFetcher:
                 )
 
             log.bind(fetcher="crawl4ai", task_id=task_id).debug("crawl4ai.polling_started")
-            return await self._poll(client, task_id)
+            return await self._poll(
+                client,
+                task_id,
+                extractor=_extract_markdown,
+                content_label="markdown",
+            )
+
+    async def extract_raw(self, url: str) -> str:
+        guard(url)
+        headers = self._build_headers()
+        payload = self._build_payload(url)
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/crawl",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            raw = _extract_raw(data)
+            if raw:
+                return raw
+
+            task_id = _get_task_id(data)
+            if not task_id:
+                raise RuntimeError(
+                    "crawl4ai: no raw content and no task id in /crawl response "
+                    f"(keys: {list(data.keys())})"
+                )
+
+            log.bind(fetcher="crawl4ai", task_id=task_id).debug("crawl4ai.raw_polling_started")
+            return await self._poll(
+                client,
+                task_id,
+                extractor=_extract_raw,
+                content_label="raw content",
+            )

@@ -25,7 +25,7 @@ from sluice.config import (
     TelegramSinkConfig,
 )
 from sluice.core.errors import ConfigError
-from sluice.fetchers.chain import FetcherChain
+from sluice.fetchers.chain import FetcherChain, RawFetcherChain
 from sluice.llm.client import StageLLMConfig
 from sluice.llm.middleware import LLMMiddleware
 from sluice.llm.pool import ProviderPool
@@ -71,7 +71,7 @@ def _resolve_template(root, value: str) -> str:
     return value
 
 
-def build_sources(pipe: PipelineConfig):
+def build_sources(pipe: PipelineConfig, *, feed_fallback_chain: RawFetcherChain | None = None):
     from sluice.sources._filter import wrap_source_filter
 
     out = []
@@ -85,6 +85,7 @@ def build_sources(pipe: PipelineConfig):
                 tag=s.tag,
                 name=s.name,
                 timeout=s.timeout,
+                feed_fallback_chain=feed_fallback_chain,
             )
             out.append(wrap_source_filter(source, s.filter))
     return out
@@ -126,6 +127,18 @@ def _resolve_fetcher_chain_cfg(
     return (chain, min_chars, on_all_failed, cache_enabled, ttl)
 
 
+def _build_fetcher(impl):
+    cls = get_fetcher(impl.type)
+    kwargs = impl.model_dump(exclude={"type", "extra"}, exclude_none=True)
+    if kwargs.get("api_key") and kwargs["api_key"].startswith("env:"):
+        from sluice.loader import resolve_env
+
+        kwargs["api_key"] = resolve_env(kwargs["api_key"])
+    if "api_headers" in kwargs and isinstance(kwargs["api_headers"], dict):
+        kwargs["api_headers"] = _resolve_api_headers(kwargs["api_headers"])
+    return cls(**kwargs)
+
+
 def build_fetcher_chain(
     global_cfg: GlobalConfig, pipe: PipelineConfig, cache: UrlCacheStore | None
 ) -> FetcherChain:
@@ -137,15 +150,7 @@ def build_fetcher_chain(
         impl = global_cfg.fetchers.get(name)
         if impl is None:
             raise ValueError(f"fetcher {name!r} declared in chain but missing [fetchers.{name}]")
-        cls = get_fetcher(impl.type)
-        kwargs = impl.model_dump(exclude={"type", "extra"}, exclude_none=True)
-        if kwargs.get("api_key") and kwargs["api_key"].startswith("env:"):
-            from sluice.loader import resolve_env
-
-            kwargs["api_key"] = resolve_env(kwargs["api_key"])
-        if "api_headers" in kwargs and isinstance(kwargs["api_headers"], dict):
-            kwargs["api_headers"] = _resolve_api_headers(kwargs["api_headers"])
-        fetchers.append(cls(**kwargs))
+        fetchers.append(_build_fetcher(impl))
     return FetcherChain(
         fetchers,
         min_chars=min_chars,
@@ -153,6 +158,27 @@ def build_fetcher_chain(
         cache=cache if cache_enabled else None,
         ttl_seconds=ttl,
     )
+
+
+def build_feed_fallback_chain(
+    global_cfg: GlobalConfig, pipe: PipelineConfig
+) -> RawFetcherChain | None:
+    chain_names = pipe.fetcher.chain if pipe.fetcher.chain is not None else global_cfg.fetcher.chain
+    if not chain_names:
+        return None
+    fetchers = []
+    for name in chain_names:
+        impl = global_cfg.fetchers.get(name)
+        if impl is None:
+            raise ValueError(f"fetcher {name!r} declared in chain but missing [fetchers.{name}]")
+        if impl.type in {"trafilatura", "jina_reader"}:
+            continue
+        fetcher = _build_fetcher(impl)
+        if hasattr(fetcher, "extract_raw"):
+            fetchers.append(fetcher)
+    if not fetchers:
+        return None
+    return RawFetcherChain(fetchers)
 
 
 def build_processors(

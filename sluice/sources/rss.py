@@ -26,6 +26,7 @@ class RssSource:
         tag: str | None = None,
         name: str | None = None,
         timeout: float = 30.0,
+        feed_fallback_chain=None,
     ):
         self.url = url
         self.pipeline_id = pipeline_id
@@ -33,6 +34,7 @@ class RssSource:
         self.tags = [tag] if tag else []
         self.name = name or source_id
         self.timeout = timeout
+        self.feed_fallback_chain = feed_fallback_chain
 
     async def fetch(self, window_start: datetime, window_end: datetime) -> AsyncIterator[Item]:
         headers = {
@@ -47,9 +49,23 @@ class RssSource:
                 r = await c.get(self.url, headers=headers)
                 r.raise_for_status()
                 text = r.text
-        except Exception:
-            log.bind(source_id=self.source_id, url=self.url).exception("rss.fetch_failed")
-            return
+        except Exception as direct_error:
+            if self.feed_fallback_chain is None:
+                log.bind(source_id=self.source_id, url=self.url).exception("rss.fetch_failed")
+                return
+            log.bind(
+                source_id=self.source_id,
+                url=self.url,
+                error_class=type(direct_error).__name__,
+                error=str(direct_error),
+            ).info("rss.direct_fetch_failed_using_raw_fallback")
+            try:
+                text = await self.feed_fallback_chain.fetch(self.url)
+            except Exception:
+                log.bind(source_id=self.source_id, url=self.url).exception(
+                    "rss.raw_fallback_failed"
+                )
+                return
         feed = feedparser.parse(text)
         entries = list(feed.entries)
         skipped_future = 0

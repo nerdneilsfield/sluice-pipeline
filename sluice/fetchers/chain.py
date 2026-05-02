@@ -61,3 +61,35 @@ class FetcherChain:
             return None
         log.bind(url=url, attempts=attempts, details=details).info("fetcher.chain_failed")
         raise AllFetchersFailed(url, attempts, details)
+
+
+class RawFetcherChain:
+    def __init__(self, fetchers: list):
+        self.fetchers = fetchers
+
+    async def fetch(self, url: str) -> str:
+        attempts: list[str] = []
+        details: list[str] = []
+        for fetcher in self.fetchers:
+            attempts.append(fetcher.name)
+            log.bind(url=url, fetcher=fetcher.name).debug("raw_fetcher.attempt_started")
+            try:
+                text = await fetcher.extract_raw(url)
+            except Exception as exc:
+                details.append(f"{fetcher.name}: {type(exc).__name__}: {exc}")
+                log.bind(
+                    url=url,
+                    fetcher=fetcher.name,
+                    error_class=type(exc).__name__,
+                    error=str(exc),
+                ).debug("raw_fetcher.attempt_failed")
+                continue
+            if text:
+                log.bind(url=url, fetcher=fetcher.name, chars=len(text)).debug(
+                    "raw_fetcher.attempt_succeeded"
+                )
+                return text
+            details.append(f"{fetcher.name}: empty")
+            log.bind(url=url, fetcher=fetcher.name).debug("raw_fetcher.attempt_empty")
+        log.bind(url=url, attempts=attempts, details=details).info("raw_fetcher.chain_failed")
+        raise AllFetchersFailed(url, attempts, details)

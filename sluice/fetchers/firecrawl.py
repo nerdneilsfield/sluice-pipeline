@@ -62,11 +62,10 @@ class FirecrawlFetcher:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
-    async def extract(self, url: str) -> str:
-        guard(url)
+    def _build_payload(self, url: str, *, formats: list[str]) -> dict:
         payload = {
             "url": url,
-            "formats": ["markdown"],
+            "formats": formats,
         }
         wait = {}
         if self.wait_for_ms is not None:
@@ -75,6 +74,9 @@ class FirecrawlFetcher:
             wait["selector"] = self.wait_for_selector
         if wait:
             payload["wait"] = wait
+        return payload
+
+    async def _scrape(self, payload: dict) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout) as c:
             r = await c.post(
                 self._endpoint,
@@ -82,5 +84,15 @@ class FirecrawlFetcher:
                 json=payload,
             )
             r.raise_for_status()
-            data = r.json()
+            return r.json()
+
+    async def extract(self, url: str) -> str:
+        guard(url)
+        data = await self._scrape(self._build_payload(url, formats=["markdown"]))
         return data.get("data", {}).get("markdown", "") or ""
+
+    async def extract_raw(self, url: str) -> str:
+        guard(url)
+        data = await self._scrape(self._build_payload(url, formats=["html"]))
+        body = data.get("data", {})
+        return body.get("html", "") or body.get("rawHtml", "") or body.get("raw_html", "") or ""
