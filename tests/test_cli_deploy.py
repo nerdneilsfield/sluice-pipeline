@@ -7,7 +7,7 @@ from sluice.cli import app
 runner = CliRunner()
 
 
-def test_deploy_creates_all_pipelines(tmp_path):
+def test_deploy_creates_all_pipelines(tmp_path, monkeypatch):
     cfg = tmp_path / "configs"
     (cfg / "pipelines").mkdir(parents=True)
     (cfg / "sluice.toml").write_text("""
@@ -17,6 +17,7 @@ db_path="x.db"
 timezone="UTC"
 default_cron="0 8 * * *"
 prefect_api_url="http://x"
+prefect_api_auth_string="env:PREFECT_AUTH"
 [fetcher]
 chain=["trafilatura"]
 min_chars=10
@@ -46,10 +47,19 @@ model_name="m"
         'id="p2"\nwindow="24h"\n[[sources]]\ntype="rss"\nurl="https://y"\n[[stages]]\nname="r"\ntype="render"\ntemplate="/dev/null"\noutput_field="context.x"\n[[sinks]]\nid="s"\ntype="file_md"\ninput="context.x"\npath="/dev/null"\n'
     )
 
+    observed_settings = {}
+
+    def fake_serve(*deployments):
+        from prefect.settings import get_current_settings
+
+        settings = get_current_settings()
+        observed_settings["url"] = settings.api.url
+        observed_settings["auth_string"] = settings.api.auth_string.get_secret_value()
+
     with (
         patch("prefect.client.schemas.schedules.CronSchedule"),
         patch("sluice.flow.build_flow") as mock_build_flow,
-        patch("sluice.cli.prefect_serve"),
+        patch("sluice.cli.prefect_serve", side_effect=fake_serve),
     ):
 
         def make_flow(pid):
@@ -58,7 +68,12 @@ model_name="m"
             return flow_obj
 
         mock_build_flow.side_effect = make_flow
+        monkeypatch.setenv("PREFECT_AUTH", "admin:pass")
         result = runner.invoke(app, ["deploy", "--config-dir", str(cfg)])
 
     assert result.exit_code == 0
     assert mock_build_flow.call_count == 2
+    assert observed_settings == {
+        "url": "http://x",
+        "auth_string": "admin:pass",
+    }

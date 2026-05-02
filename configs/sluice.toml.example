@@ -13,6 +13,9 @@ db_path = "./data/sluice.db"
 timezone         = "Asia/Shanghai"
 default_cron     = "0 8 * * *"
 prefect_api_url  = "http://localhost:4200/api"
+# For a self-hosted Prefect server protected by Basic Auth.
+# The server process should use PREFECT_SERVER_API_AUTH_STRING with the same value.
+# prefect_api_auth_string = "env:PREFECT_API_AUTH_STRING"
 
 # ─── Garbage collection ───────────────────────────────────────────────────────
 [gc]

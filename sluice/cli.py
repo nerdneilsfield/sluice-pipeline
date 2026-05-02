@@ -266,7 +266,28 @@ def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
         deployments.append(gc_dep)
 
     if deployments:
-        prefect_serve(*deployments)
+        with _prefect_api_settings(bundle.global_cfg.runtime):
+            prefect_serve(*deployments)
+
+
+def _prefect_api_settings(runtime):
+    from contextlib import nullcontext
+
+    updates = {}
+    if runtime.prefect_api_url:
+        from prefect.settings import PREFECT_API_URL
+
+        updates[PREFECT_API_URL] = runtime.prefect_api_url
+    if runtime.prefect_api_auth_string:
+        from prefect.settings import PREFECT_API_AUTH_STRING
+
+        updates[PREFECT_API_AUTH_STRING] = runtime.prefect_api_auth_string
+    if not updates:
+        return nullcontext()
+
+    from prefect.settings import temporary_settings
+
+    return temporary_settings(updates)
 
 
 @app.command()

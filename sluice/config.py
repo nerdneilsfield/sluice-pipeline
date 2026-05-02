@@ -1,4 +1,5 @@
 from typing import Annotated, Any, Literal, Union
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -563,6 +564,23 @@ StateOverride = StateConfig
 class RuntimeConfig(BaseModel):
     timezone: str = "Asia/Shanghai"
     default_cron: str = "0 8 * * *"
+    prefect_api_url: str | None = None
+    prefect_api_auth_string: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_prefect_api(self) -> "RuntimeConfig":
+        from sluice.core.errors import ConfigError
+
+        if self.prefect_api_url is not None:
+            parsed = urlparse(self.prefect_api_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ConfigError(
+                    "runtime.prefect_api_url must be an absolute http(s) URL, "
+                    f"got {self.prefect_api_url!r}"
+                )
+        if self.prefect_api_auth_string is not None and not self.prefect_api_auth_string.strip():
+            raise ConfigError("runtime.prefect_api_auth_string must not be empty")
+        return self
 
 
 class GlobalFetcherConfig(BaseModel):

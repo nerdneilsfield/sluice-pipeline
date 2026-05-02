@@ -23,6 +23,7 @@ def _load(path: Path) -> dict:
 def load_all(root: Path) -> ConfigBundle:
     root = Path(root)
     global_cfg = GlobalConfig.model_validate(_load(root / "sluice.toml"))
+    _resolve_runtime_env(global_cfg)
     providers = ProvidersConfig.model_validate(_load(root / "providers.toml"))
     pipes_dir = root / "pipelines"
     pipelines: dict[str, PipelineConfig] = {}
@@ -55,6 +56,12 @@ def resolve_env(value: str) -> str:
             raise ConfigError(f"env var {value[4:]} not set")
         return v
     return value
+
+
+def _resolve_runtime_env(global_cfg: GlobalConfig) -> None:
+    runtime = global_cfg.runtime
+    if runtime.prefect_api_auth_string:
+        runtime.prefect_api_auth_string = resolve_env(runtime.prefect_api_auth_string)
 
 
 def _validate_run_key_template(global_cfg: GlobalConfig, pipe: PipelineConfig) -> None:
