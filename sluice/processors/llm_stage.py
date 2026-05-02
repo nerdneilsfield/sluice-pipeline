@@ -1,5 +1,4 @@
 import asyncio
-import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -9,6 +8,7 @@ from jinja2 import Template
 from sluice.context import PipelineContext
 from sluice.core.errors import BudgetExceeded, StageError
 from sluice.core.item import compute_item_key
+from sluice.llm.json_output import loads_llm_json
 from sluice.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -125,8 +125,8 @@ class LLMStageProcessor:
         if self.output_parser == "text":
             return text
         try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
+            return loads_llm_json(text)
+        except Exception as e:
             if self.on_parse_error == "fail":
                 raise StageError(f"json parse failed: {e}")
             if self.on_parse_error == "default":

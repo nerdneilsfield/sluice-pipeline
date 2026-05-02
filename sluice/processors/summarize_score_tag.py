@@ -9,6 +9,7 @@ from jinja2 import Template
 from sluice.context import PipelineContext
 from sluice.core.errors import BudgetExceeded
 from sluice.core.item import Item, compute_item_key
+from sluice.llm.json_output import loads_llm_json
 from sluice.logging_setup import get_logger
 from sluice.processors.score_tag import _clean_tags, _strip_fence, _truncate
 
@@ -20,9 +21,7 @@ _MISSING = object()
 def _parse_result(raw: str) -> tuple[int, list[str], str]:
     text = _strip_fence(raw.strip())
     try:
-        import json
-
-        data = json.loads(text)
+        data = loads_llm_json(text)
     except Exception as exc:
         raise ValueError(f"JSON decode error: {exc}") from exc
 

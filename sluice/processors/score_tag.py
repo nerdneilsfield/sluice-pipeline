@@ -1,5 +1,4 @@
 import asyncio
-import json
 import math
 import re
 from dataclasses import replace
@@ -11,6 +10,7 @@ from jinja2 import Template
 from sluice.context import PipelineContext
 from sluice.core.errors import BudgetExceeded
 from sluice.core.item import Item, compute_item_key
+from sluice.llm.json_output import loads_llm_json
 from sluice.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -32,8 +32,8 @@ def _strip_fence(text: str) -> str:
 def _parse_score_tag(raw: str) -> tuple[int, list[str]]:
     text = _strip_fence(raw.strip())
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
+        data = loads_llm_json(text)
+    except Exception as exc:
         raise ValueError(f"JSON decode error: {exc}") from exc
 
     if not isinstance(data, dict):
