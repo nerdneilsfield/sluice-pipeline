@@ -43,7 +43,7 @@ class RssSource:
             "rss.fetch_started"
         )
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as c:
+            async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as c:
                 r = await c.get(self.url, headers=headers)
                 r.raise_for_status()
                 text = r.text

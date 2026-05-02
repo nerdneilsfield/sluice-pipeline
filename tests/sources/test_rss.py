@@ -42,6 +42,26 @@ async def test_rss_drops_outside_window():
 
 
 @pytest.mark.asyncio
+async def test_rss_follows_redirects():
+    src = RssSource(url="https://feed.example/rss", pipeline_id="p", source_id="s1")
+    with respx.mock() as r:
+        r.get("https://feed.example/rss").mock(
+            return_value=httpx.Response(
+                302,
+                headers={"location": "https://feed.example/new-rss"},
+            )
+        )
+        r.get("https://feed.example/new-rss").mock(
+            return_value=httpx.Response(200, text=FIXTURE)
+        )
+        end = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        items = [it async for it in src.fetch(start, end)]
+
+    assert len(items) == 2
+
+
+@pytest.mark.asyncio
 async def test_rss_extracts_enclosures_as_attachments():
     rss = """<?xml version="1.0"?>
     <rss><channel>
