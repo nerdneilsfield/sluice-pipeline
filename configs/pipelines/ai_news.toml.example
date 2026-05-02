@@ -33,6 +33,15 @@ type    = "rss"
 url     = "https://openai.com/blog/rss"
 tag     = "ai"
 timeout = 60
+# Optional on any source: same mode/rules syntax as the filter stage.
+# Source-level "content" means source-time article text, such as RSS
+# summary/description/content.
+# [sources.filter]
+# mode = "keep_if_any"
+# rules = [
+#   { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+#   { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
+# ]
 
 [[sources]]
 type    = "rss"

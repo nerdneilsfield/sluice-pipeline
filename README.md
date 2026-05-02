@@ -149,6 +149,15 @@ timezone = "Asia/Shanghai"
 type = "rss"
 url  = "https://openai.com/blog/rss"
 
+# Optional on any source: run the same mode/rules filter before stages.
+# `content` means the source-time article text, e.g. RSS summary/content.
+[sources.filter]
+mode = "keep_if_any"
+rules = [
+  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+  { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
+]
+
 [[stages]]
 name = "dedupe"
 type = "dedupe"
@@ -519,6 +528,11 @@ is `{ field, op, value }` where `field` is a dot-path resolved through
 `Item.get()` (so `extras.relevance`, `tags.0`, `published_at` all work).
 Combine rules with one of four `mode`s.
 
+The same `mode` and `rules` shape is also valid under any `[[sources]]` as
+`[sources.filter]`. Source-level filters run before stages and can use the
+extra `content` field, which maps to source-time article text such as RSS
+`summary`, `description`, or Atom `content`.
+
 **Modes:**
 
 | `mode`           | Keep this item if…                       |
@@ -551,7 +565,19 @@ Combine rules with one of four `mode`s.
 **Worked examples:**
 
 ```toml
-# 1. Pre-LLM cheap prefilter — keep articles long enough to summarize
+# 1. Source-level regex prefilter — skip unwanted feed items before stages.
+[[sources]]
+type = "rss"
+url  = "https://openai.com/blog/rss"
+
+[sources.filter]
+mode = "keep_if_any"
+rules = [
+  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+  { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
+]
+
+# 2. Pre-LLM cheap stage filter — keep articles long enough to summarize
 #    and drop obvious ad/sponsored junk by title.
 [[stages]]
 name = "prefilter"
@@ -563,7 +589,7 @@ rules = [
   { field = "published_at", op = "newer_than", value = "48h" },
 ]
 
-# 2. LLM-driven filter — score_tag scores relevance 1-10,
+# 3. LLM-driven filter — score_tag scores relevance 1-10,
 #    then `filter` drops anything below 6.
 [[stages]]
 name = "score_and_tag"
@@ -590,7 +616,7 @@ sort_type = "number"  # auto | number | string | datetime
 sort_order = "desc"
 sort_missing = "last"
 
-# 3. Tag whitelist + URL blacklist combo
+# 4. Tag whitelist + URL blacklist combo
 [[stages]]
 name = "scope"
 type = "filter"

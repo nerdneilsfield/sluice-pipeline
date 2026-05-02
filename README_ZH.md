@@ -146,6 +146,15 @@ timezone = "Asia/Shanghai"
 type = "rss"
 url  = "https://openai.com/blog/rss"
 
+# 任意 source 都可选：进入 stages 前先按同一套 mode/rules 过滤。
+# `content` 表示 source 阶段可见的正文，如 RSS summary/content。
+[sources.filter]
+mode = "keep_if_any"
+rules = [
+  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+  { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
+]
+
 [[stages]]
 name = "dedupe"
 type = "dedupe"
@@ -505,6 +514,11 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 （`extras.relevance`、`tags.0`、`published_at` 都行），用四种 `mode`
 之一组合。
 
+同样的 `mode` 和 `rules` 结构也可以写在任意 `[[sources]]` 下面，
+作为 `[sources.filter]`。source 级过滤会在 stages 之前运行，并额外支持
+`content` 字段，表示 source 阶段可见的正文，例如 RSS 的 `summary`、
+`description` 或 Atom `content`。
+
 **Mode（怎么组合）：**
 
 | `mode`           | 满足下列条件就保留这条 item            |
@@ -537,7 +551,19 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 **实战示例：**
 
 ```toml
-# 1. 喂 LLM 之前的便宜预过滤 —— 留下足够长的文章 + 砍标题里的广告
+# 1. source 级正则预过滤 —— 进入 stages 前先跳过不相关 feed item
+[[sources]]
+type = "rss"
+url  = "https://openai.com/blog/rss"
+
+[sources.filter]
+mode = "keep_if_any"
+rules = [
+  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+  { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
+]
+
+# 2. 喂 LLM 之前的便宜 stage 过滤 —— 留下足够长的文章 + 砍标题里的广告
 [[stages]]
 name = "prefilter"
 type = "filter"
@@ -548,7 +574,7 @@ rules = [
   { field = "published_at", op = "newer_than", value = "48h" },
 ]
 
-# 2. LLM 打分 + 规则过滤组合 —— score_tag 给相关度 1-10，
+# 3. LLM 打分 + 规则过滤组合 —— score_tag 给相关度 1-10，
 #    `filter` 砍掉低于 6 分的。
 [[stages]]
 name = "score_and_tag"
@@ -567,7 +593,7 @@ rules = [
   { field = "extras.relevance", op = "gte", value = 6 },
 ]
 
-# 3. 标签白名单 + URL 黑名单组合
+# 4. 标签白名单 + URL 黑名单组合
 [[stages]]
 name = "scope"
 type = "filter"
