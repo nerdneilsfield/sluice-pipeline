@@ -72,20 +72,21 @@ def _resolve_template(root, value: str) -> str:
 
 
 def build_sources(pipe: PipelineConfig):
+    from sluice.sources._filter import wrap_source_filter
+
     out = []
     for i, s in enumerate(pipe.sources):
         if isinstance(s, RssSourceConfig):
             cls = get_source("rss")
-            out.append(
-                cls(
-                    url=s.url,
-                    pipeline_id=pipe.id,
-                    source_id=s.name or f"rss_{i}",
-                    tag=s.tag,
-                    name=s.name,
-                    timeout=s.timeout,
-                )
+            source = cls(
+                url=s.url,
+                pipeline_id=pipe.id,
+                source_id=s.name or f"rss_{i}",
+                tag=s.tag,
+                name=s.name,
+                timeout=s.timeout,
             )
+            out.append(wrap_source_filter(source, s.filter))
     return out
 
 

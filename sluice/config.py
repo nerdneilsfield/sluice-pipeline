@@ -43,20 +43,6 @@ class ProvidersConfig(BaseModel):
     providers: list[Provider]
 
 
-# ---------- Sources ----------
-class RssSourceConfig(BaseModel):
-    type: Literal["rss"]
-    url: str
-    tag: str | None = None
-    name: str | None = None
-    timeout: float = 120.0
-
-
-SourceConfig = Annotated[
-    Union[RssSourceConfig],
-    Field(discriminator="type"),
-]
-
 # ---------- Filter rules ----------
 FilterOp = Literal[
     "gt",
@@ -83,6 +69,30 @@ class FilterRule(BaseModel):
     field: str
     op: FilterOp
     value: Any = None
+
+
+# ---------- Sources ----------
+class SourceFilterConfig(BaseModel):
+    mode: Literal["keep_if_all", "keep_if_any", "drop_if_all", "drop_if_any"]
+    rules: list[FilterRule]
+
+
+class CommonSourceFields(BaseModel):
+    filter: SourceFilterConfig | None = None
+
+
+class RssSourceConfig(CommonSourceFields):
+    type: Literal["rss"]
+    url: str
+    tag: str | None = None
+    name: str | None = None
+    timeout: float = 120.0
+
+
+SourceConfig = Annotated[
+    Union[RssSourceConfig],
+    Field(discriminator="type"),
+]
 
 
 # ---------- Stages ----------

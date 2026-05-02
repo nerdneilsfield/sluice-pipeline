@@ -73,7 +73,7 @@ class RssSource:
                 url=canonical_url(getattr(e, "link", "")),
                 title=getattr(e, "title", "") or "",
                 published_at=published,
-                raw_summary=getattr(e, "summary", None) or getattr(e, "description", None),
+                raw_summary=self._raw_summary(e),
                 attachments=self._attachments(e),
                 tags=list(self.tags),
             )
@@ -114,3 +114,17 @@ class RssSource:
                 )
             )
         return out
+
+    @staticmethod
+    def _raw_summary(e) -> str | None:
+        summary = getattr(e, "summary", None) or getattr(e, "description", None)
+        if summary:
+            return summary
+        for content in getattr(e, "content", []) or []:
+            if isinstance(content, dict):
+                value = content.get("value")
+            else:
+                value = getattr(content, "value", None)
+            if value:
+                return str(value)
+        return None
