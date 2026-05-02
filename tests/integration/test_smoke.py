@@ -23,12 +23,6 @@ RSS = """<?xml version='1.0'?><rss><channel>
 <guid>g-y</guid><pubDate>Mon, 28 Apr 2026 04:00:00 +0000</pubDate></item>
 </channel></rss>"""
 
-ART = (
-    "<html><body><article>"
-    + ("This is a long article about AI. " * 40)
-    + "</article></body></html>"
-)
-
 
 @pytest.mark.asyncio
 async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
@@ -40,6 +34,14 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+    async def fake_extract(self, url):
+        return f"Fetched article from {url}. " + ("This is a long article about AI. " * 40)
+
+    monkeypatch.setattr(
+        "sluice.fetchers.trafilatura_fetcher.TrafilaturaFetcher.extract",
+        fake_extract,
+    )
 
     cfg = tmp_path / "configs"
     (cfg / "pipelines").mkdir(parents=True)
@@ -138,8 +140,6 @@ async def test_full_pipeline_with_mocked_llm(tmp_path, monkeypatch):
     fake_now = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
     with respx.mock(assert_all_called=False) as r:
         r.get("https://feed.example/rss").mock(return_value=httpx.Response(200, text=RSS))
-        r.get("https://o.example/x").mock(return_value=httpx.Response(200, text=ART))
-        r.get("https://a.example/y").mock(return_value=httpx.Response(200, text=ART))
         # 2 per_item summarize calls + 1 aggregate brief
         llm_route = r.post("https://llm.example/chat/completions").mock(
             side_effect=[
