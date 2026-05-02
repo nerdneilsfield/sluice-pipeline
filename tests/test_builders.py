@@ -46,6 +46,35 @@ def test_build_rss_source():
     assert sources[0].tags == ["ai"]
 
 
+def test_build_source_filter_from_common_source_config():
+    cfg = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[
+            RssSourceConfig(
+                type="rss",
+                url="https://x/feed",
+                filter={
+                    "mode": "keep_if_any",
+                    "rules": [
+                        {"field": "title", "op": "matches", "value": r"(?i)\bgpt\b"}
+                    ],
+                },
+            )
+        ],
+        stages=[DedupeConfig(type="dedupe", name="d")],
+        sinks=[
+            FileMdSinkConfig(
+                id="x", type="file_md", input="context.markdown", path="./{run_date}.md"
+            )
+        ],
+    )
+    sources = build_sources(cfg)
+    assert sources[0].url == "https://x/feed"
+    assert sources[0].filter.mode == "keep_if_any"
+    assert sources[0].filter.rules[0].field == "title"
+
+
 @pytest.mark.asyncio
 async def test_build_fetcher_chain():
 

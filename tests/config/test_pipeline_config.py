@@ -87,3 +87,18 @@ def test_filter_op_validated():
     bad = PIPE.replace('"min_length"', '"weird_op"')
     with pytest.raises(Exception):
         PipelineConfig.model_validate(tomllib.loads(bad))
+
+
+def test_source_filter_parsed():
+    raw = PIPE.replace(
+        'tag  = "ai"\n',
+        (
+            'tag  = "ai"\n'
+            '[sources.filter]\n'
+            'mode = "keep_if_any"\n'
+            'rules = [{ field = "title", op = "matches", value = "(?i)gpt|agent" }]\n'
+        ),
+    )
+    cfg = PipelineConfig.model_validate(tomllib.loads(raw))
+    assert cfg.sources[0].filter.mode == "keep_if_any"
+    assert cfg.sources[0].filter.rules[0].op == "matches"
