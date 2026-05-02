@@ -71,7 +71,12 @@ def _resolve_template(root, value: str) -> str:
     return value
 
 
-def build_sources(pipe: PipelineConfig, *, feed_fallback_chain: RawFetcherChain | None = None):
+def build_sources(
+    pipe: PipelineConfig,
+    *,
+    feed_fallback_chain: RawFetcherChain | None = None,
+    feed_fallback_chain_factory=None,
+):
     from sluice.sources._filter import wrap_source_filter
 
     out = []
@@ -86,6 +91,7 @@ def build_sources(pipe: PipelineConfig, *, feed_fallback_chain: RawFetcherChain 
                 name=s.name,
                 timeout=s.timeout,
                 feed_fallback_chain=feed_fallback_chain,
+                feed_fallback_chain_factory=feed_fallback_chain_factory,
             )
             out.append(wrap_source_filter(source, s.filter))
     return out

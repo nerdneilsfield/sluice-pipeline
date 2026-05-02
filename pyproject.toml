@@ -83,6 +83,9 @@ include = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 addopts = "-ra --cov=sluice --cov-report=term-missing"
+markers = [
+  "prefect_api: tests that exercise live Prefect API settings injection",
+]
 
 [tool.ruff]
 line-length = 100

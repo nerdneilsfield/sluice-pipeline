@@ -37,4 +37,7 @@ jobs:
         run: uv run ty check
 
       - name: Test
-        run: uv run pytest -q --ignore=tests/integration
+        run: >
+          uv run pytest -q
+          --ignore=tests/integration
+          -m "not prefect_api"

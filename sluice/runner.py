@@ -123,7 +123,6 @@ async def run_pipeline(
             pool = ProviderPool(bundle.providers)
             needs_fetcher_chain = any(isinstance(st, FetcherApplyConfig) for st in pipe.stages)
             chain = build_fetcher_chain(global_cfg, pipe, cache) if needs_fetcher_chain else None
-            feed_fallback_chain = build_feed_fallback_chain(global_cfg, pipe)
 
             if pipe.limits.max_estimated_cost_usd > 0:
                 for st in pipe.stages:
@@ -152,7 +151,10 @@ async def run_pipeline(
                 now=now, window=pipe.window, lookback_overlap=pipe.lookback_overlap
             )
 
-            sources = build_sources(pipe, feed_fallback_chain=feed_fallback_chain)
+            sources = build_sources(
+                pipe,
+                feed_fallback_chain_factory=lambda: build_feed_fallback_chain(global_cfg, pipe),
+            )
             collected = []
             for i, src in enumerate(sources, start=1):
                 source_name = getattr(src, "source_id", f"source_{i}")

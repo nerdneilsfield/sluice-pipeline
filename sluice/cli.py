@@ -278,10 +278,16 @@ def _prefect_api_settings(runtime):
         from prefect.settings import PREFECT_API_URL
 
         updates[PREFECT_API_URL] = runtime.prefect_api_url
-    if runtime.prefect_api_auth_string:
+    if runtime.prefect_api_auth_string is not None:
+        from sluice.core.errors import ConfigError
+        from sluice.loader import resolve_env
+
+        auth_string = resolve_env(runtime.prefect_api_auth_string)
+        if not auth_string.strip():
+            raise ConfigError("runtime.prefect_api_auth_string must not be empty")
         from prefect.settings import PREFECT_API_AUTH_STRING
 
-        updates[PREFECT_API_AUTH_STRING] = runtime.prefect_api_auth_string
+        updates[PREFECT_API_AUTH_STRING] = auth_string
     if not updates:
         return nullcontext()
 

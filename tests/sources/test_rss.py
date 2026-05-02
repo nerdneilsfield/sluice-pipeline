@@ -164,3 +164,23 @@ async def test_rss_uses_feed_fallback_chain_after_http_failure():
 
     assert len(items) == 2
     assert chain.urls == ["https://feed.example/rss"]
+
+
+@pytest.mark.asyncio
+async def test_rss_fallback_factory_failure_returns_no_items():
+    def fail_factory():
+        raise RuntimeError("bad fallback config")
+
+    src = RssSource(
+        url="https://feed.example/rss",
+        pipeline_id="p",
+        source_id="s1",
+        feed_fallback_chain_factory=fail_factory,
+    )
+    with respx.mock() as r:
+        r.get("https://feed.example/rss").mock(return_value=httpx.Response(403))
+        end = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        items = [it async for it in src.fetch(start, end)]
+
+    assert items == []

@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+import sluice.fetchers.firecrawl  # noqa
 import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.processors.dedupe  # noqa
 import sluice.processors.filter  # noqa
@@ -119,6 +120,75 @@ async def test_end_to_end_no_llm(tmp_path):
     out_file = tmp_path / "2026-04-28.md"
     assert out_file.exists()
     assert "keep" in out_file.read_text()
+
+
+@pytest.mark.asyncio
+async def test_rss_feed_fallback_chain_env_is_lazy_when_direct_fetch_succeeds(tmp_path):
+    db_path = tmp_path / "test.db"
+    template_path = tmp_path / "template.md"
+    template_path.write_text("{{ items|length }}")
+    cfg = tmp_path / "configs"
+    (cfg / "pipelines").mkdir(parents=True)
+    (cfg / "sluice.toml").write_text(
+        textwrap.dedent(f"""
+        [state]
+        db_path = "{db_path}"
+        [runtime]
+        timezone = "UTC"
+        [fetcher]
+        chain = ["firecrawl"]
+        min_chars = 50
+        on_all_failed = "skip"
+        [fetchers.firecrawl]
+        type = "firecrawl"
+        base_url = "https://fc.example"
+        api_key = "env:MISSING_FIRECRAWL_KEY"
+    """)
+    )
+    (cfg / "providers.toml").write_text("providers = []\n")
+    (cfg / "pipelines" / "p.toml").write_text(
+        textwrap.dedent(f"""
+        id = "p"
+        window = "24h"
+        [[sources]]
+        type = "rss"
+        url = "https://feed.example/rss"
+        [[stages]]
+        name = "r"
+        type = "render"
+        template = "{template_path}"
+        output_field = "context.markdown"
+        [[sinks]]
+        id = "out"
+        type = "file_md"
+        input = "context.markdown"
+        path = "{tmp_path}/out.md"
+    """)
+    )
+    bundle = load_all(cfg)
+
+    rss = """<?xml version="1.0"?>
+    <rss><channel>
+      <item>
+        <guid>g</guid>
+        <title>T</title>
+        <link>https://x.com/a</link>
+        <pubDate>Tue, 28 Apr 2026 10:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>
+    """
+    import httpx
+    import respx
+
+    with respx.mock() as r:
+        r.get("https://feed.example/rss").mock(return_value=httpx.Response(200, text=rss))
+        result = await run_pipeline(
+            bundle,
+            pipeline_id="p",
+            now=datetime(2026, 4, 28, 12, tzinfo=timezone.utc),
+        )
+
+    assert result.status == "success"
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ from sluice.core.errors import ConfigError
 from sluice.loader import load_all
 
 
-def test_load_all(tmp_path, monkeypatch):
+def test_load_all(tmp_path):
     (tmp_path / "configs").mkdir()
     (tmp_path / "configs" / "pipelines").mkdir()
     (tmp_path / "configs" / "sluice.toml").write_text(
@@ -65,11 +65,10 @@ def test_load_all(tmp_path, monkeypatch):
         path  = "./out/{run_date}.md"
     """)
     )
-    monkeypatch.setenv("PREFECT_AUTH", "admin:pass")
     bundle = load_all(tmp_path / "configs")
     assert bundle.global_cfg.state.db_path == "./data/sluice.db"
     assert bundle.global_cfg.runtime.prefect_api_url == "http://localhost:4200/api"
-    assert bundle.global_cfg.runtime.prefect_api_auth_string == "admin:pass"
+    assert bundle.global_cfg.runtime.prefect_api_auth_string == "env:PREFECT_AUTH"
     assert bundle.providers.providers[0].name == "glm"
     assert bundle.pipelines["p1"].id == "p1"
 
@@ -111,3 +110,24 @@ def test_load_rejects_empty_prefect_api_auth_string(tmp_path):
 
     with pytest.raises(ConfigError, match="prefect_api_auth_string"):
         load_all(tmp_path / "configs")
+
+
+def test_load_does_not_resolve_prefect_api_auth_string_env(tmp_path):
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "pipelines").mkdir()
+    (tmp_path / "configs" / "sluice.toml").write_text(
+        textwrap.dedent("""
+        [runtime]
+        prefect_api_url = "http://localhost:4200/api"
+        prefect_api_auth_string = "env:MISSING_PREFECT_AUTH"
+    """)
+    )
+    (tmp_path / "configs" / "providers.toml").write_text(
+        textwrap.dedent("""
+        providers = []
+    """)
+    )
+
+    bundle = load_all(tmp_path / "configs")
+
+    assert bundle.global_cfg.runtime.prefect_api_auth_string == "env:MISSING_PREFECT_AUTH"
