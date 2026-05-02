@@ -5,9 +5,9 @@ import httpx
 import pytest
 import respx
 
-from sluice.sources.rss import RssSource
-from sluice.sources._filter import SourceFilter
 from sluice.config import FilterRule, SourceFilterConfig
+from sluice.sources._filter import SourceFilter
+from sluice.sources.rss import RssSource
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "example.xml").read_text()
 
