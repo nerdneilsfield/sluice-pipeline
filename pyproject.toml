@@ -34,6 +34,8 @@ dependencies = [
   "aiofiles>=23.0",
   "croniter>=2.0",
   "tiktoken>=0.7",
+  "beautifulsoup4>=4.14.3",
+  "aiosmtplib>=5.1.0",
 ]
 
 [project.optional-dependencies]
