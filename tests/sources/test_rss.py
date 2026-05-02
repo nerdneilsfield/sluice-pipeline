@@ -135,3 +135,32 @@ async def test_rss_filter_matches_title_or_content():
         items = [it async for it in src.fetch(start, end)]
 
     assert [it.guid for it in items] == ["title", "content"]
+
+
+class _RawFeedFallbackChain:
+    def __init__(self, text: str):
+        self.text = text
+        self.urls = []
+
+    async def fetch(self, url: str) -> str:
+        self.urls.append(url)
+        return self.text
+
+
+@pytest.mark.asyncio
+async def test_rss_uses_feed_fallback_chain_after_http_failure():
+    chain = _RawFeedFallbackChain(FIXTURE)
+    src = RssSource(
+        url="https://feed.example/rss",
+        pipeline_id="p",
+        source_id="s1",
+        feed_fallback_chain=chain,
+    )
+    with respx.mock() as r:
+        r.get("https://feed.example/rss").mock(return_value=httpx.Response(403))
+        end = datetime(2026, 4, 28, 12, tzinfo=timezone.utc)
+        start = end - timedelta(hours=24)
+        items = [it async for it in src.fetch(start, end)]
+
+    assert len(items) == 2
+    assert chain.urls == ["https://feed.example/rss"]

@@ -1,12 +1,15 @@
 import pytest
 
+import sluice.fetchers.crawl4ai  # noqa
 import sluice.fetchers.firecrawl  # noqa
+import sluice.fetchers.jina_reader  # noqa
 import sluice.fetchers.trafilatura_fetcher  # noqa
 import sluice.processors.dedupe  # noqa
 import sluice.processors.filter  # noqa
 import sluice.sources.rss  # noqa
 from sluice.builders import (
     _resolve_template,
+    build_feed_fallback_chain,
     build_fetcher_chain,
     build_processors,
     build_sinks,
@@ -88,6 +91,30 @@ async def test_build_fetcher_chain():
     chain = build_fetcher_chain(g, p, cache=None)
     assert chain.min_chars == 100
     assert len(chain.fetchers) == 1
+
+
+def test_build_feed_fallback_chain_uses_only_raw_browser_fetchers():
+    g = GlobalConfig(
+        fetcher={"chain": ["trafilatura", "crawl", "jina", "firecrawl"]},
+        fetchers={
+            "trafilatura": FetcherImplConfig(type="trafilatura", timeout=5),
+            "crawl": FetcherImplConfig(type="crawl4ai", base_url="https://crawl.example"),
+            "jina": FetcherImplConfig(type="jina_reader", base_url="https://r.jina.ai/http://r.jina.ai/http://"),
+            "firecrawl": FetcherImplConfig(type="firecrawl", base_url="https://fc.example"),
+        },
+    )
+    p = PipelineConfig(
+        id="p",
+        window="24h",
+        sources=[RssSourceConfig(type="rss", url="https://x/feed")],
+        stages=[DedupeConfig(type="dedupe", name="d")],
+        sinks=[FileMdSinkConfig(id="x", type="file_md", input="context.markdown", path="./x.md")],
+    )
+
+    chain = build_feed_fallback_chain(g, p)
+
+    assert chain is not None
+    assert [fetcher.name for fetcher in chain.fetchers] == ["crawl4ai", "firecrawl"]
 
 
 @pytest.mark.asyncio

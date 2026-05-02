@@ -160,6 +160,28 @@ async def test_wait_options_sent_in_request_body(allow_public_dns):
     }
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_raw_requests_html_format(allow_public_dns):
+    route = respx.post("https://fc.example/v2/scrape").mock(
+        return_value=httpx.Response(200, json={"data": {"html": "<rss>feed</rss>"}})
+    )
+    f = FirecrawlFetcher(
+        base_url="https://fc.example",
+        wait_for_ms=3000,
+        wait_for_selector=".feed",
+    )
+
+    out = await f.extract_raw("https://example.com/feed")
+
+    assert out == "<rss>feed</rss>"
+    assert json.loads(route.calls[0].request.content) == {
+        "url": "https://example.com/feed",
+        "formats": ["html"],
+        "wait": {"milliseconds": 3000, "selector": ".feed"},
+    }
+
+
 # Existing failure behavior
 
 

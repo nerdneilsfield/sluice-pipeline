@@ -10,6 +10,7 @@ from sluice.fetchers._ssrf import SSRFError
 from sluice.fetchers.crawl4ai import (
     Crawl4AIFetcher,
     _extract_markdown,
+    _extract_raw,
     _get_task_id,
 )
 
@@ -77,6 +78,14 @@ def test_extract_empty_string_skipped_tries_next():
 
 def test_extract_no_markdown_returns_none():
     assert _extract_markdown({"foo": "bar"}) is None
+
+
+def test_extract_raw_results_list():
+    assert _extract_raw({"results": [{"html": "<rss>feed</rss>"}]}) == "<rss>feed</rss>"
+
+
+def test_extract_raw_cleaned_html_fallback():
+    assert _extract_raw({"data": {"cleaned_html": "<html>clean</html>"}}) == "<html>clean</html>"
 
 
 def test_get_task_id_lookup_order():
@@ -163,6 +172,23 @@ async def test_initial_request_sends_wait_options(allow_public_dns):
         "wait_for_timeout": 10000,
         "wait_until": "networkidle",
         "delay_before_return_html": 1.0,
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_extract_raw_uses_html_from_sync_response(allow_public_dns):
+    route = respx.post("http://localhost:11235/crawl").mock(
+        return_value=httpx.Response(200, json={"results": [{"html": "<rss>feed</rss>"}]})
+    )
+    f = Crawl4AIFetcher(wait_for="css:body")
+
+    out = await f.extract_raw("https://example.com/feed")
+
+    assert out == "<rss>feed</rss>"
+    assert json.loads(route.calls[0].request.content) == {
+        "urls": ["https://example.com/feed"],
+        "wait_for": "css:body",
     }
 
 
