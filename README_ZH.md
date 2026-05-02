@@ -148,12 +148,10 @@ url  = "https://openai.com/blog/rss"
 
 # 任意 source 都可选：进入 stages 前先按同一套 mode/rules 过滤。
 # `content` 表示 source 阶段可见的正文，如 RSS summary/content。
-[sources.filter]
-mode = "keep_if_any"
-rules = [
-  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+filter = { mode = "keep_if_any", rules = [
+  { field = "title", op = "matches", value = "(?i)gpt|agent|model" },
   { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
-]
+] }
 
 [[stages]]
 name = "dedupe"
@@ -514,8 +512,8 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 （`extras.relevance`、`tags.0`、`published_at` 都行），用四种 `mode`
 之一组合。
 
-同样的 `mode` 和 `rules` 结构也可以写在任意 `[[sources]]` 下面，
-作为 `[sources.filter]`。source 级过滤会在 stages 之前运行，并额外支持
+同样的 `mode` 和 `rules` 结构也可以写在任意 `[[sources]]` 里，
+作为 `filter = { mode = "...", rules = [...] }`。source 级过滤会在 stages 之前运行，并额外支持
 `content` 字段，表示 source 阶段可见的正文，例如 RSS 的 `summary`、
 `description` 或 Atom `content`。
 
@@ -556,12 +554,10 @@ SLUICE_SSRF_ALLOW_TUN_FAKE_IP=1 sluice run ai_news
 type = "rss"
 url  = "https://openai.com/blog/rss"
 
-[sources.filter]
-mode = "keep_if_any"
-rules = [
-  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+filter = { mode = "keep_if_any", rules = [
+  { field = "title", op = "matches", value = "(?i)gpt|agent|model" },
   { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
-]
+] }
 
 # 2. 喂 LLM 之前的便宜 stage 过滤 —— 留下足够长的文章 + 砍标题里的广告
 [[stages]]

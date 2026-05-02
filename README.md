@@ -151,12 +151,10 @@ url  = "https://openai.com/blog/rss"
 
 # Optional on any source: run the same mode/rules filter before stages.
 # `content` means the source-time article text, e.g. RSS summary/content.
-[sources.filter]
-mode = "keep_if_any"
-rules = [
-  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+filter = { mode = "keep_if_any", rules = [
+  { field = "title", op = "matches", value = "(?i)gpt|agent|model" },
   { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
-]
+] }
 
 [[stages]]
 name = "dedupe"
@@ -528,8 +526,8 @@ is `{ field, op, value }` where `field` is a dot-path resolved through
 `Item.get()` (so `extras.relevance`, `tags.0`, `published_at` all work).
 Combine rules with one of four `mode`s.
 
-The same `mode` and `rules` shape is also valid under any `[[sources]]` as
-`[sources.filter]`. Source-level filters run before stages and can use the
+The same `mode` and `rules` shape is also valid on any `[[sources]]` as
+`filter = { mode = "...", rules = [...] }`. Source-level filters run before stages and can use the
 extra `content` field, which maps to source-time article text such as RSS
 `summary`, `description`, or Atom `content`.
 
@@ -570,12 +568,10 @@ extra `content` field, which maps to source-time article text such as RSS
 type = "rss"
 url  = "https://openai.com/blog/rss"
 
-[sources.filter]
-mode = "keep_if_any"
-rules = [
-  { field = "title",   op = "matches", value = "(?i)gpt|agent|model" },
+filter = { mode = "keep_if_any", rules = [
+  { field = "title", op = "matches", value = "(?i)gpt|agent|model" },
   { field = "content", op = "matches", value = "(?i)gpt|agent|model" },
-]
+] }
 
 # 2. Pre-LLM cheap stage filter — keep articles long enough to summarize
 #    and drop obvious ad/sponsored junk by title.
