@@ -12,6 +12,7 @@ from tests.conftest import make_ctx, make_item
 
 # ── parser tests ────────────────────────────────────────────────────────────
 
+
 def test_parse_returns_score_tags_summary():
     payload = '{"score": 8, "tags": ["AI", "LLM"], "summary": "Great article."}'
     score, tags, summary = _parse_result(payload)
@@ -71,11 +72,13 @@ def test_parse_strips_whitespace_from_summary():
 
 # ── processor integration tests ─────────────────────────────────────────────
 
+
 def _make_processor(tmp_path: Path, llm_response: str, **kwargs) -> SummarizeScoreTagProcessor:
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Analyze: {{ item.title }}")
 
     from unittest.mock import MagicMock
+
     mock_llm = MagicMock()
     mock_llm.chat = AsyncMock(return_value=llm_response)
 

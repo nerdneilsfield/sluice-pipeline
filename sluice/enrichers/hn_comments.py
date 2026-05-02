@@ -124,8 +124,10 @@ class HnCommentsEnricher:
                 result = await fn(item_id)
                 preview = result[:200].replace("\n", " ")
                 log.bind(
-                    item_id=item_id, source=source,
-                    chars=len(result), preview=preview,
+                    item_id=item_id,
+                    source=source,
+                    chars=len(result),
+                    preview=preview,
                 ).debug("hn_comments.fetched")
                 return result
             except Exception as exc:
@@ -134,6 +136,4 @@ class HnCommentsEnricher:
                 )
                 last_exc = exc
 
-        raise EnricherParseError(
-            f"hn_comments: all sources failed for {item_id}: {last_exc}"
-        )
+        raise EnricherParseError(f"hn_comments: all sources failed for {item_id}: {last_exc}")

@@ -94,7 +94,7 @@ def test_source_filter_parsed():
         'tag  = "ai"\n',
         (
             'tag  = "ai"\n'
-            '[sources.filter]\n'
+            "[sources.filter]\n"
             'mode = "keep_if_any"\n'
             'rules = [{ field = "title", op = "matches", value = "(?i)gpt|agent" }]\n'
         ),

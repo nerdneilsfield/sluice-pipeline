@@ -304,6 +304,7 @@ async def test_feishu_send_with_secret(tmp_path):
 # Tests for _feishu_post_render.convert_to_feishu_post
 # ---------------------------------------------------------------------------
 
+
 def test_convert_to_feishu_post_paragraph():
     result = convert_to_feishu_post("hello world")
     zh_cn = result["zh_cn"]
@@ -386,6 +387,7 @@ def test_convert_to_feishu_post_list_as_md():
 # Tests for FeishuBotClient
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_feishu_bot_api_send_post():
     """Mock httpx to verify token fetch + message send."""
@@ -432,6 +434,7 @@ async def test_feishu_bot_api_send_post():
 # ---------------------------------------------------------------------------
 # Test FeishuSink in bot_api mode
 # ---------------------------------------------------------------------------
+
 
 def test_feishu_sink_bot_api_mode_builds_batch():
     """FeishuSink with auth_mode=bot_api should build correct batch payloads."""

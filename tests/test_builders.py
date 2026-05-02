@@ -56,9 +56,7 @@ def test_build_source_filter_from_common_source_config():
                 url="https://x/feed",
                 filter={
                     "mode": "keep_if_any",
-                    "rules": [
-                        {"field": "title", "op": "matches", "value": r"(?i)\bgpt\b"}
-                    ],
+                    "rules": [{"field": "title", "op": "matches", "value": r"(?i)\bgpt\b"}],
                 },
             )
         ],
@@ -232,10 +230,12 @@ def test_resolve_api_headers_resolves_env_values(monkeypatch):
     from sluice.builders import _resolve_api_headers
 
     monkeypatch.setenv("TEST_TOKEN", "secret-value")
-    result = _resolve_api_headers({
-        "Authorization": "env:TEST_TOKEN",
-        "X-Static": "literal",
-    })
+    result = _resolve_api_headers(
+        {
+            "Authorization": "env:TEST_TOKEN",
+            "X-Static": "literal",
+        }
+    )
     assert result == {"Authorization": "secret-value", "X-Static": "literal"}
 
 

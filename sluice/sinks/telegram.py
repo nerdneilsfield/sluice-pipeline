@@ -218,13 +218,9 @@ class TelegramSink(PushSinkBase):
                 self._next_send_mono = time.monotonic() + retry_after
                 if attempt < _MAX_429_RETRIES:
                     continue
-                raise RuntimeError(
-                    f"telegram 429: rate limited after {_MAX_429_RETRIES} retries"
-                )
+                raise RuntimeError(f"telegram 429: rate limited after {_MAX_429_RETRIES} retries")
             if not resp.is_success:
-                raise RuntimeError(
-                    f"telegram {resp.status_code}: {resp.text[:500]}"
-                )
+                raise RuntimeError(f"telegram {resp.status_code}: {resp.text[:500]}")
             data = resp.json()
             if not data.get("ok"):
                 raise RuntimeError(f"telegram error: {data}")

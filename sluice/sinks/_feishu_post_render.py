@@ -63,6 +63,7 @@ def _make_text_node(text: str, style: str = "") -> dict:
 # Inline renderer — returns a list of post-nodes from inline token children
 # ---------------------------------------------------------------------------
 
+
 def _render_inlines(children: list[Token]) -> list[dict]:
     out: list[dict] = []
     idx = 0
@@ -134,6 +135,7 @@ def _render_plain_text_from_tokens(tokens: list[Token]) -> str:
 # Block-level list/blockquote markdown renderer (for "md" nodes)
 # ---------------------------------------------------------------------------
 
+
 def _prefix_each_line(text: str, prefix: str) -> str:
     if not text:
         return ""
@@ -156,6 +158,7 @@ def _indent_block(text: str, prefix: str) -> str:
 # ---------------------------------------------------------------------------
 # Block-level token group processor
 # ---------------------------------------------------------------------------
+
 
 class _Converter:
     def __init__(self, all_tokens: list[Token]):
@@ -237,6 +240,7 @@ class _Converter:
 # Token grouping — split flat token list into logical block groups
 # ---------------------------------------------------------------------------
 
+
 def _group_blocks(tokens: list[Token]) -> list[list[Token]]:
     """Group flat token stream into per-block groups."""
     groups: list[list[Token]] = []
@@ -265,6 +269,7 @@ def _group_blocks(tokens: list[Token]) -> list[list[Token]]:
 # ---------------------------------------------------------------------------
 # Markdown re-serialisation for lists and blockquotes (used in "md" nodes)
 # ---------------------------------------------------------------------------
+
 
 def _render_blocks_as_markdown(tokens: list[Token]) -> str:
     """Re-serialise a sequence of block tokens as Markdown text."""
@@ -376,6 +381,7 @@ def _render_list_as_markdown(list_group: list[Token], ordered: bool) -> str:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def convert_to_feishu_post(markdown_text: str) -> dict:
     """Convert Markdown to a Feishu post message structure.

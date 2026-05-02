@@ -42,9 +42,7 @@ class FeishuBotClient:
         if data.get("code", -1) != 0:
             code = data.get("code")
             msg = data.get("msg")
-            raise RuntimeError(
-                f"feishu get tenant_access_token failed: code={code} msg={msg}"
-            )
+            raise RuntimeError(f"feishu get tenant_access_token failed: code={code} msg={msg}")
 
         self._token = data["tenant_access_token"]
         self._token_exp = now + float(data.get("expire", 7200))

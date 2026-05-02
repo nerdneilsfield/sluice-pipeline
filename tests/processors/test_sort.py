@@ -87,8 +87,7 @@ async def test_sort_empty_batch():
 async def test_sort_stable_on_equal_scores():
     proc = _proc(sort_by="extras.score", sort_order="desc")
     items = [
-        make_item(url=f"https://x.com/{i}", guid=str(i), extras={"score": 5})
-        for i in range(3)
+        make_item(url=f"https://x.com/{i}", guid=str(i), extras={"score": 5}) for i in range(3)
     ]
     ctx = make_ctx(items=items)
     ctx = await proc.process(ctx)

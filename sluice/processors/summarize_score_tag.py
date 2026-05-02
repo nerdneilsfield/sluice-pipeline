@@ -21,6 +21,7 @@ def _parse_result(raw: str) -> tuple[int, list[str], str]:
     text = _strip_fence(raw.strip())
     try:
         import json
+
         data = json.loads(text)
     except Exception as exc:
         raise ValueError(f"JSON decode error: {exc}") from exc
@@ -128,7 +129,7 @@ class SummarizeScoreTagProcessor:
             tags=list(item.tags),
         )
         if self.input_field.startswith("extras."):
-            key = self.input_field[len("extras."):]
+            key = self.input_field[len("extras.") :]
             item_view.extras[key] = truncated
         else:
             setattr(item_view, self.input_field, truncated)
@@ -163,7 +164,7 @@ class SummarizeScoreTagProcessor:
             item.summary = summary
             return
         if self.summary_field.startswith("extras."):
-            key = self.summary_field[len("extras."):]
+            key = self.summary_field[len("extras.") :]
             item.extras[key] = summary
             return
         item.extras[self.summary_field] = summary
@@ -243,9 +244,7 @@ class SummarizeScoreTagProcessor:
         kept: list[Item] = []
         for result in results:
             if isinstance(result, BaseException):
-                log.opt(exception=result).error(
-                    "summarize_score_tag: unexpected per-item error"
-                )
+                log.opt(exception=result).error("summarize_score_tag: unexpected per-item error")
                 continue
             if result is not None:
                 kept.append(result)
