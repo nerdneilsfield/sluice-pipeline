@@ -95,6 +95,10 @@ class Crawl4AIFetcher:
         poll_interval: float = 2.0,
         poll_timeout: float | None = None,
         poll_paths: list | None = None,
+        wait_for: str | None = None,
+        wait_for_timeout: int | None = None,
+        wait_until: str | None = None,
+        delay_before_return_html: float | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -103,6 +107,10 @@ class Crawl4AIFetcher:
         self.poll_interval = poll_interval
         self.poll_timeout = poll_timeout if poll_timeout is not None else timeout
         self.poll_paths = list(poll_paths) if poll_paths else list(_DEFAULT_POLL_PATHS)
+        self.wait_for = wait_for
+        self.wait_for_timeout = wait_for_timeout
+        self.wait_until = wait_until
+        self.delay_before_return_html = delay_before_return_html
 
     def _build_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}
@@ -182,12 +190,21 @@ class Crawl4AIFetcher:
     async def extract(self, url: str) -> str:
         guard(url)
         headers = self._build_headers()
+        payload = {"urls": [url]}
+        if self.wait_for is not None:
+            payload["wait_for"] = self.wait_for
+        if self.wait_for_timeout is not None:
+            payload["wait_for_timeout"] = self.wait_for_timeout
+        if self.wait_until is not None:
+            payload["wait_until"] = self.wait_until
+        if self.delay_before_return_html is not None:
+            payload["delay_before_return_html"] = self.delay_before_return_html
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 f"{self.base_url}/crawl",
                 headers=headers,
-                json={"urls": [url]},
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()

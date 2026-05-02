@@ -39,12 +39,20 @@ class FirecrawlFetcher:
         api_key: str | None = None,
         api_headers: dict | None = None,
         timeout: float = 60.0,
+        wait_for_ms: int | None = None,
+        wait_for_selector: str | None = None,
+        wait_for: int | None = None,
+        waitFor: int | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_version = api_version
         self.api_key = api_key
         self.api_headers = dict(api_headers) if api_headers else {}
         self.timeout = timeout
+        self.wait_for_ms = wait_for_ms if wait_for_ms is not None else wait_for
+        if self.wait_for_ms is None:
+            self.wait_for_ms = waitFor
+        self.wait_for_selector = wait_for_selector
         self._endpoint = _build_endpoint(self.base_url, self.api_version)
 
     def _build_headers(self) -> dict:
@@ -56,14 +64,22 @@ class FirecrawlFetcher:
 
     async def extract(self, url: str) -> str:
         guard(url)
+        payload = {
+            "url": url,
+            "formats": ["markdown"],
+        }
+        wait = {}
+        if self.wait_for_ms is not None:
+            wait["milliseconds"] = self.wait_for_ms
+        if self.wait_for_selector:
+            wait["selector"] = self.wait_for_selector
+        if wait:
+            payload["wait"] = wait
         async with httpx.AsyncClient(timeout=self.timeout) as c:
             r = await c.post(
                 self._endpoint,
                 headers=self._build_headers(),
-                json={
-                    "url": url,
-                    "formats": ["markdown"],
-                },
+                json=payload,
             )
             r.raise_for_status()
             data = r.json()

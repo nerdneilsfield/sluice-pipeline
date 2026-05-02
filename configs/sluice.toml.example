@@ -46,6 +46,10 @@ timeout = 120
 # timeout = 120
 # poll_interval = 2.0
 # poll_timeout = 120
+# wait_for = "css:.article"
+# wait_for_timeout = 10000
+# wait_until = "networkidle"
+# delay_before_return_html = 1.0
 
 [fetchers.firecrawl]
 type        = "firecrawl"
@@ -56,6 +60,8 @@ api_key     = "env:FC_KEY"
 # api_headers are sent to the Firecrawl API itself, not to target pages.
 # Target-page headers/cookies should use a separate page_headers option once added.
 # api_headers = { Authorization = "env:FIRECRAWL_AUTH_HEADER" }  # e.g. "Bearer fc-..."
+# wait_for_ms = 3000
+# wait_for_selector = ".article"
 timeout     = 120
 
 [fetchers.jina_reader]
