@@ -1,0 +1,33 @@
+[[stages]]
+name    = "fetch_blog_rss"
+type    = "fetch_rss"
+sources = ["blog"]
+
+[[stages]]
+name    = "fetch_releases_rss"
+type    = "fetch_rss"
+sources = ["releases"]
+
+[[stages]]
+name = "dd"
+type = "dedupe"
+
+[[stages]]
+name  = "summarize"
+type  = "summarize_score_tag"
+model = "claude-sonnet-4-6"
+
+[[stages]]
+name = "sort"
+type = "sort"
+key  = "score"
+
+[[stages]]
+name = "limit"
+type = "limit"
+n    = 10
+
+[[stages]]
+name     = "render"
+type     = "render"
+template = "digest"

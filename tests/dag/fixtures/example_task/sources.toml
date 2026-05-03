@@ -1,0 +1,10 @@
+[[sources]]
+name = "blog"
+type = "rss"
+url  = "https://example.com/blog.rss"
+tag  = "ex"
+
+[[sources]]
+name = "releases"
+type = "rss"
+url  = "https://example.com/releases.rss"

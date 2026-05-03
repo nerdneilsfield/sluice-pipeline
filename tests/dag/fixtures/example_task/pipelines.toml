@@ -1,0 +1,25 @@
+[[pipelines]]
+name    = "fetch_blog"
+cron    = "0 */6 * * *"
+sources = ["blog"]
+stages  = ["fetch_blog_rss", "dd"]
+
+[[pipelines]]
+name    = "fetch_releases"
+cron    = "0 */4 * * *"
+sources = ["releases"]
+stages  = ["fetch_releases_rss", "dd"]
+
+[[pipelines]]
+name         = "summarize_nightly"
+cron         = "0 22 * * *"
+upstream_all = ["fetch_blog", "fetch_releases"]
+stages       = ["summarize"]
+
+[[pipelines]]
+name             = "report_telegram"
+cron             = "30 22 * * *"
+upstream_all     = ["summarize_nightly"]
+stages           = ["sort", "limit", "render"]
+sinks            = ["tg"]
+post_run_cleanup = "drop_unprocessed_upstream_local"

@@ -1,0 +1,5 @@
+[[sinks]]
+name      = "tg"
+type      = "telegram"
+chat_id   = "abc"
+token_env = "TG_TOKEN"

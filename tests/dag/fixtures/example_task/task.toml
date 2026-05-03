@@ -1,0 +1,13 @@
+[task]
+name     = "example"
+db_path  = "data/example.db"
+seen_db  = "data/example_seen.db"
+enabled  = true
+timezone = "UTC"
+
+[task.window]
+anchor = "0 8 * * *"
+length = "24h"
+
+[task.deployments]
+pipelines = "all"
