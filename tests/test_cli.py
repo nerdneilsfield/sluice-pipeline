@@ -52,7 +52,7 @@ def test_run_invokes_runner(tmp_path):
     )
     with patch("sluice.cli.run_pipeline", fake), patch("sluice.cli.load_all") as load:
         load.return_value = type("B", (), {"pipelines": {"p": object()}})()
-        res = runner.invoke(app, ["run", "p", "--config-dir", str(tmp_path)])
+        res = runner.invoke(app, ["run-legacy", "p", "--config-dir", str(tmp_path)])
     assert res.exit_code == 0
     assert "success" in res.output
     assert "Run Summary" in res.output
@@ -76,7 +76,9 @@ def test_run_passes_dry_run_flag(tmp_path):
     )
     with patch("sluice.cli.run_pipeline", fake), patch("sluice.cli.load_all") as load:
         load.return_value = type("B", (), {"pipelines": {"p": object()}})()
-        res = runner.invoke(app, ["run", "p", "--config-dir", str(tmp_path), "--dry-run"])
+        res = runner.invoke(
+            app, ["run-legacy", "p", "--config-dir", str(tmp_path), "--dry-run"]
+        )
     assert res.exit_code == 0
     assert fake.call_args.kwargs["dry_run"] is True
 

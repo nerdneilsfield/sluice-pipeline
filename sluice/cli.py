@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -539,26 +540,53 @@ def dag_run(
     task: str = typer.Option(..., "-t", "--task", help="task name under <config-dir>/tasks/"),
     pipeline: str = typer.Option(..., "-p", "--pipeline", help="pipeline name within the task"),
     config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
+    cycle: str | None = typer.Option(
+        None,
+        "--cycle",
+        help="ISO-8601 timestamp to override current time.",
+    ),
 ):
-    """Run a single pipeline once (stub: no stages executed yet - Plan 2)."""
+    """Run a single pipeline once."""
     task_dir = config_dir / "tasks" / task
     if not task_dir.exists():
         typer.echo(f"task not found: {task_dir}", err=True)
         raise typer.Exit(code=2)
 
     from sluice.dag.loader import load_task
-    from sluice.dag.runner import run_pipeline_stub
+    from sluice.dag.run_pipeline import ensure_dynamic_tables, run_pipeline
+    from sluice.dag.writer import WriterThread
 
     cfg = load_task(task_dir)
     if not any(p.name == pipeline for p in cfg.pipelines):
         typer.echo(f"pipeline {pipeline!r} not found in task {task!r}", err=True)
         raise typer.Exit(code=2)
 
-    result = asyncio.run(run_pipeline_stub(cfg, pipeline_name=pipeline))
+    async def _go():
+        await ensure_dynamic_tables(cfg)
+        writer = WriterThread(active_path=cfg.db_path, seen_path=cfg.seen_db)
+        await writer.start()
+        try:
+            now = datetime.fromisoformat(cycle) if cycle else None
+            return await run_pipeline(cfg, pipeline, writer=writer, now=now)
+        finally:
+            await writer.stop()
+
+    result = asyncio.run(_go())
     typer.echo(
-        f"{result.pipeline_name} {result.run_key} status={result.status} "
-        f"items_in={result.items_in} items_out={result.items_out}"
+        json.dumps(
+            {
+                "pipeline_name": result.pipeline_name,
+                "run_key": result.run_key,
+                "status": result.status,
+                "items_in": result.items_in,
+                "items_out": result.items_out,
+                "error_msg": result.error_msg,
+            },
+            ensure_ascii=False,
+        )
     )
+    if result.status != "success":
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

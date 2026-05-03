@@ -50,6 +50,33 @@ def test_pipeline_def_input_mode_default():
     assert p.input_mode == "union"
 
 
+def test_pipeline_def_max_attempts_default_and_custom():
+    p = PipelineDef(
+        name="p",
+        cron="* * * * *",
+        stages=["s"],
+        sources=["src1"],
+        upstream_all=None,
+        upstream_any=None,
+        sinks=None,
+        post_run_cleanup=None,
+    )
+    assert p.max_attempts == 3
+
+    custom = PipelineDef(
+        name="p",
+        cron="* * * * *",
+        stages=["s"],
+        sources=["src1"],
+        upstream_all=None,
+        upstream_any=None,
+        sinks=None,
+        post_run_cleanup=None,
+        max_attempts=5,
+    )
+    assert custom.max_attempts == 5
+
+
 def test_task_config_round_trip():
     t = TaskConfig(
         name="airflow",

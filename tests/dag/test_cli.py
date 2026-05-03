@@ -5,6 +5,7 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 FIXTURE = Path(__file__).parent / "fixtures" / "example_task"
@@ -59,8 +60,26 @@ def _copy_task(tmp_path: Path) -> Path:
     return config_dir
 
 
-def test_run_command_invokes_stub(tmp_path: Path):
+def test_run_command_invokes_real_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_dir = _copy_task(tmp_path)
+    import sluice.dag.run_pipeline as dag_run_pipeline
+
+    async def fake_ensure(task):
+        Path(task.db_path).touch()
+
+    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual"):
+        from sluice.dag.run_pipeline import RunResult
+
+        return RunResult(
+            pipeline_name=pipeline,
+            run_key=f"{task.name}__{pipeline}__fake",
+            status="success",
+            items_in=0,
+            items_out=0,
+        )
+
+    monkeypatch.setattr(dag_run_pipeline, "ensure_dynamic_tables", fake_ensure)
+    monkeypatch.setattr(dag_run_pipeline, "run_pipeline", fake_run_pipeline)
 
     runner = CliRunner()
     result = runner.invoke(
@@ -69,11 +88,11 @@ def test_run_command_invokes_stub(tmp_path: Path):
     )
 
     assert result.exit_code == 0, result.output
-    assert "fetch_blog" in result.output
-    assert "example__fetch_blog__" in result.output
-    assert "status=success" in result.output
-    assert "items_in=0" in result.output
-    assert "items_out=0" in result.output
+    assert '"pipeline_name": "fetch_blog"' in result.output
+    assert '"run_key": "example__fetch_blog__fake"' in result.output
+    assert '"status": "success"' in result.output
+    assert '"items_in": 0' in result.output
+    assert '"items_out": 0' in result.output
     assert (tmp_path / "active.db").exists()
 
 
@@ -108,3 +127,33 @@ def test_run_command_unknown_task(tmp_path: Path):
     )
 
     assert result.exit_code == 2
+
+
+def test_run_command_non_success_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    config_dir = _copy_task(tmp_path)
+    import sluice.dag.run_pipeline as dag_run_pipeline
+
+    async def fake_ensure(task):
+        return None
+
+    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual"):
+        from sluice.dag.run_pipeline import RunResult
+
+        return RunResult(
+            pipeline_name=pipeline,
+            run_key=f"{task.name}__{pipeline}__fake",
+            status="failed",
+            items_in=1,
+            items_out=0,
+            error_msg="boom",
+        )
+
+    monkeypatch.setattr(dag_run_pipeline, "ensure_dynamic_tables", fake_ensure)
+    monkeypatch.setattr(dag_run_pipeline, "run_pipeline", fake_run_pipeline)
+    runner = CliRunner()
+    result = runner.invoke(
+        _cli_app(),
+        ["run", "-t", "example", "-p", "fetch_blog", "--config-dir", str(config_dir)],
+    )
+    assert result.exit_code == 1
+    assert '"status": "failed"' in result.output

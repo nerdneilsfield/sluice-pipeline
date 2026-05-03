@@ -56,3 +56,20 @@ def test_load_task_explicit_deployments_list(tmp_path: Path):
     )
     t = load_task(d)
     assert t.deployments.pipelines == ["fetch_blog", "summarize_nightly"]
+
+
+def test_load_task_pipeline_max_attempts(tmp_path: Path):
+    import shutil
+
+    d = tmp_path / "task"
+    shutil.copytree(FIXTURE, d)
+    text = (d / "pipelines.toml").read_text()
+    text = text.replace(
+        'name    = "fetch_blog"',
+        'name    = "fetch_blog"\nmax_attempts = 7',
+        1,
+    )
+    (d / "pipelines.toml").write_text(text)
+    t = load_task(d)
+    assert next(p for p in t.pipelines if p.name == "fetch_blog").max_attempts == 7
+    assert next(p for p in t.pipelines if p.name == "fetch_releases").max_attempts == 3

@@ -51,6 +51,7 @@ class PipelineDef:
     sinks: list[str] | None
     post_run_cleanup: str | None
     input_mode: str | None = "union"
+    max_attempts: int = 3
 
     def __post_init__(self) -> None:
         if self.input_mode not in (None, "union", "intersection"):
@@ -75,3 +76,4 @@ class TaskConfig:
     sinks: list[SinkDef]
     stages: list[StageDef]
     pipelines: list[PipelineDef]
+    task_dir: str | None = None

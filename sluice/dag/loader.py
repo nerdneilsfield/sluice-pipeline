@@ -78,6 +78,7 @@ def load_task(task_dir: Path) -> TaskConfig:
             sinks=entry.get("sinks"),
             post_run_cleanup=entry.get("post_run_cleanup"),
             input_mode=entry.get("input_mode", "union"),
+            max_attempts=int(entry.get("max_attempts", 3)),
         )
         for entry in pipelines_doc
     ]
@@ -99,4 +100,5 @@ def load_task(task_dir: Path) -> TaskConfig:
         sinks=sinks,
         stages=stages,
         pipelines=pipelines,
+        task_dir=str(task_dir),
     )
