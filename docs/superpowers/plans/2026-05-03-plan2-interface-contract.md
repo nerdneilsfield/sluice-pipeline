@@ -42,11 +42,12 @@ writer that is started and stopped per call cannot span those two phases.
 
 ## D2 – Migration pre-flight stays outside the writer (resolves H4)
 
-`migrate_task_dynamic_tables(conn, task)` continues to run **before** `writer.start()`,
-using its own short-lived connection:
+`ensure_dynamic_tables(task)` continues to run **before** `writer.start()`, using
+short-lived connections. It creates idempotent active dynamic tables and also opens the
+seen DB once so base migrations cannot race the writer's first seen connection:
 
 ```python
-await _ensure_dynamic_tables(task)   # own connection, DDL, commits, closes
+await ensure_dynamic_tables(task)   # own connections, DDL/base migrations, closes
 writer = WriterThread(...)
 await writer.start()
 ```
@@ -75,14 +76,33 @@ ordered queue; phase ordering is the runner's responsibility.
 
 ---
 
-## D4 – Seen writes only in tx1-type jobs
+## D4 – Seen writes confined to a dedicated post-tx1 best-effort job
 
-Only jobs that insert new items into `items` also write to the seen DB (via
-`ItemSeenStore.insert_many`). tx2 and sink-emit jobs leave seen untouched.
+Seen DB writes happen in **exactly one** kind of job: a small `build_seen_post_job(new_items)`
+submitted by the runner immediately after `tx1` resolves. tx2, sink-emit, cleanup, and any
+other writer job leaves `seen` untouched.
 
-The writer always calls `seen.commit()` after `active.commit()`. If the job made no seen
-writes, `seen.commit()` is a no-op in aiosqlite (no open transaction → silently succeeds).
-No special casing needed.
+```
+submit(tx1)            → await
+submit(seen_post)      → await   (try/except — failure logs but does NOT abort the run)
+<sink emission>
+submit(tx2)            → await
+submit(cleanup)        → await   (optional)
+```
+
+Spec ("Runtime Semantics" §3) requires seen writes to be **best-effort**: a seen failure
+must not roll back tx1 or abort the run. With Plan 1 B1 fixed (writer propagates seen
+commit failure on the future), the only way to honour best-effort is to:
+- isolate seen writes into their own job (so a failure can't roll back tx1's active writes),
+- have the **runner** swallow the future's exception and continue.
+
+tx1 itself MUST NOT touch `seen`. The static D4 test enforces that
+`sluice/dag/phases/tx1.py` does not import `ItemSeenStore` and does not write to
+`item_seen` directly. The same test allows it in `sluice/dag/phases/seen_post.py` and
+forbids it everywhere else (tx2, emission, cleanup).
+
+The writer's `seen.commit()` after a job that made no seen writes is a no-op in aiosqlite
+(no open transaction → silently succeeds). No special casing required for active-only jobs.
 
 ---
 
@@ -93,4 +113,4 @@ No special casing needed.
 | D1 – injected writer | `runner.py` signature | Deferred to Plan 2 |
 | D2 – migration pre-flight | `_ensure_dynamic_tables` pattern | Already correct |
 | D3 – separate-submit phases | `WriteJob` type | Already correct |
-| D4 – seen writes in tx1 only | job implementations | Documented; enforced in Plan 2 |
+| D4 – seen writes confined to dedicated post-tx1 best-effort job | job implementations | Documented; enforced in Plan 2 (Task 22) |
