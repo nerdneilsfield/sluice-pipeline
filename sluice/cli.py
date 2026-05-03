@@ -47,8 +47,8 @@ def list(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
         typer.echo(f"{pid}\t{cron}\tenabled={pipe.enabled}")
 
 
-@app.command()
-def run(
+@app.command("run-legacy")
+def run_legacy(
     pipeline_id: str,
     config_dir: Path = typer.Option("./configs", "--config-dir", "-c"),
     dry_run: bool = typer.Option(False, "--dry-run"),
@@ -59,7 +59,7 @@ def run(
         help="Write DEBUG JSONL diagnostics to this file.",
     ),
 ):
-    """Run a pipeline once."""
+    """[v1, removed in Plan 4] Original sluice run for the legacy pipeline format."""
     configure_cli_logging(verbose=verbose, log_file=log_file)
     cli_log = create_logger(verbose=verbose)
     _import_all()
@@ -527,6 +527,38 @@ def deliveries(
         with closing(c.execute(sql, args)) as cur:
             for row in cur:
                 typer.echo(" | ".join(str(x) if x is not None else "-" for x in row))
+
+
+# ----------------------------------------------------------------------------
+# DAG v2 commands (Plan 1: stub-only)
+# ----------------------------------------------------------------------------
+
+
+@app.command("run")
+def dag_run(
+    task: str = typer.Option(..., "-t", "--task", help="task name under <config-dir>/tasks/"),
+    pipeline: str = typer.Option(..., "-p", "--pipeline", help="pipeline name within the task"),
+    config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
+):
+    """Run a single pipeline once (stub: no stages executed yet - Plan 2)."""
+    task_dir = config_dir / "tasks" / task
+    if not task_dir.exists():
+        typer.echo(f"task not found: {task_dir}", err=True)
+        raise typer.Exit(code=2)
+
+    from sluice.dag.loader import load_task
+    from sluice.dag.runner import run_pipeline_stub
+
+    cfg = load_task(task_dir)
+    if not any(p.name == pipeline for p in cfg.pipelines):
+        typer.echo(f"pipeline {pipeline!r} not found in task {task!r}", err=True)
+        raise typer.Exit(code=2)
+
+    result = asyncio.run(run_pipeline_stub(cfg, pipeline_name=pipeline))
+    typer.echo(
+        f"{result.pipeline_name} {result.run_key} status={result.status} "
+        f"items_in={result.items_in} items_out={result.items_out}"
+    )
 
 
 if __name__ == "__main__":
