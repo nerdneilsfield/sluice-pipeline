@@ -3246,7 +3246,8 @@ Test:
 20. **New-item dirty persistence**: a tx1 unit test asserts that an item produced by a stub fetch_rss whose subsequent stage sets `it["fulltext"] = "x"` ends up with `items.fulltext = 'x'` after tx1 commits — proving the dirty-update loop iterates `all_items` (not just initial items).
 21. **Entry carryover ↔ fetch dedup**: a runner unit test asserts that when an entry pipeline has both `items_carryover` containing item `X` and a frozen RSS feed that would re-emit `X`, fetch_rss's `skip_item_ids` includes `X` and the driver's working set has `X` exactly once (carryover instance, not the freshly-fetched one).
 22. **Sink adapters**: built-in DAG sink adapters are lazily loaded; `file_md` accepts v1 `path`; push sinks resolve template files relative to `TaskConfig.task_dir`; sink params include `run_key` for footer/context rendering.
-23. **I/O stages fail fast**: executor tests assert I/O stages raise when no backend is injected, so CLI runs cannot silently mark missing fetch/LLM/enrich work as success.
+23. **I/O stages fail fast**: executor tests assert I/O stages raise when no backend is injected, so CLI runs cannot silently mark missing fetch/LLM/enrich work as success. `fetcher_apply` may skip the backend only when every live item satisfies `skip_if_field_longer_than`.
+24. **Render path determinism**: relative `template_file` requires `config_root`; no render stage should depend on process CWD.
 
 ---
 

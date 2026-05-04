@@ -408,10 +408,19 @@ class FetcherApplyExecutor(StageExecutor):
         self._fetch = fetch
 
     async def execute(self, ctx: StageContext) -> StageResult:
-        _require_backend(self._fetch, ctx)
         write_field = ctx.params.get("write_field", "fulltext")
         skip_field = ctx.params.get("skip_if_field", "raw_summary")
         min_len = int(ctx.params.get("skip_if_field_longer_than", 0) or 0)
+        needs_backend = [
+            item
+            for item in ctx.live_items()
+            if not (
+                min_len
+                and len(str(_item_value(item, skip_field, "") or "")) >= min_len
+            )
+        ]
+        if needs_backend:
+            _require_backend(self._fetch, ctx)
         drops: list[ItemDrop] = []
         errors: list[ItemError] = []
         for item in ctx.live_items():
@@ -638,6 +647,8 @@ class RenderExecutor(StageExecutor):
         if "template_file" in ctx.params:
             path = Path(ctx.params["template_file"])
             config_root = ctx.params.get("config_root")
+            if not path.is_absolute() and not config_root:
+                raise RuntimeError("render template_file requires config_root for relative paths")
             if config_root and not path.is_absolute():
                 path = Path(config_root) / path
             template = path.read_text(encoding="utf-8")

@@ -6,7 +6,12 @@ from sluice.dag.config import PipelineDef, StageDef
 from sluice.dag.item import Item
 from sluice.dag.stage_context import ItemDrop, ItemError, StageResult
 from sluice.dag.stage_driver import drive_stages
-from sluice.dag.stage_executor import StageExecutor, bind_executor, reset_registry_for_tests
+from sluice.dag.stage_executor import (
+    StageExecutor,
+    bind_executor,
+    get_executor_class,
+    reset_registry_for_tests,
+)
 
 
 def _row(item_id):
@@ -243,3 +248,9 @@ async def test_driver_uses_executor_reorder_marker():
     )
     assert res.done_ids_per_stage["s_limit"] == {"b"}
     assert [item["item_id"] for item in res.final_working_set] == ["b", "a"]
+
+
+def test_builtin_executor_lazy_load_has_single_source():
+    reset_registry_for_tests()
+
+    assert get_executor_class("fetch_rss").type_name == "fetch_rss"

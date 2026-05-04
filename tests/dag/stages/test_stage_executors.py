@@ -237,6 +237,26 @@ async def test_io_stages_fail_fast_without_backend(stage_type):
 
 
 @pytest.mark.asyncio
+async def test_fetcher_apply_skip_path_does_not_require_backend():
+    item = make_item("a", raw_summary="already long enough", fulltext="")
+
+    result = await get_executor_class("fetcher_apply")().execute(
+        make_ctx(
+            "fetcher_apply",
+            items=[item],
+            params={
+                "write_field": "fulltext",
+                "skip_if_field": "raw_summary",
+                "skip_if_field_longer_than": 3,
+            },
+        )
+    )
+
+    assert not result.errors
+    assert item["fulltext"] == "already long enough"
+
+
+@pytest.mark.asyncio
 async def test_render_template_file_resolves_config_root(tmp_path):
     (tmp_path / "template.md.j2").write_text(
         "{{ pipeline_name }} {{ items[0].title }}",
@@ -253,3 +273,17 @@ async def test_render_template_file_resolves_config_root(tmp_path):
     )
 
     assert result.rendered_output == "pipe Alpha"
+
+
+@pytest.mark.asyncio
+async def test_render_relative_template_file_requires_config_root():
+    item = make_item("a", title="Alpha")
+
+    with pytest.raises(RuntimeError, match="requires config_root"):
+        await get_executor_class("render")().execute(
+            make_ctx(
+                "render",
+                items=[item],
+                params={"template_file": "template.md.j2"},
+            )
+        )
