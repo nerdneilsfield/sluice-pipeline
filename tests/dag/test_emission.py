@@ -107,6 +107,9 @@ async def test_sink_emitter_records_chunk_failure_without_leaving_running(tmp_pa
         await writer.stop()
 
     assert not result[0].success
+    assert result[0].ordinal == -1
     async with db.open_active_db(str(tmp_path / "active.db")) as conn:
-        cur = await conn.execute("SELECT status, error_class FROM sink_delivery_log")
-        assert await cur.fetchone() == ("failed", "RuntimeError")
+        cur = await conn.execute(
+            "SELECT status, error_class, ordinal FROM sink_delivery_log"
+        )
+        assert await cur.fetchone() == ("failed", "RuntimeError", -1)

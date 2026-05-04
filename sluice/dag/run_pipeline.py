@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
-import sluice.dag.sinks  # noqa: F401
+import sluice.dag.stages  # noqa: F401
 from sluice.dag.cleanup import apply_post_run_cleanup
 from sluice.dag.config import StageDef, TaskConfig
 from sluice.dag.cycle import compute_cycle_anchor, make_run_key
@@ -25,7 +25,6 @@ from sluice.dag.phases.tx1 import build_tx1_job
 from sluice.dag.phases.tx2 import build_tx2_job
 from sluice.dag.sinks.base import get_sink_class
 from sluice.dag.stage_driver import drive_stages
-from sluice.dag.stages import bind_all as bind_stage_executors
 from sluice.dag.stores.item_seen import ItemSeenStore
 from sluice.dag.stores.sink_pending import SinkPendingStore
 from sluice.dag.validator import validate_task
@@ -47,6 +46,8 @@ class RunResult:
 async def ensure_dynamic_tables(task: TaskConfig) -> None:
     async with open_active_db(task.db_path) as conn:
         await migrate_task_dynamic_tables(conn, task)
+    # Prime seen migrations before the writer starts; the writer may commit active
+    # and seen independently, so startup DDL should not happen inside a run phase.
     async with open_seen_db(task.seen_db):
         pass
 
@@ -84,7 +85,6 @@ async def run_pipeline(
     trigger: str = "manual",
 ) -> RunResult:
     validate_task(task)
-    bind_stage_executors()
     pipeline = next(
         (candidate for candidate in task.pipelines if candidate.name == pipeline_name),
         None,
@@ -165,7 +165,7 @@ async def run_pipeline(
         feeds = []
         for source_name in pipeline.sources:
             source_def = source_defs[source_name]
-            feeds.append({"name": source_def.name, **source_def.params})
+            feeds.append({**source_def.params, "name": source_def.name})
         overrides["fetch_rss"] = {
             "feeds": feeds,
             "window_start": (cycle_anchor - _window_delta(task.window.length)).isoformat(),
@@ -174,6 +174,8 @@ async def run_pipeline(
         }
     if already_seen_ids:
         overrides["dedupe"] = {"already_seen_ids": frozenset(already_seen_ids)}
+    if task.task_dir:
+        overrides["render"] = {"config_root": task.task_dir}
     stage_defs = _override_stage_params(stage_defs, overrides_by_type=overrides)
 
     driver_result = await drive_stages(

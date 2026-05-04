@@ -64,8 +64,18 @@ class _FetchExec(StageExecutor):
 
 
 class _SortExec(StageExecutor):
+    reorders_items = True
+
     async def execute(self, ctx):
         ctx.items.sort(key=lambda item: item["title"], reverse=True)
+        return StageResult()
+
+
+class _ReorderExec(StageExecutor):
+    reorders_items = True
+
+    async def execute(self, ctx):
+        ctx.items.reverse()
         return StageResult()
 
 
@@ -85,6 +95,7 @@ def _registry():
     bind_executor("test_mutate", _MutateExec)
     bind_executor("test_err", _ErrExec)
     bind_executor("test_fetch", _FetchExec)
+    bind_executor("test_reorder", _ReorderExec)
     bind_executor("sort", _SortExec)
     bind_executor("limit", _LimitExec)
     yield
@@ -211,4 +222,24 @@ async def test_driver_preserves_sort_order_for_later_stages():
     )
     assert res.done_ids_per_stage["s_limit"] == {"b"}
     assert {drop.item_id for drop in res.drops_per_stage["s_limit"]} == {"a"}
+    assert [item["item_id"] for item in res.final_working_set] == ["b", "a"]
+
+
+@pytest.mark.asyncio
+async def test_driver_uses_executor_reorder_marker():
+    a = Item.from_row(_row("a"))
+    b = Item.from_row(_row("b"))
+    res = await drive_stages(
+        task_name="t",
+        pipeline=_pipeline(["s_reorder", "s_limit"]),
+        stage_defs={
+            "s_reorder": _stage("s_reorder", "test_reorder"),
+            "s_limit": _stage("s_limit", "limit"),
+        },
+        run_key="rk",
+        cycle_anchor="c",
+        items=[a, b],
+        resume_done={},
+    )
+    assert res.done_ids_per_stage["s_limit"] == {"b"}
     assert [item["item_id"] for item in res.final_working_set] == ["b", "a"]

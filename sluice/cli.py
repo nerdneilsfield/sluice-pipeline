@@ -571,7 +571,11 @@ def dag_run(
         finally:
             await writer.stop()
 
-    result = asyncio.run(_go())
+    try:
+        result = asyncio.run(_go())
+    except Exception as exc:
+        typer.echo(f"pipeline run failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     typer.echo(
         json.dumps(
             {
@@ -585,7 +589,7 @@ def dag_run(
             ensure_ascii=False,
         )
     )
-    if result.status != "success":
+    if result.status not in {"success", "skipped_gating"}:
         raise typer.Exit(code=1)
 
 

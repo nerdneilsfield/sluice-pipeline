@@ -129,7 +129,20 @@ def test_run_command_unknown_task(tmp_path: Path):
     assert result.exit_code == 2
 
 
-def test_run_command_non_success_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    ("status", "exit_code"),
+    [
+        ("failed", 1),
+        ("partial", 1),
+        ("skipped_gating", 0),
+    ],
+)
+def test_run_command_status_exit_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    exit_code: int,
+):
     config_dir = _copy_task(tmp_path)
     import sluice.dag.run_pipeline as dag_run_pipeline
 
@@ -142,7 +155,7 @@ def test_run_command_non_success_exits_one(tmp_path: Path, monkeypatch: pytest.M
         return RunResult(
             pipeline_name=pipeline,
             run_key=f"{task.name}__{pipeline}__fake",
-            status="failed",
+            status=status,
             items_in=1,
             items_out=0,
             error_msg="boom",
@@ -155,5 +168,26 @@ def test_run_command_non_success_exits_one(tmp_path: Path, monkeypatch: pytest.M
         _cli_app(),
         ["run", "-t", "example", "-p", "fetch_blog", "--config-dir", str(config_dir)],
     )
+    assert result.exit_code == exit_code
+    assert f'"status": "{status}"' in result.output
+
+
+def test_run_command_exceptions_exit_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    config_dir = _copy_task(tmp_path)
+    import sluice.dag.run_pipeline as dag_run_pipeline
+
+    async def fake_ensure(task):
+        return None
+
+    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual"):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(dag_run_pipeline, "ensure_dynamic_tables", fake_ensure)
+    monkeypatch.setattr(dag_run_pipeline, "run_pipeline", fake_run_pipeline)
+    runner = CliRunner()
+    result = runner.invoke(
+        _cli_app(),
+        ["run", "-t", "example", "-p", "fetch_blog", "--config-dir", str(config_dir)],
+    )
     assert result.exit_code == 1
-    assert '"status": "failed"' in result.output
+    assert "pipeline run failed: boom" in result.output

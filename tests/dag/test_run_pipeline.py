@@ -29,7 +29,7 @@ RSS = """<?xml version="1.0"?>
 </channel></rss>"""
 
 
-def _task(tmp_path: Path, *, stages=None) -> TaskConfig:
+def _task(tmp_path: Path, *, stages=None, source_params=None) -> TaskConfig:
     return TaskConfig(
         name="t",
         db_path=str(tmp_path / "active.db"),
@@ -38,7 +38,13 @@ def _task(tmp_path: Path, *, stages=None) -> TaskConfig:
         timezone="UTC",
         window=WindowDef(anchor="0 8 * * *", length="24h"),
         deployments=DeploymentsDef(pipelines="all"),
-        sources=[SourceDef(name="feed", type="rss", params={"url": "https://feed"})],
+        sources=[
+            SourceDef(
+                name="feed",
+                type="rss",
+                params=source_params or {"url": "https://feed"},
+            )
+        ],
         sinks=[
             SinkDef(
                 name="out",
@@ -67,6 +73,7 @@ def _task(tmp_path: Path, *, stages=None) -> TaskConfig:
                 post_run_cleanup="none",
             )
         ],
+        task_dir=str(tmp_path),
     )
 
 
@@ -153,6 +160,38 @@ async def test_run_pipeline_fetches_renders_sinks_and_marks_success(tmp_path, mo
     async with db.open_seen_db(task.seen_db) as seen:
         cur = await seen.execute("SELECT item_id FROM item_seen")
         assert (await cur.fetchone())[0] == "feed:g1"
+
+
+@pytest.mark.asyncio
+async def test_run_pipeline_source_params_cannot_override_source_name(tmp_path, monkeypatch):
+    seen_urls = []
+
+    async def fake_fetch(self, url):
+        seen_urls.append(url)
+        return RSS
+
+    monkeypatch.setattr(FetchRssExecutor, "_default_fetch_text", fake_fetch)
+    task = _task(
+        tmp_path,
+        source_params={"name": "wrong", "url": "https://feed"},
+    )
+    await ensure_dynamic_tables(task)
+    writer = WriterThread(active_path=task.db_path, seen_path=task.seen_db)
+    await writer.start()
+    try:
+        result = await run_pipeline(
+            task,
+            "P",
+            writer=writer,
+            now=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
+        )
+    finally:
+        await writer.stop()
+
+    assert result.status == "success"
+    async with db.open_active_db(task.db_path) as active:
+        cur = await active.execute("SELECT item_id, source_name FROM items")
+        assert await cur.fetchone() == ("feed:g1", "feed")
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import feedparser
@@ -407,6 +408,7 @@ class FetcherApplyExecutor(StageExecutor):
         self._fetch = fetch
 
     async def execute(self, ctx: StageContext) -> StageResult:
+        _require_backend(self._fetch, ctx)
         write_field = ctx.params.get("write_field", "fulltext")
         skip_field = ctx.params.get("skip_if_field", "raw_summary")
         min_len = int(ctx.params.get("skip_if_field_longer_than", 0) or 0)
@@ -418,10 +420,7 @@ class FetcherApplyExecutor(StageExecutor):
                 _set_item_value(item, write_field, existing)
                 continue
             try:
-                if self._fetch is None:
-                    value = None
-                else:
-                    value = await _maybe_await(self._fetch(item))
+                value = await _maybe_await(self._fetch(item))
             except Exception as exc:
                 errors.append(ItemError(str(item["item_id"]), type(exc).__name__, str(exc)))
                 if ctx.params.get("on_all_failed") == "drop":
@@ -447,8 +446,7 @@ class MirrorAttachmentsExecutor(StageExecutor):
         self._mirror = mirror
 
     async def execute(self, ctx: StageContext) -> StageResult:
-        if self._mirror is None:
-            return StageResult()
+        _require_backend(self._mirror, ctx)
         errors: list[ItemError] = []
         for item in ctx.live_items():
             attachments = _json_loads(item["attachments_json"], [])
@@ -482,8 +480,7 @@ class EnrichExecutor(StageExecutor):
         self._enrich = enrich
 
     async def execute(self, ctx: StageContext) -> StageResult:
-        if self._enrich is None:
-            return StageResult()
+        _require_backend(self._enrich, ctx)
         output_key = ctx.params.get("output_key", ctx.params.get("output_field", "enrich"))
         errors: list[ItemError] = []
         for item in ctx.live_items():
@@ -504,8 +501,7 @@ class LLMStageExecutor(StageExecutor):
         self._llm = llm
 
     async def execute(self, ctx: StageContext) -> StageResult:
-        if self._llm is None:
-            return StageResult()
+        _require_backend(self._llm, ctx)
         input_field = ctx.params.get("input_field", "fulltext")
         output_field = ctx.params.get("output_field", "extras.llm")
         template = Template(ctx.params.get("prompt", "{{ input }}"))
@@ -550,8 +546,7 @@ async def _score_or_summarize(
     *,
     include_summary: bool,
 ) -> StageResult:
-    if llm is None:
-        return StageResult()
+    _require_backend(llm, ctx)
     input_field = ctx.params.get("input_field", "fulltext")
     template = Template(ctx.params.get("prompt", "{{ input }}"))
     errors: list[ItemError] = []
@@ -575,6 +570,7 @@ async def _score_or_summarize(
 
 class SortExecutor(StageExecutor):
     type_name = "sort"
+    reorders_items = True
 
     async def execute(self, ctx: StageContext) -> StageResult:
         sort_by = ctx.params.get("sort_by", ctx.params.get("field", "published_at"))
@@ -640,9 +636,11 @@ class RenderExecutor(StageExecutor):
     async def execute(self, ctx: StageContext) -> StageResult:
         template = ctx.params.get("template", "")
         if "template_file" in ctx.params:
-            from pathlib import Path
-
-            template = Path(ctx.params["template_file"]).read_text()
+            path = Path(ctx.params["template_file"])
+            config_root = ctx.params.get("config_root")
+            if config_root and not path.is_absolute():
+                path = Path(config_root) / path
+            template = path.read_text(encoding="utf-8")
         rendered = Template(template).render(
             items=[_item_view(item) for item in ctx.live_items()],
             context=ctx.params.get("context", {}),
@@ -674,3 +672,8 @@ def bind_all() -> None:
     ]:
         if not is_bound(cls.type_name):
             bind_executor(cls.type_name, cls)
+
+
+def _require_backend(backend: object | None, ctx: StageContext) -> None:
+    if backend is None and ctx.live_items():
+        raise RuntimeError(f"{ctx.stage_type} requires a backend")

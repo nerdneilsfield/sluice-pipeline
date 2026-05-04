@@ -216,3 +216,40 @@ async def test_mockable_hook_stages_mark_dirty_fields():
     assert item["summary"] == "S"
     assert item["score"] == 8
     assert json.loads(item["tags_json"]) == ["x"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage_type",
+    [
+        "fetcher_apply",
+        "mirror_attachments",
+        "enrich",
+        "llm_stage",
+        "score_tag",
+        "summarize_score_tag",
+    ],
+)
+async def test_io_stages_fail_fast_without_backend(stage_type):
+    item = make_item("a", raw_summary="", fulltext="", attachments_json="[]")
+    with pytest.raises(RuntimeError, match=f"{stage_type} requires a backend"):
+        await get_executor_class(stage_type)().execute(make_ctx(stage_type, items=[item]))
+
+
+@pytest.mark.asyncio
+async def test_render_template_file_resolves_config_root(tmp_path):
+    (tmp_path / "template.md.j2").write_text(
+        "{{ pipeline_name }} {{ items[0].title }}",
+        encoding="utf-8",
+    )
+    item = make_item("a", title="Alpha")
+
+    result = await get_executor_class("render")().execute(
+        make_ctx(
+            "render",
+            items=[item],
+            params={"template_file": "template.md.j2", "config_root": str(tmp_path)},
+        )
+    )
+
+    assert result.rendered_output == "pipe Alpha"

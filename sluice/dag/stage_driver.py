@@ -70,7 +70,8 @@ async def drive_stages(
             items=stage_items,
             params=dict(stage_def.params),
         )
-        result = await get_executor_class(stage_def.type)().execute(ctx)
+        executor = get_executor_class(stage_def.type)()
+        result = await executor.execute(ctx)
 
         out.drops_per_stage[stage_name] = list(result.drops)
         out.errors_per_stage[stage_name] = list(result.errors)
@@ -83,7 +84,7 @@ async def drive_stages(
         excluded.update(errored_here)
         out.done_ids_per_stage[stage_name] = input_ids - dropped_here - errored_here
 
-        if stage_def.type == "sort":
+        if executor.reorders_items:
             untouched = [
                 item
                 for item in working_set

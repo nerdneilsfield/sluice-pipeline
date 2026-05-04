@@ -29,7 +29,7 @@ class SinkEmitter:
         except Exception as exc:  # noqa: BLE001
             result = EmissionResult(
                 sink_id=sink_id,
-                ordinal=0,
+                ordinal=-1,
                 success=False,
                 error_class=type(exc).__name__,
                 error_msg=str(exc)[:500],
@@ -37,13 +37,16 @@ class SinkEmitter:
             await self._record(
                 sink_id=sink_id,
                 sink_type=sink_type,
-                ordinal=0,
+                ordinal=-1,
                 message_kind=None,
                 result=result,
             )
             return [result]
         results: list[EmissionResult] = []
         for chunk in chunks:
+            # Delivery is at-least-once: a process crash after sink.emit() but
+            # before _record() can cause a retry to send the same chunk again.
+            # Downstream sinks should use their own idempotency when available.
             if await self._already_emitted(sink_id, chunk.ordinal):
                 results.append(
                     EmissionResult(

@@ -5,6 +5,7 @@ from typing import Any
 
 from sluice.dag.config import PipelineDef, StageDef
 from sluice.dag.item import Item
+from sluice.dag.sinks.base import EmissionResult
 from sluice.dag.stage_driver import VOLATILE_TYPES, DriverResult
 from sluice.dag.stores.pipeline_state import PipelineStateStore
 from sluice.dag.stores.pipelines import PipelinesStore
@@ -21,7 +22,7 @@ def build_tx2_job(
     run_key: str,
     items: list[Item],
     driver_result: DriverResult,
-    emission_results: list,
+    emission_results: list[EmissionResult],
     items_in: int,
     run_level_error: str | None,
     out: dict[str, Any],

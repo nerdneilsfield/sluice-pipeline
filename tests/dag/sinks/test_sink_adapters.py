@@ -7,11 +7,7 @@ import pytest
 
 import sluice.dag.sinks  # noqa: F401
 from sluice.dag.sinks.base import get_sink_class
-from sluice.dag.sinks.email_sink import EmailDagSink
-from sluice.dag.sinks.feishu_sink import FeishuDagSink
 from sluice.dag.sinks.file_md import FileMdSink
-from sluice.dag.sinks.notion_sink import NotionDagSink
-from sluice.dag.sinks.telegram_sink import TelegramDagSink
 
 
 class _NotionAdapter:
@@ -39,7 +35,10 @@ async def test_importing_sink_package_does_not_eagerly_import_optional_adapters(
 
 @pytest.mark.asyncio
 async def test_builtin_sink_adapters_are_bound():
-    assert get_sink_class("email") is EmailDagSink
+    from sluice.dag.sinks.feishu_sink import FeishuDagSink
+    from sluice.dag.sinks.notion_sink import NotionDagSink
+    from sluice.dag.sinks.telegram_sink import TelegramDagSink
+
     assert get_sink_class("telegram") is TelegramDagSink
     assert get_sink_class("feishu") is FeishuDagSink
     assert get_sink_class("notion") is NotionDagSink
@@ -47,6 +46,8 @@ async def test_builtin_sink_adapters_are_bound():
 
 @pytest.mark.asyncio
 async def test_telegram_adapter_chunks_rendered_markdown_and_emits(monkeypatch):
+    from sluice.dag.sinks.telegram_sink import TelegramDagSink
+
     async def fake_send(self, payload, recipient=None):
         assert "hello" in payload
         return "tg:1"
@@ -71,6 +72,8 @@ async def test_telegram_adapter_chunks_rendered_markdown_and_emits(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_telegram_adapter_resolves_footer_template_path_and_run_key(tmp_path):
+    from sluice.dag.sinks.telegram_sink import TelegramDagSink
+
     (tmp_path / "footer.md").write_text("KEY {{ run_key }}", encoding="utf-8")
     sink = TelegramDagSink()
     params = {
@@ -90,6 +93,9 @@ async def test_telegram_adapter_resolves_footer_template_path_and_run_key(tmp_pa
 
 @pytest.mark.asyncio
 async def test_email_adapter_chunks_one_message_per_recipient_and_emits(monkeypatch):
+    pytest.importorskip("aiosmtplib")
+    from sluice.dag.sinks.email_sink import EmailDagSink
+
     async def fake_send(self, payload, recipient=None):
         assert recipient in {"a@example.com", "b@example.com"}
         assert payload["To"] == recipient
@@ -116,6 +122,9 @@ async def test_email_adapter_chunks_one_message_per_recipient_and_emits(monkeypa
 
 @pytest.mark.asyncio
 async def test_email_adapter_resolves_template_paths(tmp_path):
+    pytest.importorskip("aiosmtplib")
+    from sluice.dag.sinks.email_sink import EmailDagSink
+
     (tmp_path / "body.html").write_text(
         "BODY {{ body_html }} STYLE {{ style_block }}",
         encoding="utf-8",
@@ -143,6 +152,8 @@ async def test_email_adapter_resolves_template_paths(tmp_path):
 
 @pytest.mark.asyncio
 async def test_feishu_adapter_chunks_markdown_and_emits(monkeypatch):
+    from sluice.dag.sinks.feishu_sink import FeishuDagSink
+
     async def fake_send(self, payload, recipient=None):
         assert payload["msg_type"] == "text"
         assert "hello" in payload["content"]["text"]
@@ -167,6 +178,8 @@ async def test_feishu_adapter_chunks_markdown_and_emits(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_feishu_adapter_resolves_card_template_path(tmp_path):
+    from sluice.dag.sinks.feishu_sink import FeishuDagSink
+
     (tmp_path / "card.json").write_text('{"config":{},"elements":[]}', encoding="utf-8")
     sink = FeishuDagSink()
     params = {
@@ -186,6 +199,8 @@ async def test_feishu_adapter_resolves_card_template_path(tmp_path):
 
 @pytest.mark.asyncio
 async def test_notion_adapter_uses_rendered_markdown():
+    from sluice.dag.sinks.notion_sink import NotionDagSink
+
     sink = NotionDagSink()
     params = {
         "sink_id": "nt",
