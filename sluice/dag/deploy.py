@@ -32,6 +32,13 @@ def _effective_timezone(task: TaskConfig, sluice_cfg: SluiceConfig) -> str:
     return task.timezone or sluice_cfg.runtime.default_timezone or "UTC"
 
 
+def _work_pool_name(sluice_cfg: SluiceConfig) -> str:
+    work_pool = sluice_cfg.runtime.work_pool.strip()
+    if not work_pool:
+        raise ConfigError("runtime.work_pool must not be empty")
+    return work_pool
+
+
 def _validate_for_deployment(task: TaskConfig) -> None:
     try:
         validate_task(task)
@@ -54,6 +61,7 @@ def build_pipeline_deployment(
     config_dir: str,
 ):
     _validate_for_deployment(task)
+    work_pool = _work_pool_name(sluice_cfg)
     tz = _effective_timezone(task, sluice_cfg)
     return run_pipeline_flow.to_deployment(
         name=f"{task.name}-{pipeline.name}",
@@ -64,7 +72,7 @@ def build_pipeline_deployment(
             "pipeline": pipeline.name,
             "config_dir": config_dir,
         },
-        work_pool_name=sluice_cfg.runtime.work_pool,
+        work_pool_name=work_pool,
         **_entrypoint_kwargs(),
     )
 
@@ -77,6 +85,7 @@ def build_rotation_deployment(
     sluice_config_path: str | None,
 ):
     _validate_for_deployment(task)
+    work_pool = _work_pool_name(sluice_cfg)
     tz = _effective_timezone(task, sluice_cfg)
     parameters = {"task": task.name, "config_dir": config_dir}
     if sluice_config_path is not None:
@@ -86,7 +95,7 @@ def build_rotation_deployment(
         schedule=CronSchedule(cron=effective_cron, timezone=tz),
         concurrency_limit=1,
         parameters=parameters,
-        work_pool_name=sluice_cfg.runtime.work_pool,
+        work_pool_name=work_pool,
         **_entrypoint_kwargs(),
     )
 
@@ -102,6 +111,7 @@ async def push_all_deployments(
     config_dir: str,
     sluice_config_path: str | None,
 ) -> tuple[int, int]:
+    work_pool = _work_pool_name(sluice_cfg)
     deployments = []
     pipeline_count = 0
     rotation_count = 0
@@ -134,7 +144,7 @@ async def push_all_deployments(
         return (0, 0)
 
     deploy_kwargs: dict[str, Any] = {
-        "work_pool_name": sluice_cfg.runtime.work_pool,
+        "work_pool_name": work_pool,
         "build": False,
         "push": False,
     }

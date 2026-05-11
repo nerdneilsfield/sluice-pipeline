@@ -36,7 +36,22 @@ class FakeFlow:
         return FakeDeployment(flow_name=self.flow_name, **kwargs)
 
 
-def _install_prefect_stub(*, with_entrypoint: bool = True):
+class FakeTemporarySettings:
+    def __init__(self, updates):
+        self.updates = updates
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _install_prefect_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    with_entrypoint: bool = True,
+):
     calls: list[dict] = []
 
     async def fake_deploy(*deployments, **kwargs):
@@ -61,16 +76,17 @@ def _install_prefect_stub(*, with_entrypoint: bool = True):
     prefect_settings_mod.PREFECT_API_URL = "PREFECT_API_URL"
     prefect_settings_mod.PREFECT_API_AUTH_STRING = "PREFECT_API_AUTH_STRING"
 
-    def temporary_settings(updates):
-        return SimpleNamespace(updates=updates)
+    prefect_settings_mod.temporary_settings = FakeTemporarySettings
 
-    prefect_settings_mod.temporary_settings = temporary_settings
-
-    sys.modules["prefect"] = prefect_mod
-    sys.modules["prefect.client"] = prefect_client_mod
-    sys.modules["prefect.client.schemas"] = prefect_client_schemas_mod
-    sys.modules["prefect.client.schemas.schedules"] = prefect_schedules_mod
-    sys.modules["prefect.settings"] = prefect_settings_mod
+    monkeypatch.setitem(sys.modules, "prefect", prefect_mod)
+    monkeypatch.setitem(sys.modules, "prefect.client", prefect_client_mod)
+    monkeypatch.setitem(sys.modules, "prefect.client.schemas", prefect_client_schemas_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "prefect.client.schemas.schedules",
+        prefect_schedules_mod,
+    )
+    monkeypatch.setitem(sys.modules, "prefect.settings", prefect_settings_mod)
 
     if with_entrypoint:
         prefect_types_mod = types.ModuleType("prefect.types")
@@ -80,23 +96,27 @@ def _install_prefect_stub(*, with_entrypoint: bool = True):
             MODULE_PATH = "module_path"
 
         prefect_entrypoint_mod.EntrypointType = EntrypointType
-        sys.modules["prefect.types"] = prefect_types_mod
-        sys.modules["prefect.types.entrypoint"] = prefect_entrypoint_mod
+        monkeypatch.setitem(sys.modules, "prefect.types", prefect_types_mod)
+        monkeypatch.setitem(
+            sys.modules,
+            "prefect.types.entrypoint",
+            prefect_entrypoint_mod,
+        )
     else:
-        sys.modules.pop("prefect.types", None)
-        sys.modules.pop("prefect.types.entrypoint", None)
+        monkeypatch.delitem(sys.modules, "prefect.types", raising=False)
+        monkeypatch.delitem(sys.modules, "prefect.types.entrypoint", raising=False)
 
     return calls
 
 
 @pytest.fixture
 def deploy_module(monkeypatch: pytest.MonkeyPatch):
-    deploy_calls = _install_prefect_stub()
+    deploy_calls = _install_prefect_stub(monkeypatch)
     flows_mod = types.ModuleType("sluice.dag.flows")
     flows_mod.run_pipeline_flow = FakeFlow("run")
     flows_mod.rotate_task_flow = FakeFlow("rotate")
     monkeypatch.setitem(sys.modules, "sluice.dag.flows", flows_mod)
-    sys.modules.pop("sluice.dag.deploy", None)
+    monkeypatch.delitem(sys.modules, "sluice.dag.deploy", raising=False)
     module = importlib.import_module("sluice.dag.deploy")
     module._prefect_deploy_calls = deploy_calls
     return module
@@ -276,6 +296,17 @@ def test_invalid_task_name_raises_config_error_without_sanitizing(deploy_module)
         deploy_module.build_pipeline_deployment(task, task.pipelines[0], _cfg(), "/configs")
 
 
+def test_blank_work_pool_raises_config_error(deploy_module):
+    cfg = _cfg(work_pool=" \t")
+    task = _task()
+
+    with pytest.raises(ConfigError, match="runtime.work_pool"):
+        deploy_module.build_pipeline_deployment(task, task.pipelines[0], cfg, "/configs")
+
+    with pytest.raises(ConfigError, match="runtime.work_pool"):
+        asyncio.run(deploy_module.push_all_deployments([task], cfg, "/configs", None))
+
+
 def test_prefect_api_settings_rejects_empty_env_auth(deploy_module, monkeypatch):
     monkeypatch.setenv("SLUICE_EMPTY_TOKEN", "")
 
@@ -308,3 +339,5 @@ def test_prefect_api_settings_sets_url_and_resolved_auth(deploy_module, monkeypa
         "PREFECT_API_URL": "http://localhost:4200/api",
         "PREFECT_API_AUTH_STRING": "secret-token",
     }
+    with cm as active:
+        assert active.updates == cm.updates
