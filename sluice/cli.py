@@ -242,14 +242,21 @@ def failures(
 
 
 @app.command()
-def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
+def deploy(
+    config_dir: Path = typer.Option("./configs", "--config-dir", "-c"),
+    sluice_config_path: Path | None = typer.Option(None, "--sluice-config"),
+):
     """Register all v2 task pipelines and rotations as Prefect deployments."""
     from sluice.dag.deploy import _prefect_api_settings, push_all_deployments
     from sluice.dag.loader import load_all_tasks
     from sluice.dag.sluice_config import load_sluice_config
 
     config_dir = config_dir.resolve()
-    sluice_config_path = (config_dir / "sluice.toml").resolve()
+    sluice_config_path = (
+        sluice_config_path.resolve()
+        if sluice_config_path
+        else (config_dir / "sluice.toml").resolve()
+    )
     tasks = load_all_tasks(config_dir)
     sluice_cfg = load_sluice_config(sluice_config_path)
 

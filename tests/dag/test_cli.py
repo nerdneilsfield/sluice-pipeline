@@ -153,6 +153,42 @@ class TestCliDeploy:
         assert seen["work_pool"] == "test-pool"
         assert [task.name for task in seen["tasks"]] == ["example"]
 
+    def test_deploy_uses_explicit_sluice_config(self, tmp_path: Path):
+        config_dir = _copy_task(tmp_path)
+        external_config = tmp_path / "external-sluice.toml"
+        external_config.write_text("[runtime]\nwork_pool = \"external-pool\"\n")
+        app = _cli_app()
+        seen: dict[str, object] = {}
+
+        async def capture(tasks, sluice_cfg, config_dir, sluice_config_path):
+            seen["config_dir"] = config_dir
+            seen["sluice_config_path"] = sluice_config_path
+            seen["work_pool"] = sluice_cfg.runtime.work_pool
+            return (1, 1)
+
+        with (
+            patch("sluice.dag.deploy.push_all_deployments", new=AsyncMock(side_effect=capture)),
+            patch(
+                "sluice.dag.deploy._prefect_api_settings",
+                return_value=nullcontext(),
+            ),
+        ):
+            result = CliRunner().invoke(
+                app,
+                [
+                    "deploy",
+                    "--config-dir",
+                    str(config_dir),
+                    "--sluice-config",
+                    str(external_config),
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert seen["config_dir"] == str(config_dir.resolve())
+        assert seen["sluice_config_path"] == str(external_config.resolve())
+        assert seen["work_pool"] == "external-pool"
+
 
 def test_run_command_invokes_real_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_dir = _copy_task(tmp_path)
