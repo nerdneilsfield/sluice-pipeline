@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from typing import Any
 
 import prefect
+from prefect.client.schemas.objects import ConcurrencyLimitConfig, ConcurrencyLimitStrategy
 from prefect.client.schemas.schedules import CronSchedule
 from prefect.settings import (
     PREFECT_API_AUTH_STRING,
@@ -39,6 +40,25 @@ def _work_pool_name(sluice_cfg: SluiceConfig) -> str:
     return work_pool
 
 
+def _effective_concurrency_strategy(pipeline: PipelineDef, sluice_cfg: SluiceConfig) -> str:
+    return pipeline.concurrency_strategy or getattr(
+        sluice_cfg.runtime, "concurrency_strategy", "queue"
+    )
+
+
+def _prefect_concurrency_limit(strategy: str) -> ConcurrencyLimitConfig:
+    if strategy in {"queue", "enqueue"}:
+        collision_strategy = ConcurrencyLimitStrategy.ENQUEUE
+    elif strategy == "cancel_new":
+        collision_strategy = ConcurrencyLimitStrategy.CANCEL_NEW
+    else:
+        raise ConfigError(
+            "concurrency_strategy must be one of queue/enqueue/cancel_new, "
+            f"got {strategy!r}"
+        )
+    return ConcurrencyLimitConfig(limit=1, collision_strategy=collision_strategy)
+
+
 def _validate_for_deployment(task: TaskConfig) -> None:
     try:
         validate_task(task)
@@ -63,10 +83,11 @@ def build_pipeline_deployment(
         raise ConfigError(f"pipeline cron is required for deployment: {pipeline.name!r}")
     work_pool = _work_pool_name(sluice_cfg)
     tz = _effective_timezone(task, sluice_cfg)
-    return run_pipeline_flow.to_deployment(
+    effective_strategy = _effective_concurrency_strategy(pipeline, sluice_cfg)
+    deployment = run_pipeline_flow.to_deployment(
         name=f"{task.name}-{pipeline.name}",
         schedule=CronSchedule(cron=pipeline.cron, timezone=tz),
-        concurrency_limit=1,
+        concurrency_limit=_prefect_concurrency_limit(effective_strategy),
         parameters={
             "task": task.name,
             "pipeline": pipeline.name,
@@ -75,6 +96,8 @@ def build_pipeline_deployment(
         work_pool_name=work_pool,
         **_entrypoint_kwargs(),
     )
+    deployment._sluice_concurrency_strategy = effective_strategy
+    return deployment
 
 
 def build_rotation_deployment(

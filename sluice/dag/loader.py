@@ -79,6 +79,7 @@ def load_task(task_dir: Path) -> TaskConfig:
             cron=entry.get("cron"),
             input_mode=entry.get("input_mode", "union"),
             max_attempts=int(entry.get("max_attempts", 3)),
+            concurrency_strategy=entry.get("concurrency_strategy"),
         )
         for entry in pipelines_doc
     ]

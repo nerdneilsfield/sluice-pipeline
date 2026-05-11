@@ -63,13 +63,25 @@ def _install_prefect_stub(
 
     prefect_client_mod = types.ModuleType("prefect.client")
     prefect_client_schemas_mod = types.ModuleType("prefect.client.schemas")
+    prefect_objects_mod = types.ModuleType("prefect.client.schemas.objects")
     prefect_schedules_mod = types.ModuleType("prefect.client.schemas.schedules")
+
+    class ConcurrencyLimitStrategy:
+        ENQUEUE = "ENQUEUE"
+        CANCEL_NEW = "CANCEL_NEW"
+
+    class ConcurrencyLimitConfig:
+        def __init__(self, *, limit: int, collision_strategy=ConcurrencyLimitStrategy.ENQUEUE):
+            self.limit = limit
+            self.collision_strategy = collision_strategy
 
     class CronSchedule:
         def __init__(self, *, cron: str, timezone: str):
             self.cron = cron
             self.timezone = timezone
 
+    prefect_objects_mod.ConcurrencyLimitStrategy = ConcurrencyLimitStrategy
+    prefect_objects_mod.ConcurrencyLimitConfig = ConcurrencyLimitConfig
     prefect_schedules_mod.CronSchedule = CronSchedule
 
     prefect_settings_mod = types.ModuleType("prefect.settings")
@@ -81,6 +93,11 @@ def _install_prefect_stub(
     monkeypatch.setitem(sys.modules, "prefect", prefect_mod)
     monkeypatch.setitem(sys.modules, "prefect.client", prefect_client_mod)
     monkeypatch.setitem(sys.modules, "prefect.client.schemas", prefect_client_schemas_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "prefect.client.schemas.objects",
+        prefect_objects_mod,
+    )
     monkeypatch.setitem(
         sys.modules,
         "prefect.client.schemas.schedules",
@@ -169,7 +186,8 @@ def test_build_pipeline_deployment_uses_task_timezone_then_config_fallback(deplo
     assert dep.name == "news-daily"
     assert dep.schedule.cron == "0 8 * * *"
     assert dep.schedule.timezone == "Asia/Shanghai"
-    assert dep.concurrency_limit == 1
+    assert dep.concurrency_limit.limit == 1
+    assert dep.concurrency_limit.collision_strategy == "ENQUEUE"
     assert dep.parameters == {
         "task": "news",
         "pipeline": "daily",
@@ -189,6 +207,31 @@ def test_build_pipeline_deployment_rejects_missing_cron(deploy_module):
 
     with pytest.raises(ConfigError, match="pipeline cron"):
         deploy_module.build_pipeline_deployment(task, task.pipelines[0], _cfg(), "/configs")
+
+
+def test_pipeline_concurrency_strategy_uses_pipeline_override(deploy_module):
+    pipeline = replace(_task().pipelines[0], concurrency_strategy="cancel_new")
+    task = _task(pipelines=[pipeline])
+
+    dep = deploy_module.build_pipeline_deployment(
+        task, task.pipelines[0], _cfg(concurrency_strategy="queue"), "/configs"
+    )
+
+    assert dep._sluice_concurrency_strategy == "cancel_new"
+    assert dep.concurrency_limit.limit == 1
+    assert dep.concurrency_limit.collision_strategy == "CANCEL_NEW"
+
+
+def test_pipeline_concurrency_strategy_falls_back_to_runtime(deploy_module):
+    task = _task()
+
+    dep = deploy_module.build_pipeline_deployment(
+        task, task.pipelines[0], _cfg(concurrency_strategy="enqueue"), "/configs"
+    )
+
+    assert dep._sluice_concurrency_strategy == "enqueue"
+    assert dep.concurrency_limit.limit == 1
+    assert dep.concurrency_limit.collision_strategy == "ENQUEUE"
 
 
 def test_build_rotation_deployment_includes_sluice_config_when_given(deploy_module):

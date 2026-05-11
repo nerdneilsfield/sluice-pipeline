@@ -24,13 +24,25 @@ def _cli_app():
     prefect_mod.serve = lambda *args, **kwargs: None
     prefect_client_mod = types.ModuleType("prefect.client")
     prefect_client_schemas_mod = types.ModuleType("prefect.client.schemas")
+    prefect_objects_mod = types.ModuleType("prefect.client.schemas.objects")
     prefect_schedules_mod = types.ModuleType("prefect.client.schemas.schedules")
+
+    class ConcurrencyLimitStrategy:
+        ENQUEUE = "ENQUEUE"
+        CANCEL_NEW = "CANCEL_NEW"
+
+    class ConcurrencyLimitConfig:
+        def __init__(self, *, limit, collision_strategy=ConcurrencyLimitStrategy.ENQUEUE):
+            self.limit = limit
+            self.collision_strategy = collision_strategy
 
     class CronSchedule:
         def __init__(self, *args, **kwargs):
             self.args = args
             self.kwargs = kwargs
 
+    prefect_objects_mod.ConcurrencyLimitStrategy = ConcurrencyLimitStrategy
+    prefect_objects_mod.ConcurrencyLimitConfig = ConcurrencyLimitConfig
     prefect_schedules_mod.CronSchedule = CronSchedule
     prefect_settings_mod = types.ModuleType("prefect.settings")
     prefect_settings_mod.PREFECT_API_URL = "PREFECT_API_URL"
@@ -46,6 +58,7 @@ def _cli_app():
     sys.modules.setdefault("prefect", prefect_mod)
     sys.modules.setdefault("prefect.client", prefect_client_mod)
     sys.modules.setdefault("prefect.client.schemas", prefect_client_schemas_mod)
+    sys.modules.setdefault("prefect.client.schemas.objects", prefect_objects_mod)
     sys.modules.setdefault("prefect.client.schemas.schedules", prefect_schedules_mod)
     sys.modules.setdefault("prefect.settings", prefect_settings_mod)
     sys.modules.setdefault("prefect.types", prefect_types_mod)

@@ -13,6 +13,7 @@ def test_runtime_config_defaults():
     assert cfg.work_pool == "default"
     assert cfg.default_timezone == "UTC"
     assert cfg.image is None
+    assert cfg.concurrency_strategy == "queue"
 
 
 def test_load_sluice_config_defaults_when_missing(tmp_path):
@@ -46,6 +47,7 @@ def test_load_sluice_config_parses_runtime(tmp_path):
         work_pool = "workers"
         default_timezone = "Asia/Shanghai"
         image = "registry.example/sluice:latest"
+        concurrency_strategy = "cancel_new"
         """
     )
     cfg = load_sluice_config(path)
@@ -54,6 +56,14 @@ def test_load_sluice_config_parses_runtime(tmp_path):
     assert cfg.runtime.work_pool == "workers"
     assert cfg.runtime.default_timezone == "Asia/Shanghai"
     assert cfg.runtime.image == "registry.example/sluice:latest"
+    assert cfg.runtime.concurrency_strategy == "cancel_new"
+
+
+def test_runtime_concurrency_strategy_invalid_raises(tmp_path):
+    path = tmp_path / "sluice.toml"
+    path.write_text("[runtime]\nconcurrency_strategy = 'bogus'\n")
+    with pytest.raises(ConfigError, match="concurrency_strategy"):
+        load_sluice_config(path)
 
 
 def test_load_sluice_config_runtime_defaults_when_missing(tmp_path):

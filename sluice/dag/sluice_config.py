@@ -29,6 +29,7 @@ class RuntimeConfig:
     work_pool: str = "default"
     default_timezone: str = "UTC"
     image: str | None = None
+    concurrency_strategy: str = "queue"
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,12 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
         raise ConfigError(f"failed to parse sluice config {path}: {exc}") from exc
     rotation = data.get("gc", {}).get("rotation", {})
     runtime = data.get("runtime", {})
+    concurrency_strategy = runtime.get("concurrency_strategy", "queue")
+    if concurrency_strategy not in {"queue", "enqueue", "cancel_new"}:
+        raise ConfigError(
+            "runtime.concurrency_strategy must be one of queue/enqueue/cancel_new, "
+            f"got {concurrency_strategy!r}"
+        )
     return SluiceConfig(
         rotation=RotationConfig(
             drain_timeout_seconds=_parse_duration(rotation.get("drain_timeout", "30m"), 30 * 60.0),
@@ -76,5 +83,6 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
             work_pool=runtime.get("work_pool", "default"),
             default_timezone=runtime.get("default_timezone", "UTC"),
             image=runtime.get("image"),
+            concurrency_strategy=concurrency_strategy,
         ),
     )

@@ -52,6 +52,7 @@ class PipelineDef:
     cron: str | None = None
     input_mode: str | None = "union"
     max_attempts: int = 3
+    concurrency_strategy: str | None = None
 
     def __post_init__(self) -> None:
         if self.input_mode not in (None, "union", "intersection"):
