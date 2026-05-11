@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sluice.dag.loader import load_task
+from sluice.dag.loader import load_all_tasks, load_task
 
 FIXTURE = Path(__file__).parent / "fixtures" / "example_task"
 
@@ -85,3 +85,45 @@ def test_load_task_rotation_cron(tmp_path: Path):
     (d / "task.toml").write_text(text)
     t = load_task(d)
     assert t.rotation_cron == "0 6 * * *"
+
+
+def test_load_all_tasks_discovers_all(tmp_path: Path):
+    import shutil
+
+    src = FIXTURE
+    for name in ("a", "b", "c"):
+        dst = tmp_path / "tasks" / name
+        dst.mkdir(parents=True)
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+        (dst / "task.toml").write_text(
+            (src / "task.toml")
+            .read_text()
+            .replace('name     = "example"', f'name     = "{name}"')
+            .replace('db_path  = "data/example.db"', f'db_path  = "data/{name}.db"')
+            .replace(
+                'seen_db  = "data/example_seen.db"',
+                f'seen_db  = "data/{name}_seen.db"',
+            )
+        )
+    tasks = load_all_tasks(tmp_path)
+    names = {t.name for t in tasks}
+    assert names == {"a", "b", "c"}
+
+
+def test_load_all_tasks_empty_when_no_task_dirs(tmp_path: Path):
+    (tmp_path / "tasks").mkdir()
+    tasks = load_all_tasks(tmp_path)
+    assert tasks == []
+
+
+def test_load_all_tasks_skips_missing_toml(tmp_path: Path):
+    import shutil
+
+    src = FIXTURE
+    good = tmp_path / "tasks" / "good"
+    good.mkdir(parents=True)
+    shutil.copytree(src, good, dirs_exist_ok=True)
+    (tmp_path / "tasks" / "empty").mkdir(parents=True)
+    tasks = load_all_tasks(tmp_path)
+    assert len(tasks) == 1
+    assert tasks[0].name == "example"

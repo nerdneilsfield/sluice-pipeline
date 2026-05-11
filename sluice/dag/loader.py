@@ -103,3 +103,9 @@ def load_task(task_dir: Path) -> TaskConfig:
         task_dir=str(task_dir),
         rotation_cron=task_doc.get("rotation_cron"),
     )
+
+
+def load_all_tasks(config_dir: Path) -> list[TaskConfig]:
+    """Glob config_dir/tasks/*/task.toml and load each."""
+    task_dirs = sorted(config_dir.glob("tasks/*/"))
+    return [load_task(d) for d in task_dirs if (d / "task.toml").exists()]
