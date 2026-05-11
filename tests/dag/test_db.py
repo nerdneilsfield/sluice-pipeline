@@ -30,6 +30,8 @@ async def test_open_active_db_creates_base_schema(tmp_path: Path):
         "sink_delivery_log",
         "attachment_mirror",
         "gc_log",
+        "rotation_gate",
+        "pipeline_admissions",
         "schema_version",
     }
     assert expected <= names
@@ -59,7 +61,7 @@ async def test_open_db_is_idempotent(tmp_path: Path):
         cur = await conn.execute("SELECT MAX(version) FROM schema_version")
         row = await cur.fetchone()
 
-    assert row == (1,)
+    assert row == (2,)
 
 
 @pytest.mark.asyncio

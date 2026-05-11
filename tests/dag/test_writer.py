@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from sluice.dag.rotation.lock import RotationLock
 from sluice.dag.writer import WriteJob, WriterThread
 
 
@@ -33,6 +34,23 @@ async def test_writer_processes_jobs_in_order(tmp_path):
         assert order == [1, 2]
     finally:
         await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_writer_holds_rotation_lock_until_stopped(tmp_path):
+    active = tmp_path / "active.db"
+    seen = tmp_path / "seen.db"
+    writer = WriterThread(active_path=str(active), seen_path=str(seen))
+    await writer.start()
+    try:
+        with pytest.raises(RuntimeError, match="rotation lock already held"):
+            RotationLock(active).acquire()
+    finally:
+        await writer.stop()
+
+    lock = RotationLock(active)
+    lock.acquire()
+    lock.release()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,71 @@ def _empty_task(**overrides) -> TaskConfig:
 def test_fixture_validates_clean():
     t = load_task(FIXTURE)
     validate_task(t)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("task", "bad/task", "task name"),
+        ("source", "rss-feed", "source name"),
+        ("sink", "file-md", "sink name"),
+        ("stage", "fetch.rss", "stage name"),
+        ("pipeline", "daily-report", "pipeline name"),
+    ],
+)
+def test_names_must_be_safe_sql_identifiers(field: str, value: str, match: str):
+    t = _empty_task(
+        sinks=[SinkDef(name="k", type="telegram")],
+        pipelines=[
+            PipelineDef(
+                name="p",
+                cron="* * * * *",
+                stages=["fr"],
+                sources=["s"],
+                upstream_all=None,
+                upstream_any=None,
+                sinks=["k"],
+                post_run_cleanup=None,
+                input_mode="union",
+            )
+        ],
+    )
+    if field == "task":
+        t = _empty_task(
+            name=value,
+            sinks=t.sinks,
+            pipelines=t.pipelines,
+        )
+    elif field == "source":
+        t = replace(
+            t,
+            sources=[SourceDef(name=value, type="rss")],
+            stages=[
+                replace(
+                    t.stages[0],
+                    params={"sources": [value]},
+                ),
+                *t.stages[1:],
+            ],
+            pipelines=[replace(t.pipelines[0], sources=[value])],
+        )
+    elif field == "sink":
+        t = replace(
+            t,
+            sinks=[SinkDef(name=value, type="telegram")],
+            pipelines=[replace(t.pipelines[0], sinks=[value])],
+        )
+    elif field == "stage":
+        t = replace(
+            t,
+            stages=[replace(t.stages[0], name=value), *t.stages[1:]],
+            pipelines=[replace(t.pipelines[0], stages=[value])],
+        )
+    elif field == "pipeline":
+        t = replace(t, pipelines=[replace(t.pipelines[0], name=value)])
+
+    with pytest.raises(ValidationError, match=match):
+        validate_task(t)
 
 
 def test_pipeline_with_both_sources_and_upstream_rejected():
