@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import re
-
 import aiosqlite
 
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
-
-
-def _safe(name: str) -> str:
-    if _NAME_RE.fullmatch(name) is None:
-        raise ValueError(f"unsafe stage name: {name!r}")
-    return name
+from sluice.dag._name import safe_name
 
 
 class StageStateStore:
     def __init__(self, conn: aiosqlite.Connection, stage_name: str):
         self.conn = conn
-        self.stage = _safe(stage_name)
+        self.stage = safe_name(stage_name)
 
     async def upsert(
         self,

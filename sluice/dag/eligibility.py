@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 import aiosqlite
 
+from sluice.dag._name import safe_name
 from sluice.dag.config import PipelineDef
-
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 _ITEM_COLS = (
     "item_id",
@@ -36,12 +34,6 @@ _ITEM_COLS = (
 )
 _ITEM_COLS_SQL = ", ".join(f"items.{col}" for col in _ITEM_COLS)
 _TERMINAL = "'success','dropped','failed'"
-
-
-def _safe(name: str) -> str:
-    if _NAME_RE.fullmatch(name) is None:
-        raise ValueError(f"unsafe pipeline name: {name!r}")
-    return name
 
 
 @dataclass(frozen=True)
@@ -105,7 +97,7 @@ async def select_eligible_items(
     if not upstreams:
         return []
 
-    safe_p = _safe(pipeline.name)
+    safe_p = safe_name(pipeline.name)
     if pipeline.input_mode == "intersection":
         sources = pipeline.upstream_all or []
         joiner = " AND "
@@ -116,7 +108,7 @@ async def select_eligible_items(
         return []
 
     upstream_clauses = [
-        f"EXISTS (SELECT 1 FROM pipeline_{_safe(upstream)} pu "
+        f"EXISTS (SELECT 1 FROM pipeline_{safe_name(upstream)} pu "
         "WHERE pu.item_id = items.item_id AND pu.status = 'success')"
         for upstream in sources
     ]
@@ -137,7 +129,7 @@ async def select_entry_carryover(
 ) -> list[dict]:
     if not pipeline.sources:
         return []
-    safe_p = _safe(pipeline.name)
+    safe_p = safe_name(pipeline.name)
     placeholders = ",".join("?" for _ in pipeline.sources)
     sql = (
         f"SELECT {_ITEM_COLS_SQL} FROM items "

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Iterable
 from datetime import datetime, timezone
 
+from sluice.dag._source_hash import source_hash_from_row
 from sluice.dag.item import Item
 from sluice.dag.stores.item_seen import ItemSeenStore
 from sluice.dag.writer import WriteJob
 
 
 def _source_hash(item: Item) -> str:
-    base = f"{item['source_name']}::{item['guid'] or item['url'] or ''}"
-    return hashlib.sha1(base.encode("utf-8")).hexdigest()
+    return source_hash_from_row(item)
 
 
 def build_seen_post_job(new_items: Iterable[Item]) -> WriteJob:

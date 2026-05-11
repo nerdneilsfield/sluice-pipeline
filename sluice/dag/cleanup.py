@@ -1,18 +1,10 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 
+from sluice.dag._name import safe_name
 from sluice.dag.config import PipelineDef, TaskConfig
 from sluice.dag.writer import WriteJob, WriterThread
-
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
-
-
-def _safe(name: str) -> str:
-    if _NAME_RE.fullmatch(name) is None:
-        raise ValueError(f"unsafe name: {name!r}")
-    return name
 
 
 async def apply_post_run_cleanup(
@@ -29,13 +21,13 @@ async def apply_post_run_cleanup(
         return 0
 
     mode = pipeline.post_run_cleanup
-    safe_p = _safe(pipeline.name)
+    safe_p = safe_name(pipeline.name)
     upstreams = list(dict.fromkeys((pipeline.upstream_all or []) + (pipeline.upstream_any or [])))
     if not upstreams:
         return 0
 
     upstream_clauses = " OR ".join(
-        f"EXISTS (SELECT 1 FROM pipeline_{_safe(upstream)} pu "
+        f"EXISTS (SELECT 1 FROM pipeline_{safe_name(upstream)} pu "
         "WHERE pu.item_id = items.item_id AND pu.status = 'success')"
         for upstream in upstreams
     )

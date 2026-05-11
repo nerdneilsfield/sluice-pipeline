@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
@@ -23,6 +24,11 @@ from sluice.dag.phases.seen_post import build_seen_post_job
 from sluice.dag.phases.skip_compute import compute_skip_ids
 from sluice.dag.phases.tx1 import build_tx1_job
 from sluice.dag.phases.tx2 import build_tx2_job
+from sluice.dag.rotation.admission import (
+    RotationGateClosed,
+    build_admission_job,
+    build_deadmission_job,
+)
 from sluice.dag.sinks.base import get_sink_class
 from sluice.dag.stage_driver import drive_stages
 from sluice.dag.stores.item_seen import ItemSeenStore
@@ -77,6 +83,58 @@ def _window_delta(length: str) -> timedelta:
 
 
 async def run_pipeline(
+    task: TaskConfig,
+    pipeline_name: str,
+    *,
+    writer: WriterThread,
+    now: datetime | None = None,
+    trigger: str = "manual",
+) -> RunResult:
+    validate_task(task)
+    pipeline = next(
+        (candidate for candidate in task.pipelines if candidate.name == pipeline_name),
+        None,
+    )
+    if pipeline is None:
+        raise ValueError(f"unknown pipeline: {pipeline_name!r}")
+
+    admission_id = str(uuid.uuid4())
+    try:
+        await (
+            await writer.submit(
+                build_admission_job(
+                    admission_id=admission_id,
+                    task_name=task.name,
+                    pipeline_name=pipeline.name,
+                )
+            )
+        )
+    except RotationGateClosed as exc:
+        return RunResult(
+            pipeline_name=pipeline.name,
+            run_key="",
+            status="skipped_rotation",
+            items_in=0,
+            items_out=0,
+            error_msg=str(exc),
+        )
+
+    try:
+        return await _run_pipeline_admitted(
+            task,
+            pipeline_name,
+            writer=writer,
+            now=now,
+            trigger=trigger,
+        )
+    finally:
+        try:
+            await (await writer.submit(build_deadmission_job(admission_id)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("deadmission failed for %s: %s", admission_id, exc)
+
+
+async def _run_pipeline_admitted(
     task: TaskConfig,
     pipeline_name: str,
     *,

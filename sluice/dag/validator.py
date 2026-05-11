@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 
+from sluice.dag._name import safe_name
 from sluice.dag.config import TaskConfig
 from sluice.dag.registry import REGISTRY
 
@@ -31,6 +32,22 @@ def _check_unique_names(task: TaskConfig) -> None:
         duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
         if duplicates:
             raise ValidationError(f"duplicate {label} name: {', '.join(duplicates)}")
+
+
+def _check_safe_names(task: TaskConfig) -> None:
+    names_by_label = {
+        "task": [task.name],
+        "source": [source.name for source in task.sources],
+        "sink": [sink.name for sink in task.sinks],
+        "stage": [stage.name for stage in task.stages],
+        "pipeline": [pipeline.name for pipeline in task.pipelines],
+    }
+    for label, names in names_by_label.items():
+        for name in names:
+            try:
+                safe_name(name)
+            except ValueError as exc:
+                raise ValidationError(f"unsafe {label} name: {name!r}") from exc
 
 
 def _check_stage_references(task: TaskConfig) -> None:
@@ -152,6 +169,7 @@ def _check_acyclic(task: TaskConfig) -> None:
 
 
 def validate_task(task: TaskConfig) -> None:
+    _check_safe_names(task)
     _check_unique_names(task)
     _check_stage_references(task)
     _check_shape(task)

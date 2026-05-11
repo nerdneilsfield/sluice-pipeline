@@ -7,6 +7,7 @@ from typing import Awaitable, Callable
 import aiosqlite
 
 from sluice.dag.db import open_active_db, open_seen_db
+from sluice.dag.rotation.lock import RotationLock
 
 WriteJobCallable = Callable[
     [aiosqlite.Connection, aiosqlite.Connection],
@@ -20,9 +21,16 @@ class WriteJob:
 
 
 class WriterThread:
-    def __init__(self, *, active_path: str, seen_path: str):
+    def __init__(
+        self,
+        *,
+        active_path: str,
+        seen_path: str,
+        hold_rotation_lock: bool = True,
+    ):
         self.active_path = active_path
         self.seen_path = seen_path
+        self._rotation_lock = RotationLock(active_path) if hold_rotation_lock else None
         self._queue: asyncio.Queue[tuple[WriteJob, asyncio.Future[None]] | None] = (
             asyncio.Queue()
         )
@@ -31,15 +39,26 @@ class WriterThread:
     async def start(self) -> None:
         if self._task is not None:
             return
-        self._task = asyncio.create_task(self._run(), name="dag-writer")
+        if self._rotation_lock is not None:
+            self._rotation_lock.acquire()
+        try:
+            self._task = asyncio.create_task(self._run(), name="dag-writer")
+        except Exception:
+            if self._rotation_lock is not None:
+                self._rotation_lock.release()
+            raise
 
     async def stop(self) -> None:
         task = self._task
         if task is None:
             return
-        await self._queue.put(None)
-        await task
-        self._task = None
+        try:
+            await self._queue.put(None)
+            await task
+        finally:
+            self._task = None
+            if self._rotation_lock is not None:
+                self._rotation_lock.release()
 
     async def submit(self, job: WriteJob) -> asyncio.Future[None]:
         if self._task is None:

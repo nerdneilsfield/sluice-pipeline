@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import re
-
 import aiosqlite
 
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
-
-
-def _safe(name: str) -> str:
-    if _NAME_RE.fullmatch(name) is None:
-        raise ValueError(f"unsafe pipeline name: {name!r}")
-    return name
+from sluice.dag._name import safe_name
 
 
 class PipelineStateStore:
     def __init__(self, conn: aiosqlite.Connection, pipeline_name: str):
         self.conn = conn
-        self.pipeline = _safe(pipeline_name)
+        self.pipeline = safe_name(pipeline_name)
 
     async def upsert(
         self,
