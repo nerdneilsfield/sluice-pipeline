@@ -156,8 +156,8 @@ class TestCliDeploy:
 
     def test_deploy_uses_explicit_sluice_config(self, tmp_path: Path):
         config_dir = _copy_task(tmp_path)
-        external_config = tmp_path / "external-sluice.toml"
-        external_config.write_text('[runtime]\nwork_pool = "external-pool"\n')
+        explicit_config = config_dir / "explicit-sluice.toml"
+        explicit_config.write_text('[runtime]\nwork_pool = "explicit-pool"\n')
         app = _cli_app()
         seen: dict[str, object] = {}
 
@@ -181,14 +181,34 @@ class TestCliDeploy:
                     "--config-dir",
                     str(config_dir),
                     "--sluice-config",
-                    str(external_config),
+                    str(explicit_config),
                 ],
             )
 
         assert result.exit_code == 0, result.output
         assert seen["config_dir"] == str(config_dir.resolve())
-        assert seen["sluice_config_path"] == str(external_config.resolve())
-        assert seen["work_pool"] == "external-pool"
+        assert seen["sluice_config_path"] == str(explicit_config.resolve())
+        assert seen["work_pool"] == "explicit-pool"
+
+    def test_deploy_rejects_sluice_config_outside_config_dir(self, tmp_path: Path):
+        config_dir = _copy_task(tmp_path)
+        outside_config = tmp_path / "outside-sluice.toml"
+        outside_config.write_text('[runtime]\nwork_pool = "outside-pool"\n')
+        app = _cli_app()
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "deploy",
+                "--config-dir",
+                str(config_dir),
+                "--sluice-config",
+                str(outside_config),
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "--sluice-config must be inside --config-dir" in result.output
 
 
 def test_run_command_invokes_real_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

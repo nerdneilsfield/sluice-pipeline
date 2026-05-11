@@ -5,6 +5,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sluice.core.errors import ConfigError
+
 
 @dataclass(frozen=True)
 class RotationConfig:
@@ -15,6 +17,13 @@ class RotationConfig:
 
 @dataclass(frozen=True)
 class RuntimeConfig:
+    """Runtime settings used by v2 Prefect deployment.
+
+    ``image`` must reference an image that has already been built and pushed.
+    The deploy command passes it to Prefect with ``build=False`` and
+    ``push=False``.
+    """
+
     prefect_api_url: str = ""
     prefect_api_auth_string: str = ""
     work_pool: str = "default"
@@ -47,14 +56,17 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
     path = config_path or Path("sluice.toml")
     if not path.exists():
         return SluiceConfig()
-    data = tomllib.loads(path.read_text())
+    try:
+        data = tomllib.loads(path.read_text())
+    except UnicodeDecodeError as exc:
+        raise ConfigError(f"failed to read sluice config {path}: invalid encoding") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"failed to parse sluice config {path}: {exc}") from exc
     rotation = data.get("gc", {}).get("rotation", {})
     runtime = data.get("runtime", {})
     return SluiceConfig(
         rotation=RotationConfig(
-            drain_timeout_seconds=_parse_duration(
-                rotation.get("drain_timeout", "30m"), 30 * 60.0
-            ),
+            drain_timeout_seconds=_parse_duration(rotation.get("drain_timeout", "30m"), 30 * 60.0),
             archive_dir=rotation.get("archive_dir", "data/archive"),
             default_cron=rotation.get("default_cron"),
         ),

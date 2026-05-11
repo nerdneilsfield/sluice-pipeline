@@ -184,6 +184,13 @@ def test_build_pipeline_deployment_uses_task_timezone_then_config_fallback(deplo
     assert fallback.schedule.timezone == "UTC"
 
 
+def test_build_pipeline_deployment_rejects_missing_cron(deploy_module):
+    task = _task(pipelines=[replace(_task().pipelines[0], cron=None)])
+
+    with pytest.raises(ConfigError, match="pipeline cron"):
+        deploy_module.build_pipeline_deployment(task, task.pipelines[0], _cfg(), "/configs")
+
+
 def test_build_rotation_deployment_includes_sluice_config_when_given(deploy_module):
     task = _task()
     dep = deploy_module.build_rotation_deployment(

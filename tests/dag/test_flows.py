@@ -216,6 +216,19 @@ async def test_run_pipeline_flow_busy_lock_uses_rotation_fast_path(
     ]
 
 
+def test_rotation_lock_contention_raises_runtime_error(tmp_path: Path):
+    from sluice.dag.rotation.lock import RotationLock
+
+    first = RotationLock(tmp_path / "active.db")
+    second = RotationLock(tmp_path / "active.db")
+    first.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="rotation lock already held"):
+            second.acquire()
+    finally:
+        first.release()
+
+
 @pytest.mark.asyncio
 async def test_run_pipeline_flow_busy_lock_fallback_returns_serialized_dict(
     monkeypatch: pytest.MonkeyPatch,

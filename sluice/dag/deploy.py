@@ -59,6 +59,8 @@ def build_pipeline_deployment(
     config_dir: str,
 ):
     _validate_for_deployment(task)
+    if pipeline.cron is None:
+        raise ConfigError(f"pipeline cron is required for deployment: {pipeline.name!r}")
     work_pool = _work_pool_name(sluice_cfg)
     tz = _effective_timezone(task, sluice_cfg)
     return run_pipeline_flow.to_deployment(

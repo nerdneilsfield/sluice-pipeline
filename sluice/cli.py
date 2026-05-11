@@ -257,6 +257,12 @@ def deploy(
         if sluice_config_path
         else (config_dir / "sluice.toml").resolve()
     )
+    if not sluice_config_path.is_relative_to(config_dir):
+        typer.echo(
+            "--sluice-config must be inside --config-dir",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     tasks = load_all_tasks(config_dir)
     sluice_cfg = load_sluice_config(sluice_config_path)
 

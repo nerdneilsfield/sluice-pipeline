@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from sluice.core.errors import ConfigError
 from sluice.dag.sluice_config import RuntimeConfig, SluiceConfig, load_sluice_config
 
 
@@ -85,4 +86,12 @@ def test_load_sluice_config_rejects_bad_duration(tmp_path):
     path = tmp_path / "sluice.toml"
     path.write_text("[gc.rotation]\ndrain_timeout = 'soon'\n")
     with pytest.raises(ValueError, match="invalid duration"):
+        load_sluice_config(path)
+
+
+def test_load_sluice_config_wraps_invalid_encoding(tmp_path):
+    path = tmp_path / "sluice.toml"
+    path.write_bytes(b"\xff")
+
+    with pytest.raises(ConfigError, match="invalid encoding"):
         load_sluice_config(path)
