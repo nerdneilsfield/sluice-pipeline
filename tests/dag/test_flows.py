@@ -70,9 +70,19 @@ async def test_run_pipeline_flow_success_path_returns_serialized_result(
             calls.append("release")
 
     class FakeWriter:
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            calls.append(("writer_init", kwargs))
+        def __init__(
+            self,
+            *,
+            active_path: str,
+            seen_path: str,
+            hold_rotation_lock: bool = True,
+        ):
+            self.kwargs = {
+                "active_path": active_path,
+                "seen_path": seen_path,
+                "hold_rotation_lock": hold_rotation_lock,
+            }
+            calls.append(("writer_init", self.kwargs))
 
         async def start(self):
             calls.append("writer_start")
@@ -207,6 +217,39 @@ async def test_run_pipeline_flow_busy_lock_uses_rotation_fast_path(
 
 
 @pytest.mark.asyncio
+async def test_run_pipeline_flow_busy_lock_fallback_returns_serialized_dict(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    flows = _import_flows(monkeypatch)
+    cfg = SimpleNamespace(db_path="/tmp/active.db", seen_db="/tmp/seen.db")
+
+    class BusyLock:
+        def __init__(self, db_path):
+            pass
+
+        def acquire(self):
+            raise RuntimeError("busy")
+
+        def release(self):
+            raise AssertionError("lock was never acquired")
+
+    monkeypatch.setattr(flows, "load_task", lambda path: cfg)
+    monkeypatch.setattr(flows, "RotationLock", BusyLock)
+    monkeypatch.setattr(flows, "check_rotation_fast_path", lambda cfg, pipeline: None)
+
+    result = await flows.run_pipeline_flow("example", "fetch_blog")
+
+    assert result == {
+        "pipeline_name": "fetch_blog",
+        "run_key": "",
+        "status": "lock_busy",
+        "items_in": 0,
+        "items_out": 0,
+        "error_msg": "rotation lock already held",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_pipeline_flow_stops_writer_and_releases_lock_on_pipeline_exception(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -225,6 +268,17 @@ async def test_run_pipeline_flow_stops_writer_and_releases_lock_on_pipeline_exce
             calls.append("release")
 
     class FakeWriter:
+        def __init__(
+            self,
+            *,
+            active_path: str,
+            seen_path: str,
+            hold_rotation_lock: bool = True,
+        ):
+            calls.append(
+                ("writer_init", active_path, seen_path, hold_rotation_lock)
+            )
+
         async def start(self):
             calls.append("writer_start")
 
@@ -241,7 +295,7 @@ async def test_run_pipeline_flow_stops_writer_and_releases_lock_on_pipeline_exce
     monkeypatch.setattr(flows, "load_task", lambda path: cfg)
     monkeypatch.setattr(flows, "RotationLock", FakeLock)
     monkeypatch.setattr(flows, "ensure_dynamic_tables", fake_ensure)
-    monkeypatch.setattr(flows, "WriterThread", lambda **kwargs: FakeWriter())
+    monkeypatch.setattr(flows, "WriterThread", FakeWriter)
     monkeypatch.setattr(flows, "run_pipeline", fake_run_pipeline)
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -250,6 +304,7 @@ async def test_run_pipeline_flow_stops_writer_and_releases_lock_on_pipeline_exce
     assert calls == [
         "acquire",
         "ensure",
+        ("writer_init", "/tmp/active.db", "/tmp/seen.db", False),
         "writer_start",
         "run_pipeline",
         "writer_stop",

@@ -49,7 +49,14 @@ async def run_pipeline_flow(
         fast = check_rotation_fast_path(cfg, pipeline)
         if fast is not None:
             return _serialize_run_result(fast)
-        return {"status": "lock_busy", "pipeline_name": pipeline}
+        return {
+            "pipeline_name": pipeline,
+            "run_key": "",
+            "status": "lock_busy",
+            "items_in": 0,
+            "items_out": 0,
+            "error_msg": "rotation lock already held",
+        }
 
     try:
         await ensure_dynamic_tables(cfg)
