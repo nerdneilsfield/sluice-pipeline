@@ -275,9 +275,7 @@ async def test_run_pipeline_flow_stops_writer_and_releases_lock_on_pipeline_exce
             seen_path: str,
             hold_rotation_lock: bool = True,
         ):
-            calls.append(
-                ("writer_init", active_path, seen_path, hold_rotation_lock)
-            )
+            calls.append(("writer_init", active_path, seen_path, hold_rotation_lock))
 
         async def start(self):
             calls.append("writer_start")

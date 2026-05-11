@@ -273,10 +273,7 @@ def deploy(
     if n_pip == 0 and n_rot == 0:
         typer.echo("Warning: No v2 task deployments registered.")
 
-    typer.echo(
-        f"Registered {n_pip} pipeline deployment(s) + "
-        f"{n_rot} rotation deployment(s)."
-    )
+    typer.echo(f"Registered {n_pip} pipeline deployment(s) + {n_rot} rotation deployment(s).")
 
 
 @app.command()
@@ -612,6 +609,7 @@ def gc_rotate(
     sluice_cfg = load_sluice_config(sluice_config_path)
 
     if dry_run:
+
         async def _dry_run():
             lock = RotationLock(cfg.db_path)
             try:

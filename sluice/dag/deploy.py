@@ -43,9 +43,7 @@ def _validate_for_deployment(task: TaskConfig) -> None:
     try:
         validate_task(task)
     except ValidationError as exc:
-        raise ConfigError(
-            f"invalid task {getattr(task, 'name', '<unknown>')!r}: {exc}"
-        ) from exc
+        raise ConfigError(f"invalid task {getattr(task, 'name', '<unknown>')!r}: {exc}") from exc
 
 
 def _entrypoint_kwargs() -> dict[str, Any]:

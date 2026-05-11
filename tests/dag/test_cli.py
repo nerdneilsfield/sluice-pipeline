@@ -15,6 +15,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "example_task"
 
 def _cli_app():
     prefect_mod = types.ModuleType("prefect")
+
     async def deploy(*args, **kwargs):
         return None
 
@@ -84,7 +85,7 @@ def _copy_task(tmp_path: Path) -> Path:
 class TestCliDeploy:
     def test_deploy_registers_deployments(self, tmp_path: Path):
         config_dir = _copy_task(tmp_path)
-        (config_dir / "sluice.toml").write_text("[runtime]\nwork_pool = \"test-pool\"\n")
+        (config_dir / "sluice.toml").write_text('[runtime]\nwork_pool = "test-pool"\n')
         app = _cli_app()
 
         with (
@@ -106,7 +107,7 @@ class TestCliDeploy:
     def test_deploy_no_tasks_prints_warning(self, tmp_path: Path):
         config_dir = tmp_path / "configs"
         (config_dir / "tasks").mkdir(parents=True)
-        (config_dir / "sluice.toml").write_text("[runtime]\nwork_pool = \"test-pool\"\n")
+        (config_dir / "sluice.toml").write_text('[runtime]\nwork_pool = "test-pool"\n')
         app = _cli_app()
 
         with (
@@ -127,7 +128,7 @@ class TestCliDeploy:
 
     def test_deploy_resolves_paths_and_default_sluice_config(self, tmp_path: Path):
         config_dir = _copy_task(tmp_path)
-        (config_dir / "sluice.toml").write_text("[runtime]\nwork_pool = \"test-pool\"\n")
+        (config_dir / "sluice.toml").write_text('[runtime]\nwork_pool = "test-pool"\n')
         app = _cli_app()
         seen: dict[str, object] = {}
 
@@ -156,7 +157,7 @@ class TestCliDeploy:
     def test_deploy_uses_explicit_sluice_config(self, tmp_path: Path):
         config_dir = _copy_task(tmp_path)
         external_config = tmp_path / "external-sluice.toml"
-        external_config.write_text("[runtime]\nwork_pool = \"external-pool\"\n")
+        external_config.write_text('[runtime]\nwork_pool = "external-pool"\n')
         app = _cli_app()
         seen: dict[str, object] = {}
 

@@ -203,9 +203,7 @@ def test_build_rotation_deployment_includes_sluice_config_when_given(deploy_modu
 
 
 def test_build_rotation_deployment_omits_none_sluice_config(deploy_module):
-    dep = deploy_module.build_rotation_deployment(
-        _task(), "15 4 * * *", _cfg(), "/configs", None
-    )
+    dep = deploy_module.build_rotation_deployment(_task(), "15 4 * * *", _cfg(), "/configs", None)
 
     assert dep.parameters == {"task": "news", "config_dir": "/configs"}
 
@@ -254,9 +252,7 @@ def test_push_all_deployments_skips_pipeline_without_cron(deploy_module, cron):
 def test_push_all_deployments_skips_rotation_without_effective_cron(deploy_module):
     cfg = SluiceConfig(rotation=RotationConfig(default_cron=None), runtime=_cfg().runtime)
 
-    result = asyncio.run(
-        deploy_module.push_all_deployments([_task()], cfg, "/configs", None)
-    )
+    result = asyncio.run(deploy_module.push_all_deployments([_task()], cfg, "/configs", None))
 
     assert result == (1, 0)
     call = deploy_module._prefect_deploy_calls[0]
