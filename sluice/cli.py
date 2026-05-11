@@ -7,19 +7,29 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import typer
-from prefect import serve as prefect_serve
-from prefect.client.schemas.schedules import CronSchedule
 from rich.console import Console
 from rich.table import Table
 from tqdm import tqdm
 
+import sluice.dag.run_pipeline as dag_run_pipeline_module
+from sluice.dag.rotation.lock import RotationLock, check_rotation_fast_path
+from sluice.dag.writer import WriterThread
 from sluice.loader import load_all
 from sluice.logging_setup import configure_cli_logging, create_logger
-from sluice.runner import run_pipeline
+from sluice.runner import run_pipeline as run_legacy_pipeline
 from sluice.window import parse_duration
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
+run_pipeline = run_legacy_pipeline
+
+
+async def ensure_dynamic_tables(task):
+    return await dag_run_pipeline_module.ensure_dynamic_tables(task)
+
+
+async def dag_run_pipeline(*args, **kwargs):
+    return await dag_run_pipeline_module.run_pipeline(*args, **kwargs)
 
 
 def _import_all():
@@ -233,68 +243,33 @@ def failures(
 
 @app.command()
 def deploy(config_dir: Path = typer.Option("./configs", "--config-dir", "-c")):
-    """Register all enabled pipelines as Prefect deployments."""
-    _import_all()
-    bundle = load_all(config_dir)
+    """Register all v2 task pipelines and rotations as Prefect deployments."""
+    from sluice.dag.deploy import _prefect_api_settings, push_all_deployments
+    from sluice.dag.loader import load_all_tasks
+    from sluice.dag.sluice_config import load_sluice_config
 
-    from sluice.flow import build_flow
+    config_dir = config_dir.resolve()
+    sluice_config_path = (config_dir / "sluice.toml").resolve()
+    tasks = load_all_tasks(config_dir)
+    sluice_cfg = load_sluice_config(sluice_config_path)
 
-    deployments = []
-    for pid, pipe in bundle.pipelines.items():
-        if not pipe.enabled:
-            continue
-        cron = pipe.cron or bundle.global_cfg.runtime.default_cron
-        tz = pipe.timezone or bundle.global_cfg.runtime.timezone
-        flow_obj = build_flow(pid)
-        dep = flow_obj.to_deployment(
-            name=f"sluice-{pid}",
-            schedule=CronSchedule(cron=cron, timezone=tz),
-            parameters={"config_dir": str(config_dir.resolve())},
+    with _prefect_api_settings(sluice_cfg.runtime):
+        n_pip, n_rot = asyncio.run(
+            push_all_deployments(
+                tasks,
+                sluice_cfg,
+                str(config_dir),
+                str(sluice_config_path),
+            )
         )
-        deployments.append(dep)
 
-    if bundle.global_cfg.gc.schedule.enabled:
-        from sluice.gc_flow import sluice_gc_flow
+    if n_pip == 0 and n_rot == 0:
+        typer.echo("Warning: No v2 task deployments registered.")
 
-        gc_dep = sluice_gc_flow.to_deployment(
-            name="sluice-gc",
-            schedule=CronSchedule(
-                cron=bundle.global_cfg.gc.schedule.cron,
-                timezone=bundle.global_cfg.runtime.timezone,
-            ),
-            parameters={"config_dir": str(config_dir.resolve())},
-        )
-        deployments.append(gc_dep)
-
-    if deployments:
-        with _prefect_api_settings(bundle.global_cfg.runtime):
-            prefect_serve(*deployments)
-
-
-def _prefect_api_settings(runtime):
-    from contextlib import nullcontext
-
-    updates = {}
-    if runtime.prefect_api_url:
-        from prefect.settings import PREFECT_API_URL
-
-        updates[PREFECT_API_URL] = runtime.prefect_api_url
-    if runtime.prefect_api_auth_string is not None:
-        from sluice.core.errors import ConfigError
-        from sluice.loader import resolve_env
-
-        auth_string = resolve_env(runtime.prefect_api_auth_string)
-        if not auth_string.strip():
-            raise ConfigError("runtime.prefect_api_auth_string must not be empty")
-        from prefect.settings import PREFECT_API_AUTH_STRING
-
-        updates[PREFECT_API_AUTH_STRING] = auth_string
-    if not updates:
-        return nullcontext()
-
-    from prefect.settings import temporary_settings
-
-    return temporary_settings(updates)
+    typer.echo(
+        f"Registered {n_pip} pipeline deployment(s) + "
+        f"{n_rot} rotation deployment(s)."
+    )
 
 
 @app.command()
@@ -553,8 +528,6 @@ def dag_run(
         raise typer.Exit(code=2)
 
     from sluice.dag.loader import load_task
-    from sluice.dag.run_pipeline import ensure_dynamic_tables, run_pipeline
-    from sluice.dag.writer import WriterThread
 
     cfg = load_task(task_dir)
     if not any(p.name == pipeline for p in cfg.pipelines):
@@ -562,14 +535,30 @@ def dag_run(
         raise typer.Exit(code=2)
 
     async def _go():
-        await ensure_dynamic_tables(cfg)
-        writer = WriterThread(active_path=cfg.db_path, seen_path=cfg.seen_db)
-        await writer.start()
+        lock = RotationLock(cfg.db_path)
         try:
-            now = datetime.fromisoformat(cycle) if cycle else None
-            return await run_pipeline(cfg, pipeline, writer=writer, now=now)
+            lock.acquire()
+        except RuntimeError:
+            fast = check_rotation_fast_path(cfg, pipeline)
+            if fast is not None:
+                return fast
+            raise
+
+        try:
+            await ensure_dynamic_tables(cfg)
+            writer = WriterThread(
+                active_path=cfg.db_path,
+                seen_path=cfg.seen_db,
+                hold_rotation_lock=False,
+            )
+            await writer.start()
+            try:
+                now = datetime.fromisoformat(cycle) if cycle else None
+                return await dag_run_pipeline(cfg, pipeline, writer=writer, now=now)
+            finally:
+                await writer.stop()
         finally:
-            await writer.stop()
+            lock.release()
 
     try:
         result = asyncio.run(_go())
@@ -589,7 +578,85 @@ def dag_run(
             ensure_ascii=False,
         )
     )
-    if result.status not in {"success", "skipped_gating"}:
+    if result.status not in {"success", "skipped_gating", "skipped_rotation"}:
+        raise typer.Exit(code=1)
+
+
+@app.command("gc-rotate")
+def gc_rotate(
+    task: str = typer.Option(..., "-t", "--task"),
+    config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
+    sluice_config_path: Path | None = typer.Option(None, "--sluice-config"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+):
+    """Rotate a task active DB: drain, partition, archive, and reopen fresh active."""
+    task_dir = config_dir / "tasks" / task
+    if not task_dir.exists():
+        typer.echo(f"task not found: {task_dir}", err=True)
+        raise typer.Exit(code=2)
+
+    from sluice.dag.db import open_active_db
+    from sluice.dag.loader import load_task
+    from sluice.dag.rotation.orchestrator import rotate_task
+    from sluice.dag.rotation.partition import partition_items
+    from sluice.dag.sluice_config import load_sluice_config
+
+    cfg = load_task(task_dir)
+    sluice_cfg = load_sluice_config(sluice_config_path)
+
+    if dry_run:
+        async def _dry_run():
+            lock = RotationLock(cfg.db_path)
+            try:
+                lock.acquire()
+            except RuntimeError:
+                return None
+            try:
+                async with open_active_db(cfg.db_path) as conn:
+                    return await partition_items(conn, cfg)
+            finally:
+                lock.release()
+
+        partition = asyncio.run(_dry_run())
+        if partition is None:
+            typer.echo(
+                json.dumps(
+                    {
+                        "status": "lock_busy",
+                        "carryover_count": 0,
+                        "archive_count": 0,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+        typer.echo(
+            json.dumps(
+                {
+                    "status": "dry_run",
+                    "carryover_count": len(partition.carryover_ids),
+                    "archive_count": len(partition.archive_ids),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    result = asyncio.run(rotate_task(cfg, config=sluice_cfg))
+    typer.echo(
+        json.dumps(
+            {
+                "task": result.task_name,
+                "status": result.status,
+                "carryover": result.carryover_count,
+                "archive": result.archive_count,
+                "archive_path": result.archive_path,
+                "error": result.error_msg,
+            },
+            ensure_ascii=False,
+        )
+    )
+    if result.status not in {"rotated", "no_op", "lock_busy", "drain_timeout"}:
         raise typer.Exit(code=1)
 
 
