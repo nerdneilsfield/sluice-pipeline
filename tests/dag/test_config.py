@@ -77,6 +77,19 @@ def test_pipeline_def_max_attempts_default_and_custom():
     assert custom.max_attempts == 5
 
 
+def test_pipeline_def_cron_defaults_to_none():
+    p = PipelineDef(
+        name="p",
+        stages=["s"],
+        sources=["src1"],
+        upstream_all=None,
+        upstream_any=None,
+        sinks=None,
+        post_run_cleanup=None,
+    )
+    assert p.cron is None
+
+
 def test_task_config_round_trip():
     t = TaskConfig(
         name="airflow",

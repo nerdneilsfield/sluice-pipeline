@@ -11,6 +11,7 @@ def test_runtime_config_defaults():
     assert cfg.prefect_api_auth_string == ""
     assert cfg.work_pool == "default"
     assert cfg.default_timezone == "UTC"
+    assert cfg.image is None
 
 
 def test_load_sluice_config_defaults_when_missing(tmp_path):
@@ -43,6 +44,7 @@ def test_load_sluice_config_parses_runtime(tmp_path):
         prefect_api_auth_string = "Bearer token"
         work_pool = "workers"
         default_timezone = "Asia/Shanghai"
+        image = "registry.example/sluice:latest"
         """
     )
     cfg = load_sluice_config(path)
@@ -50,6 +52,7 @@ def test_load_sluice_config_parses_runtime(tmp_path):
     assert cfg.runtime.prefect_api_auth_string == "Bearer token"
     assert cfg.runtime.work_pool == "workers"
     assert cfg.runtime.default_timezone == "Asia/Shanghai"
+    assert cfg.runtime.image == "registry.example/sluice:latest"
 
 
 def test_load_sluice_config_runtime_defaults_when_missing(tmp_path):

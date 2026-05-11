@@ -75,6 +75,21 @@ def test_load_task_pipeline_max_attempts(tmp_path: Path):
     assert next(p for p in t.pipelines if p.name == "fetch_releases").max_attempts == 3
 
 
+def test_load_task_pipeline_cron_missing_defaults_to_none(tmp_path: Path):
+    import shutil
+
+    d = tmp_path / "task"
+    shutil.copytree(FIXTURE, d)
+    lines = [
+        line
+        for line in (d / "pipelines.toml").read_text().splitlines()
+        if 'cron    = "0 */6 * * *"' not in line
+    ]
+    (d / "pipelines.toml").write_text("\n".join(lines) + "\n")
+    t = load_task(d)
+    assert next(p for p in t.pipelines if p.name == "fetch_blog").cron is None
+
+
 def test_load_task_rotation_cron(tmp_path: Path):
     import shutil
 

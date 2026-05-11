@@ -70,13 +70,13 @@ def load_task(task_dir: Path) -> TaskConfig:
     pipelines = [
         PipelineDef(
             name=entry["name"],
-            cron=entry["cron"],
             stages=entry["stages"],
             sources=entry.get("sources"),
             upstream_all=entry.get("upstream_all"),
             upstream_any=entry.get("upstream_any"),
             sinks=entry.get("sinks"),
             post_run_cleanup=entry.get("post_run_cleanup"),
+            cron=entry.get("cron"),
             input_mode=entry.get("input_mode", "union"),
             max_attempts=int(entry.get("max_attempts", 3)),
         )

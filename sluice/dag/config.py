@@ -43,13 +43,13 @@ class DeploymentsDef:
 @dataclass(frozen=True)
 class PipelineDef:
     name: str
-    cron: str
     stages: list[str]
     sources: list[str] | None
     upstream_all: list[str] | None
     upstream_any: list[str] | None
     sinks: list[str] | None
     post_run_cleanup: str | None
+    cron: str | None = None
     input_mode: str | None = "union"
     max_attempts: int = 3
 

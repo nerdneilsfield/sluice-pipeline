@@ -283,3 +283,28 @@ def test_prefect_api_settings_rejects_empty_env_auth(deploy_module, monkeypatch)
         deploy_module._prefect_api_settings(
             SimpleNamespace(prefect_api_url="", prefect_api_auth_string="env:SLUICE_EMPTY_TOKEN")
         )
+
+
+def test_prefect_api_settings_no_updates_returns_nullcontext(deploy_module):
+    cm = deploy_module._prefect_api_settings(
+        RuntimeConfig(prefect_api_url="", prefect_api_auth_string="")
+    )
+
+    with cm as value:
+        assert value is None
+
+
+def test_prefect_api_settings_sets_url_and_resolved_auth(deploy_module, monkeypatch):
+    monkeypatch.setenv("SLUICE_TOKEN", "secret-token")
+
+    cm = deploy_module._prefect_api_settings(
+        RuntimeConfig(
+            prefect_api_url="http://localhost:4200/api",
+            prefect_api_auth_string="env:SLUICE_TOKEN",
+        )
+    )
+
+    assert cm.updates == {
+        "PREFECT_API_URL": "http://localhost:4200/api",
+        "PREFECT_API_AUTH_STRING": "secret-token",
+    }

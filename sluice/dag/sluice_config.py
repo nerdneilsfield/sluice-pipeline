@@ -19,6 +19,7 @@ class RuntimeConfig:
     prefect_api_auth_string: str = ""
     work_pool: str = "default"
     default_timezone: str = "UTC"
+    image: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,5 +63,6 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
             prefect_api_auth_string=runtime.get("prefect_api_auth_string", ""),
             work_pool=runtime.get("work_pool", "default"),
             default_timezone=runtime.get("default_timezone", "UTC"),
+            image=runtime.get("image"),
         ),
     )
