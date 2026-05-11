@@ -105,3 +105,38 @@ def test_task_config_round_trip():
     )
     assert t.name == "airflow"
     assert t.pipelines[0].input_mode == "union"
+
+
+def test_task_config_rotation_cron_default():
+    t = TaskConfig(
+        name="x",
+        db_path="a.db",
+        seen_db="s.db",
+        enabled=True,
+        timezone=None,
+        window=WindowDef(anchor="* * * * *", length="1h"),
+        deployments=DeploymentsDef(pipelines="all"),
+        sources=[SourceDef(name="s", type="rss")],
+        sinks=[],
+        stages=[],
+        pipelines=[],
+    )
+    assert t.rotation_cron is None
+
+
+def test_task_config_rotation_cron_explicit():
+    t = TaskConfig(
+        name="x",
+        db_path="a.db",
+        seen_db="s.db",
+        enabled=True,
+        timezone=None,
+        window=WindowDef(anchor="* * * * *", length="1h"),
+        deployments=DeploymentsDef(pipelines="all"),
+        sources=[SourceDef(name="s", type="rss")],
+        sinks=[],
+        stages=[],
+        pipelines=[],
+        rotation_cron="0 6 * * *",
+    )
+    assert t.rotation_cron == "0 6 * * *"

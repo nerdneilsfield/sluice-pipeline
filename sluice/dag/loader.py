@@ -101,4 +101,5 @@ def load_task(task_dir: Path) -> TaskConfig:
         stages=stages,
         pipelines=pipelines,
         task_dir=str(task_dir),
+        rotation_cron=task_doc.get("rotation_cron"),
     )

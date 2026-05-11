@@ -73,3 +73,15 @@ def test_load_task_pipeline_max_attempts(tmp_path: Path):
     t = load_task(d)
     assert next(p for p in t.pipelines if p.name == "fetch_blog").max_attempts == 7
     assert next(p for p in t.pipelines if p.name == "fetch_releases").max_attempts == 3
+
+
+def test_load_task_rotation_cron(tmp_path: Path):
+    import shutil
+
+    d = tmp_path / "task"
+    shutil.copytree(FIXTURE, d)
+    text = (d / "task.toml").read_text()
+    text = text.replace('enabled  = true', 'enabled  = true\nrotation_cron = "0 6 * * *"')
+    (d / "task.toml").write_text(text)
+    t = load_task(d)
+    assert t.rotation_cron == "0 6 * * *"

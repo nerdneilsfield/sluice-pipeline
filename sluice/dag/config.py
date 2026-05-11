@@ -77,3 +77,4 @@ class TaskConfig:
     stages: list[StageDef]
     pipelines: list[PipelineDef]
     task_dir: str | None = None
+    rotation_cron: str | None = None
