@@ -1,0 +1,20 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md LICENSE /app/
+COPY sluice /app/sluice
+RUN pip install --no-cache-dir -e .
+
+ENV PYTHONUNBUFFERED=1 \
+    PREFECT_HOME=/data/prefect
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["prefect", "worker", "start"]
+CMD ["--pool", "default"]

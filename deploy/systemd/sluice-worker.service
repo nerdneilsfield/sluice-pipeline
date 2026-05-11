@@ -1,0 +1,16 @@
+[Unit]
+Description=Sluice Prefect Worker
+After=network.target
+
+[Service]
+Type=simple
+User=sluice
+WorkingDirectory=/opt/sluice
+Environment=PREFECT_API_URL=http://localhost:4200/api
+EnvironmentFile=-/etc/sluice/worker.env
+ExecStart=/opt/sluice/.venv/bin/prefect worker start --pool default
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
