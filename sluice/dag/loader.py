@@ -94,9 +94,7 @@ def load_task(task_dir: Path) -> TaskConfig:
             anchor=task_doc["window"]["anchor"],
             length=task_doc["window"]["length"],
         ),
-        deployments=DeploymentsDef(
-            pipelines=task_doc["deployments"].get("pipelines", "all")
-        ),
+        deployments=DeploymentsDef(pipelines=task_doc["deployments"].get("pipelines", "all")),
         sources=sources,
         sinks=sinks,
         stages=stages,

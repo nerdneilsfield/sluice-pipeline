@@ -6,9 +6,7 @@ from sluice.dag.config import TaskConfig
 from sluice.dag.validator import compute_reach
 
 
-def compute_item_reach(
-    task: TaskConfig, items_rows: Iterable[dict]
-) -> dict[str, frozenset[str]]:
+def compute_item_reach(task: TaskConfig, items_rows: Iterable[dict]) -> dict[str, frozenset[str]]:
     pipeline_names = {pipeline.name for pipeline in task.pipelines}
     cache: dict[str, frozenset[str]] = {}
     out: dict[str, frozenset[str]] = {}

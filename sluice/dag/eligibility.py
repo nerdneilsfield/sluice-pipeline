@@ -51,8 +51,7 @@ async def evaluate_run_gating(
         return RunGatingDecision(proceed=True)
 
     cur = await conn.execute(
-        "SELECT MAX(cycle_anchor) FROM pipelines "
-        "WHERE pipeline_name = ? AND status = 'success'",
+        "SELECT MAX(cycle_anchor) FROM pipelines WHERE pipeline_name = ? AND status = 'success'",
         (pipeline.name,),
     )
     row = await cur.fetchone()
@@ -61,8 +60,7 @@ async def evaluate_run_gating(
     async def has_success(upstream: str) -> bool:
         if p_last is None:
             cur_inner = await conn.execute(
-                "SELECT 1 FROM pipelines "
-                "WHERE pipeline_name = ? AND status = 'success' LIMIT 1",
+                "SELECT 1 FROM pipelines WHERE pipeline_name = ? AND status = 'success' LIMIT 1",
                 (upstream,),
             )
         else:
@@ -76,9 +74,7 @@ async def evaluate_run_gating(
 
     for upstream in upstream_all:
         if not await has_success(upstream):
-            return RunGatingDecision(
-                False, f"upstream_all: {upstream} has no qualifying success"
-            )
+            return RunGatingDecision(False, f"upstream_all: {upstream} has no qualifying success")
 
     if upstream_any:
         for upstream in upstream_any:
@@ -90,9 +86,7 @@ async def evaluate_run_gating(
     return RunGatingDecision(proceed=True)
 
 
-async def select_eligible_items(
-    conn: aiosqlite.Connection, pipeline: PipelineDef
-) -> list[dict]:
+async def select_eligible_items(conn: aiosqlite.Connection, pipeline: PipelineDef) -> list[dict]:
     upstreams = list(pipeline.upstream_all or []) + list(pipeline.upstream_any or [])
     if not upstreams:
         return []
@@ -124,9 +118,7 @@ async def select_eligible_items(
     return [dict(zip(_ITEM_COLS, row, strict=True)) for row in rows]
 
 
-async def select_entry_carryover(
-    conn: aiosqlite.Connection, pipeline: PipelineDef
-) -> list[dict]:
+async def select_entry_carryover(conn: aiosqlite.Connection, pipeline: PipelineDef) -> list[dict]:
     if not pipeline.sources:
         return []
     safe_p = safe_name(pipeline.name)

@@ -82,9 +82,7 @@ class SinkEmitter:
         out = {"hit": False}
 
         async def job(active, seen) -> None:  # noqa: ARG001
-            out["hit"] = await SinkEmissionsStore(active).exists(
-                self._run_key, sink_id, ordinal
-            )
+            out["hit"] = await SinkEmissionsStore(active).exists(self._run_key, sink_id, ordinal)
 
         await (await self._writer.submit(WriteJob(run=job)))
         return out["hit"]

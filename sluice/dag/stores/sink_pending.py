@@ -31,8 +31,7 @@ class SinkPendingStore:
             return
         placeholders = ",".join("?" for _ in ids)
         await self.conn.execute(
-            f"DELETE FROM pipeline_{self.pipeline}_sink_pending "
-            f"WHERE item_id IN ({placeholders})",
+            f"DELETE FROM pipeline_{self.pipeline}_sink_pending WHERE item_id IN ({placeholders})",
             tuple(ids),
         )
 
@@ -46,16 +45,14 @@ class SinkPendingStore:
 
     async def items_for_run_key(self, run_key: str) -> set[str]:
         cur = await self.conn.execute(
-            f"SELECT item_id FROM pipeline_{self.pipeline}_sink_pending "
-            "WHERE run_key = ?",
+            f"SELECT item_id FROM pipeline_{self.pipeline}_sink_pending WHERE run_key = ?",
             (run_key,),
         )
         return {row[0] for row in await cur.fetchall()}
 
     async def items_with_other_keys(self, run_key: str) -> set[str]:
         cur = await self.conn.execute(
-            f"SELECT item_id FROM pipeline_{self.pipeline}_sink_pending "
-            "WHERE run_key <> ?",
+            f"SELECT item_id FROM pipeline_{self.pipeline}_sink_pending WHERE run_key <> ?",
             (run_key,),
         )
         return {row[0] for row in await cur.fetchall()}

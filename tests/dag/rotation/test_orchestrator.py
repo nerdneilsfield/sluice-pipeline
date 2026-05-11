@@ -74,9 +74,7 @@ async def test_rotate_task_archives_terminal_and_carries_pending(tmp_path: Path)
     result = await rotate_task(
         task,
         config=SluiceConfig(
-            rotation=RotationConfig(
-                drain_timeout_seconds=1, archive_dir=str(archive_dir)
-            )
+            rotation=RotationConfig(drain_timeout_seconds=1, archive_dir=str(archive_dir))
         ),
         now=datetime(2026, 5, 4, 12, 0, 1, tzinfo=timezone.utc),
     )

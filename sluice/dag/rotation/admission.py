@@ -9,9 +9,7 @@ class RotationGateClosed(RuntimeError):
     """Raised when a pipeline cannot enter because rotation is closing the DB."""
 
 
-def build_admission_job(
-    *, admission_id: str, task_name: str, pipeline_name: str
-) -> WriteJob:
+def build_admission_job(*, admission_id: str, task_name: str, pipeline_name: str) -> WriteJob:
     registered_at = datetime.now(timezone.utc).isoformat()
 
     async def job(active, seen) -> None:  # noqa: ARG001

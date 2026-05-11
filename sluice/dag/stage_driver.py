@@ -86,9 +86,7 @@ async def drive_stages(
 
         if executor.reorders_items:
             untouched = [
-                item
-                for item in working_set
-                if item["item_id"] not in original_stage_input_ids
+                item for item in working_set if item["item_id"] not in original_stage_input_ids
             ]
             working_set = stage_items + untouched
 

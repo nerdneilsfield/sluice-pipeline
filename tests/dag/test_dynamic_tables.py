@@ -75,9 +75,7 @@ async def test_ensure_pipeline_table_shape_and_status_constraint(tmp_path: Path)
 async def test_ensure_pipeline_sink_pending_table_is_sibling(tmp_path: Path):
     async with db.open_active_db(str(tmp_path / "active.db")) as conn:
         await ensure_pipeline_sink_pending_table(conn, "report_telegram")
-        names_cur = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        names_cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         names = {row[0] for row in await names_cur.fetchall()}
         cols = await _columns(conn, "pipeline_report_telegram_sink_pending")
         indexes = await _indexes(conn, "pipeline_report_telegram_sink_pending")
@@ -157,9 +155,7 @@ async def test_migrate_task_dynamic_tables_creates_all_and_is_idempotent(
     async with db.open_active_db(str(tmp_path / "active.db")) as conn:
         await migrate_task_dynamic_tables(conn, task)
         await migrate_task_dynamic_tables(conn, task)
-        cur = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         names = {row[0] for row in await cur.fetchall()}
 
     assert {

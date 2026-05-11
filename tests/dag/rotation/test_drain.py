@@ -112,9 +112,7 @@ async def test_drain_succeeds_when_admissions_clear(tmp_path: Path):
     async def clear_after_delay():
         await asyncio.sleep(0.05)
         async with db.open_active_db(active_path) as active:
-            await active.execute(
-                "DELETE FROM pipeline_admissions WHERE admission_id = 'aid-1'"
-            )
+            await active.execute("DELETE FROM pipeline_admissions WHERE admission_id = 'aid-1'")
             await active.commit()
 
     clear_task = asyncio.create_task(clear_after_delay())

@@ -49,7 +49,9 @@ def test_load_task_explicit_deployments_list(tmp_path: Path):
     d = tmp_path / "task"
     shutil.copytree(FIXTURE, d)
     (d / "task.toml").write_text(
-        (FIXTURE / "task.toml").read_text().replace(
+        (FIXTURE / "task.toml")
+        .read_text()
+        .replace(
             'pipelines = "all"',
             'pipelines = ["fetch_blog", "summarize_nightly"]',
         )
@@ -96,7 +98,7 @@ def test_load_task_rotation_cron(tmp_path: Path):
     d = tmp_path / "task"
     shutil.copytree(FIXTURE, d)
     text = (d / "task.toml").read_text()
-    text = text.replace('enabled  = true', 'enabled  = true\nrotation_cron = "0 6 * * *"')
+    text = text.replace("enabled  = true", 'enabled  = true\nrotation_cron = "0 6 * * *"')
     (d / "task.toml").write_text(text)
     t = load_task(d)
     assert t.rotation_cron == "0 6 * * *"

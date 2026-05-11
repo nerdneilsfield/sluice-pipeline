@@ -91,9 +91,7 @@ class RotationLock:
         self.release()
 
 
-def check_rotation_fast_path(
-    task: TaskConfig, pipeline_name: str
-) -> RunResult | None:
+def check_rotation_fast_path(task: TaskConfig, pipeline_name: str) -> RunResult | None:
     from sluice.dag.run_pipeline import RunResult
 
     if RotationLock(task.db_path).is_held():

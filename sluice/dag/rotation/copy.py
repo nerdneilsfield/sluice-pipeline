@@ -35,8 +35,7 @@ async def copy_carryover(
     # Do not DETACH here: copy_carryover intentionally leaves commit ownership to
     # the caller, and SQLite cannot DETACH while the write transaction is open.
     await new_conn.execute(
-        "INSERT OR IGNORE INTO main.attachment_mirror "
-        "SELECT * FROM old.attachment_mirror"
+        "INSERT OR IGNORE INTO main.attachment_mirror SELECT * FROM old.attachment_mirror"
     )
 
     if not partition.carryover_ids:
@@ -116,8 +115,7 @@ async def copy_carryover(
     for chunk in _chunked(stage_ids):
         placeholders = ",".join("?" for _ in chunk)
         cur = await new_conn.execute(
-            f"SELECT DISTINCT pipeline_run_id FROM old.stages "
-            f"WHERE id IN ({placeholders})",
+            f"SELECT DISTINCT pipeline_run_id FROM old.stages WHERE id IN ({placeholders})",
             tuple(chunk),
         )
         pipeline_ids.update(row[0] for row in await cur.fetchall())

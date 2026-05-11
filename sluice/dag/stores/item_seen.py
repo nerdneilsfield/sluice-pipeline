@@ -9,9 +9,7 @@ class ItemSeenStore:
     def __init__(self, conn: aiosqlite.Connection):
         self.conn = conn
 
-    async def insert_many(
-        self, items: Iterable[tuple[str, str]], *, archived_at: str
-    ) -> None:
+    async def insert_many(self, items: Iterable[tuple[str, str]], *, archived_at: str) -> None:
         rows = [(item_id, source_hash, archived_at) for item_id, source_hash in items]
         if not rows:
             return

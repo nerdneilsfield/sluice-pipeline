@@ -228,9 +228,7 @@ async def test_pipelines_finalize(tmp_path):
             error_msg=None,
         )
         await conn.commit()
-        cur = await conn.execute(
-            "SELECT status, items_out FROM pipelines WHERE id = ?", (run_id,)
-        )
+        cur = await conn.execute("SELECT status, items_out FROM pipelines WHERE id = ?", (run_id,))
         st, out = await cur.fetchone()
         assert st == "success" and out == 8
 

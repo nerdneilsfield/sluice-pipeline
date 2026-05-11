@@ -53,8 +53,7 @@ def _prefect_concurrency_limit(strategy: str) -> ConcurrencyLimitConfig:
         collision_strategy = ConcurrencyLimitStrategy.CANCEL_NEW
     else:
         raise ConfigError(
-            "concurrency_strategy must be one of queue/enqueue/cancel_new, "
-            f"got {strategy!r}"
+            f"concurrency_strategy must be one of queue/enqueue/cancel_new, got {strategy!r}"
         )
     return ConcurrencyLimitConfig(limit=1, collision_strategy=collision_strategy)
 

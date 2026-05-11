@@ -54,9 +54,7 @@ def _check_stage_references(task: TaskConfig) -> None:
     source_names = {source.name for source in task.sources}
     for stage in task.stages:
         if stage.type not in REGISTRY:
-            raise ValidationError(
-                f"unknown stage type: {stage.type!r} (stage {stage.name!r})"
-            )
+            raise ValidationError(f"unknown stage type: {stage.type!r} (stage {stage.name!r})")
         for source_name in stage.params.get("sources", []) or []:
             if source_name not in source_names:
                 raise ValidationError(
@@ -70,25 +68,21 @@ def _check_shape(task: TaskConfig) -> None:
         has_upstream = bool(pipeline.upstream_all) or bool(pipeline.upstream_any)
         if has_sources == has_upstream:
             raise ValidationError(
-                f"pipeline {pipeline.name!r}: must have exactly one of sources "
-                "or upstream"
+                f"pipeline {pipeline.name!r}: must have exactly one of sources or upstream"
             )
         if not pipeline.stages:
             raise ValidationError(f"pipeline {pipeline.name!r} has no stages")
 
         contains_fetch = any(
-            _stage_type_of(task, stage_name).startswith("fetch_")
-            for stage_name in pipeline.stages
+            _stage_type_of(task, stage_name).startswith("fetch_") for stage_name in pipeline.stages
         )
         if has_sources and not contains_fetch:
             raise ValidationError(
-                f"pipeline {pipeline.name!r} declares sources but contains no "
-                "fetch_<type> stage"
+                f"pipeline {pipeline.name!r} declares sources but contains no fetch_<type> stage"
             )
         if has_upstream and contains_fetch:
             raise ValidationError(
-                f"pipeline {pipeline.name!r} has upstream but contains a "
-                "fetch_<type> stage"
+                f"pipeline {pipeline.name!r} has upstream but contains a fetch_<type> stage"
             )
 
         last_type = _stage_type_of(task, pipeline.stages[-1])
@@ -110,36 +104,28 @@ def _check_pipeline_references(task: TaskConfig) -> None:
         for stage_name in pipeline.stages:
             if stage_name not in stage_names:
                 raise ValidationError(
-                    f"pipeline {pipeline.name!r} references unknown stage "
-                    f"{stage_name!r}"
+                    f"pipeline {pipeline.name!r} references unknown stage {stage_name!r}"
                 )
         for source_name in pipeline.sources or []:
             if source_name not in source_names:
                 raise ValidationError(
-                    f"pipeline {pipeline.name!r} references unknown source "
-                    f"{source_name!r}"
+                    f"pipeline {pipeline.name!r} references unknown source {source_name!r}"
                 )
         for sink_name in pipeline.sinks or []:
             if sink_name not in sink_names:
                 raise ValidationError(
                     f"pipeline {pipeline.name!r} references unknown sink {sink_name!r}"
                 )
-        for upstream_name in (pipeline.upstream_all or []) + (
-            pipeline.upstream_any or []
-        ):
+        for upstream_name in (pipeline.upstream_all or []) + (pipeline.upstream_any or []):
             if upstream_name not in pipeline_names:
                 raise ValidationError(
-                    f"pipeline {pipeline.name!r} references unknown upstream "
-                    f"{upstream_name!r}"
+                    f"pipeline {pipeline.name!r} references unknown upstream {upstream_name!r}"
                 )
 
     if isinstance(task.deployments.pipelines, list):
         for pipeline_name in task.deployments.pipelines:
             if pipeline_name not in pipeline_names:
-                raise ValidationError(
-                    "deployments references unknown pipeline "
-                    f"{pipeline_name!r}"
-                )
+                raise ValidationError(f"deployments references unknown pipeline {pipeline_name!r}")
 
 
 def _check_acyclic(task: TaskConfig) -> None:
@@ -147,9 +133,7 @@ def _check_acyclic(task: TaskConfig) -> None:
     indegree = {pipeline.name: 0 for pipeline in task.pipelines}
 
     for pipeline in task.pipelines:
-        for upstream_name in (pipeline.upstream_all or []) + (
-            pipeline.upstream_any or []
-        ):
+        for upstream_name in (pipeline.upstream_all or []) + (pipeline.upstream_any or []):
             if pipeline.name not in children_by_parent[upstream_name]:
                 children_by_parent[upstream_name].add(pipeline.name)
                 indegree[pipeline.name] += 1
@@ -189,9 +173,7 @@ def compute_reach(task: TaskConfig, entry_pipeline: str) -> set[str]:
 
     children_by_parent: dict[str, set[str]] = defaultdict(set)
     for pipeline in task.pipelines:
-        for upstream_name in (pipeline.upstream_all or []) + (
-            pipeline.upstream_any or []
-        ):
+        for upstream_name in (pipeline.upstream_all or []) + (pipeline.upstream_any or []):
             children_by_parent[upstream_name].add(pipeline.name)
 
     reach: set[str] = set()

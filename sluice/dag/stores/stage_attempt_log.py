@@ -7,9 +7,7 @@ class StageAttemptLogStore:
     def __init__(self, conn: aiosqlite.Connection):
         self.conn = conn
 
-    async def next_attempt_no(
-        self, *, pipeline_name: str, stage_name: str, item_id: str
-    ) -> int:
+    async def next_attempt_no(self, *, pipeline_name: str, stage_name: str, item_id: str) -> int:
         cur = await self.conn.execute(
             "SELECT COALESCE(MAX(attempt_no), 0) FROM stage_attempt_log "
             "WHERE pipeline_name = ? AND stage_name = ? AND item_id = ?",

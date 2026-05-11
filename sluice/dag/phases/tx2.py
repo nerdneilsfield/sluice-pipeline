@@ -52,10 +52,7 @@ def build_tx2_job(
                     stage
                     for stage in non_volatile_stages
                     if item_id
-                    in {
-                        error.item_id
-                        for error in driver_result.errors_per_stage.get(stage, ())
-                    }
+                    in {error.item_id for error in driver_result.errors_per_stage.get(stage, ())}
                 ),
                 None,
             )
@@ -144,11 +141,14 @@ def build_tx2_job(
                     status = base
                 elif ok == 0:
                     status = "failed"
-                    error_msg = "all_sinks_failed: " + "; ".join(
-                        f"{result.sink_id}#{result.ordinal}:{result.error_msg}"
-                        for result in emission_results
-                        if not result.success
-                    )[:500]
+                    error_msg = (
+                        "all_sinks_failed: "
+                        + "; ".join(
+                            f"{result.sink_id}#{result.ordinal}:{result.error_msg}"
+                            for result in emission_results
+                            if not result.success
+                        )[:500]
+                    )
                 else:
                     status = "partial" if base == "success" else base
             else:

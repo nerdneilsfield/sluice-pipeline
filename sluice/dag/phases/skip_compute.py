@@ -10,8 +10,7 @@ async def compute_skip_ids(active, seen, pipeline: PipelineDef) -> set[str]:
     safe_p = safe_name(pipeline.name)
     skip: set[str] = set()
     cur = await active.execute(
-        f"SELECT item_id FROM pipeline_{safe_p} "
-        "WHERE status IN ('success','dropped','failed')"
+        f"SELECT item_id FROM pipeline_{safe_p} WHERE status IN ('success','dropped','failed')"
     )
     skip |= {row[0] for row in await cur.fetchall()}
     cur = await active.execute("SELECT item_id FROM items WHERE dropped = 1")

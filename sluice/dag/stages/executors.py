@@ -224,9 +224,7 @@ class DedupeExecutor(StageExecutor):
         seen = {str(value) for value in ctx.params.get("already_seen_ids", [])}
         return StageResult(
             drops=[
-                _drop(item, "already_seen")
-                for item in ctx.live_items()
-                if item["item_id"] in seen
+                _drop(item, "already_seen") for item in ctx.live_items() if item["item_id"] in seen
             ]
         )
 
@@ -414,10 +412,7 @@ class FetcherApplyExecutor(StageExecutor):
         needs_backend = [
             item
             for item in ctx.live_items()
-            if not (
-                min_len
-                and len(str(_item_value(item, skip_field, "") or "")) >= min_len
-            )
+            if not (min_len and len(str(_item_value(item, skip_field, "") or "")) >= min_len)
         ]
         if needs_backend:
             _require_backend(self._fetch, ctx)
@@ -632,9 +627,7 @@ class LimitExecutor(StageExecutor):
         keep_ids = {item["item_id"] for item in ctx.items[:top_n] if item["item_id"] in live_ids}
         return StageResult(
             drops=[
-                _drop(item, "limit")
-                for item in ctx.live_items()
-                if item["item_id"] not in keep_ids
+                _drop(item, "limit") for item in ctx.live_items() if item["item_id"] not in keep_ids
             ]
         )
 

@@ -181,7 +181,9 @@ async def test_field_filter_html_strip_sort_limit_and_render():
 
 @pytest.mark.asyncio
 async def test_mockable_hook_stages_mark_dirty_fields():
-    item = make_item("a", raw_summary="short", fulltext="", attachments_json='[{"url":"https://x/a.png"}]')
+    item = make_item(
+        "a", raw_summary="short", fulltext="", attachments_json='[{"url":"https://x/a.png"}]'
+    )
 
     async def fetch(item):
         return f"full:{item['url']}"

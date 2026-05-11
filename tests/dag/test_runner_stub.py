@@ -35,8 +35,7 @@ async def test_runner_stub_records_pipeline_run(tmp_path):
 
     async with db.open_active_db(t.db_path) as conn:
         cur = await conn.execute(
-            "SELECT pipeline_name, status, items_in FROM pipelines "
-            "WHERE pipeline_name='fetch_blog'"
+            "SELECT pipeline_name, status, items_in FROM pipelines WHERE pipeline_name='fetch_blog'"
         )
         row = await cur.fetchone()
     assert row[0] == "fetch_blog"
@@ -53,9 +52,7 @@ async def test_runner_stub_idempotent_within_cycle(tmp_path):
     await run_pipeline_stub(t, pipeline_name="fetch_blog", now=now)
 
     async with db.open_active_db(t.db_path) as conn:
-        cur = await conn.execute(
-            "SELECT count(*) FROM pipelines WHERE pipeline_name='fetch_blog'"
-        )
+        cur = await conn.execute("SELECT count(*) FROM pipelines WHERE pipeline_name='fetch_blog'")
         n = (await cur.fetchone())[0]
     assert n == 1
 
@@ -86,8 +83,6 @@ async def test_runner_stub_new_cycle_new_row(tmp_path):
     await run_pipeline_stub(t, pipeline_name="fetch_blog", now=day2)
 
     async with db.open_active_db(t.db_path) as conn:
-        cur = await conn.execute(
-            "SELECT count(*) FROM pipelines WHERE pipeline_name='fetch_blog'"
-        )
+        cur = await conn.execute("SELECT count(*) FROM pipelines WHERE pipeline_name='fetch_blog'")
         n = (await cur.fetchone())[0]
     assert n == 2

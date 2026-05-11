@@ -5,9 +5,7 @@ import sqlite3
 from sluice.dag.stores.sink_pending import SinkPendingStore
 
 
-async def resolve_run_key(
-    active, pipeline_name: str, fresh_run_key: str
-) -> tuple[str, list[str]]:
+async def resolve_run_key(active, pipeline_name: str, fresh_run_key: str) -> tuple[str, list[str]]:
     pending = SinkPendingStore(active, pipeline_name)
     try:
         oldest = await pending.oldest_run_key()

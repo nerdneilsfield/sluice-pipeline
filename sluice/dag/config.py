@@ -57,8 +57,7 @@ class PipelineDef:
     def __post_init__(self) -> None:
         if self.input_mode not in (None, "union", "intersection"):
             raise ValueError(
-                "input_mode must be 'union' or 'intersection', "
-                f"got {self.input_mode!r}"
+                f"input_mode must be 'union' or 'intersection', got {self.input_mode!r}"
             )
         if self.input_mode is None:
             object.__setattr__(self, "input_mode", "union")

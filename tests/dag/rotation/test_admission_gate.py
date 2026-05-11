@@ -59,9 +59,7 @@ async def test_admission_job_inserts_when_gate_open(tmp_path: Path):
     try:
         await (
             await writer.submit(
-                build_admission_job(
-                    admission_id="aid-1", task_name="t", pipeline_name="P"
-                )
+                build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
             )
         )
     finally:
@@ -80,9 +78,7 @@ async def test_admission_job_raises_and_rolls_back_when_gate_closed(tmp_path: Pa
         with pytest.raises(RotationGateClosed):
             await (
                 await writer.submit(
-                    build_admission_job(
-                        admission_id="aid-1", task_name="t", pipeline_name="P"
-                    )
+                    build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
                 )
             )
     finally:
@@ -99,9 +95,7 @@ async def test_deadmission_job_is_idempotent(tmp_path: Path):
     try:
         await (
             await writer.submit(
-                build_admission_job(
-                    admission_id="aid-1", task_name="t", pipeline_name="P"
-                )
+                build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
             )
         )
         await (await writer.submit(build_deadmission_job("aid-1")))
@@ -125,9 +119,7 @@ async def test_close_and_open_gate_control_admission(tmp_path: Path):
         with pytest.raises(RotationGateClosed):
             await (
                 await writer.submit(
-                    build_admission_job(
-                        admission_id="aid-1", task_name="t", pipeline_name="P"
-                    )
+                    build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
                 )
             )
     finally:
@@ -140,9 +132,7 @@ async def test_close_and_open_gate_control_admission(tmp_path: Path):
     try:
         await (
             await writer.submit(
-                build_admission_job(
-                    admission_id="aid-1", task_name="t", pipeline_name="P"
-                )
+                build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
             )
         )
     finally:
@@ -163,9 +153,7 @@ async def test_admission_fails_closed_when_gate_row_missing(tmp_path: Path):
         with pytest.raises(RotationGateClosed, match="fail-closed"):
             await (
                 await writer.submit(
-                    build_admission_job(
-                        admission_id="aid-1", task_name="t", pipeline_name="P"
-                    )
+                    build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
                 )
             )
     finally:
@@ -203,9 +191,7 @@ async def test_admission_and_close_gate_race_has_consistent_outcome(tmp_path: Pa
         try:
             await (
                 await writer.submit(
-                    build_admission_job(
-                        admission_id="aid-1", task_name="t", pipeline_name="P"
-                    )
+                    build_admission_job(admission_id="aid-1", task_name="t", pipeline_name="P")
                 )
             )
         except Exception as exc:  # noqa: BLE001

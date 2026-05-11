@@ -8,9 +8,7 @@ from sluice.dag import db
 
 
 async def _table_names(conn) -> set[str]:
-    cur = await conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-    )
+    cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     return {row[0] for row in await cur.fetchall()}
 
 

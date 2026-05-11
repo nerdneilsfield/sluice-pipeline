@@ -68,9 +68,7 @@ class ItemsStore:
             ),
         )
 
-    async def update_columns(
-        self, item_id: str, cols: dict[str, Any], *, updated_at: str
-    ) -> None:
+    async def update_columns(self, item_id: str, cols: dict[str, Any], *, updated_at: str) -> None:
         if not cols:
             return
         bad = set(cols) - _UPDATABLE

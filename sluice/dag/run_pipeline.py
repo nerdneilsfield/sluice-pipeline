@@ -182,9 +182,9 @@ async def _run_pipeline_admitted(
             conn_pre, pipeline.name, fresh_run_key
         )
         if pipeline.sinks:
-            pending_item_ids = await SinkPendingStore(
-                conn_pre, pipeline.name
-            ).items_for_run_key(effective_run_key)
+            pending_item_ids = await SinkPendingStore(conn_pre, pipeline.name).items_for_run_key(
+                effective_run_key
+            )
 
         if pipeline.upstream_all or pipeline.upstream_any:
             rows = await select_eligible_items(conn_pre, pipeline)
@@ -195,9 +195,7 @@ async def _run_pipeline_admitted(
 
         deferred = set(deferred_ids)
         rows = [row for row in rows if row["item_id"] not in deferred]
-        items_carryover = [
-            row for row in items_carryover if row["item_id"] not in deferred
-        ]
+        items_carryover = [row for row in items_carryover if row["item_id"] not in deferred]
         items = [Item.from_row(row) for row in rows + items_carryover]
 
         carryover_ids = {row["item_id"] for row in items_carryover}

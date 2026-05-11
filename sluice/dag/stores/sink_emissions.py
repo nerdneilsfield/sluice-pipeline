@@ -9,8 +9,7 @@ class SinkEmissionsStore:
 
     async def exists(self, run_key: str, sink_id: str, ordinal: int) -> bool:
         cur = await self.conn.execute(
-            "SELECT 1 FROM sink_emissions "
-            "WHERE run_key = ? AND sink_id = ? AND ordinal = ?",
+            "SELECT 1 FROM sink_emissions WHERE run_key = ? AND sink_id = ? AND ordinal = ?",
             (run_key, sink_id, ordinal),
         )
         return await cur.fetchone() is not None

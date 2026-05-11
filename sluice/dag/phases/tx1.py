@@ -68,12 +68,10 @@ def build_tx1_job(
                 started_at=started_at,
             )
             drops = {
-                drop.item_id: drop
-                for drop in driver_result.drops_per_stage.get(stage_name, ())
+                drop.item_id: drop for drop in driver_result.drops_per_stage.get(stage_name, ())
             }
             errors = {
-                error.item_id: error
-                for error in driver_result.errors_per_stage.get(stage_name, ())
+                error.item_id: error for error in driver_result.errors_per_stage.get(stage_name, ())
             }
             skipped = driver_result.skipped_per_stage.get(stage_name, set())
             done_ids = driver_result.done_ids_per_stage.get(stage_name, set())
@@ -155,14 +153,10 @@ def build_tx1_job(
 
         for item in items:
             updatable = {
-                key: value
-                for key, value in item.to_dirty_dict().items()
-                if key in _UPDATABLE
+                key: value for key, value in item.to_dirty_dict().items() if key in _UPDATABLE
             }
             if updatable:
-                await items_store.update_columns(
-                    item["item_id"], updatable, updated_at=now
-                )
+                await items_store.update_columns(item["item_id"], updatable, updated_at=now)
 
         out["pipeline_run_id"] = run_id
         out["items_in"] = len(items)

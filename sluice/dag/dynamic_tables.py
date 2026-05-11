@@ -22,9 +22,7 @@ class _TaskLike(Protocol):
     stages: Sequence[_StageLike]
 
 
-async def ensure_pipeline_table(
-    conn: aiosqlite.Connection, pipeline_name: str
-) -> None:
+async def ensure_pipeline_table(conn: aiosqlite.Connection, pipeline_name: str) -> None:
     safe_pipeline = safe_name(pipeline_name)
     await conn.execute(
         f"""
@@ -82,22 +80,18 @@ async def ensure_stage_table(conn: aiosqlite.Connection, stage_name: str) -> Non
         """
     )
     await conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_stage_{safe_stage}_item "
-        f"ON stage_{safe_stage}(item_id)"
+        f"CREATE INDEX IF NOT EXISTS idx_stage_{safe_stage}_item ON stage_{safe_stage}(item_id)"
     )
     await conn.execute(
         f"CREATE INDEX IF NOT EXISTS idx_stage_{safe_stage}_run "
         f"ON stage_{safe_stage}(last_pipeline_run_id)"
     )
     await conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_stage_{safe_stage}_status "
-        f"ON stage_{safe_stage}(status)"
+        f"CREATE INDEX IF NOT EXISTS idx_stage_{safe_stage}_status ON stage_{safe_stage}(status)"
     )
 
 
-async def migrate_task_dynamic_tables(
-    conn: aiosqlite.Connection, task: _TaskLike
-) -> None:
+async def migrate_task_dynamic_tables(conn: aiosqlite.Connection, task: _TaskLike) -> None:
     for pipeline in task.pipelines:
         await ensure_pipeline_table(conn, pipeline.name)
         if pipeline.sinks:

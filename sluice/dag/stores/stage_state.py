@@ -53,16 +53,13 @@ class StageStateStore:
 
     async def attempts(self, *, pipeline_name: str, item_id: str) -> int:
         cur = await self.conn.execute(
-            f"SELECT attempts FROM stage_{self.stage} "
-            "WHERE pipeline_name = ? AND item_id = ?",
+            f"SELECT attempts FROM stage_{self.stage} WHERE pipeline_name = ? AND item_id = ?",
             (pipeline_name, item_id),
         )
         row = await cur.fetchone()
         return int(row[0]) if row else 0
 
-    async def done_item_ids(
-        self, *, pipeline_name: str, item_ids: list[str]
-    ) -> set[str]:
+    async def done_item_ids(self, *, pipeline_name: str, item_ids: list[str]) -> set[str]:
         if not item_ids:
             return set()
         placeholders = ",".join("?" for _ in item_ids)

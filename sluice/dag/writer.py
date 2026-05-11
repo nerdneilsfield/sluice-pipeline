@@ -31,9 +31,7 @@ class WriterThread:
         self.active_path = active_path
         self.seen_path = seen_path
         self._rotation_lock = RotationLock(active_path) if hold_rotation_lock else None
-        self._queue: asyncio.Queue[tuple[WriteJob, asyncio.Future[None]] | None] = (
-            asyncio.Queue()
-        )
+        self._queue: asyncio.Queue[tuple[WriteJob, asyncio.Future[None]] | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:

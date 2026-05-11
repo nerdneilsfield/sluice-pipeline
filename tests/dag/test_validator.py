@@ -349,7 +349,9 @@ def test_reach_excludes_disabled(tmp_path: Path):
     d = tmp_path / "task"
     shutil.copytree(FIXTURE, d)
     (d / "task.toml").write_text(
-        (FIXTURE / "task.toml").read_text().replace(
+        (FIXTURE / "task.toml")
+        .read_text()
+        .replace(
             'pipelines = "all"',
             'pipelines = ["fetch_blog", "summarize_nightly"]',
         )
