@@ -27,7 +27,7 @@ async def test_importing_sink_package_does_not_eagerly_import_optional_adapters(
     code = (
         "import sys; import sluice.dag.sinks; "
         "assert 'sluice.dag.sinks.email_sink' not in sys.modules; "
-        "assert 'sluice.sinks.email' not in sys.modules"
+        "assert 'sluice.dag.sinks._impl.email' not in sys.modules"
     )
     result = subprocess.run([sys.executable, "-c", code], check=False)
     assert result.returncode == 0
@@ -52,7 +52,7 @@ async def test_telegram_adapter_chunks_rendered_markdown_and_emits(monkeypatch):
         assert "hello" in payload
         return "tg:1"
 
-    monkeypatch.setattr("sluice.sinks.telegram.TelegramSink.send_one", fake_send)
+    monkeypatch.setattr("sluice.dag.sinks._impl.telegram.TelegramSink.send_one", fake_send)
     sink = TelegramDagSink()
     params = {
         "sink_id": "tg",
@@ -101,7 +101,7 @@ async def test_email_adapter_chunks_one_message_per_recipient_and_emits(monkeypa
         assert payload["To"] == recipient
         return f"mail:{recipient}"
 
-    monkeypatch.setattr("sluice.sinks.email.EmailSink.send_one", fake_send)
+    monkeypatch.setattr("sluice.dag.sinks._impl.email.EmailSink.send_one", fake_send)
     sink = EmailDagSink()
     params = {
         "sink_id": "mail",
@@ -159,7 +159,7 @@ async def test_feishu_adapter_chunks_markdown_and_emits(monkeypatch):
         assert "hello" in payload["content"]["text"]
         return "fs:1"
 
-    monkeypatch.setattr("sluice.sinks.feishu.FeishuSink.send_one", fake_send)
+    monkeypatch.setattr("sluice.dag.sinks._impl.feishu.FeishuSink.send_one", fake_send)
     sink = FeishuDagSink()
     params = {
         "sink_id": "fs",

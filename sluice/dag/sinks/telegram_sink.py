@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from sluice.dag.sinks._impl.telegram import TelegramSink as V1TelegramSink
 from sluice.dag.sinks._v1_push import (
     PushPayload,
     V1PushSinkAdapter,
@@ -14,7 +15,6 @@ from sluice.dag.sinks._v1_push import (
     text_param,
 )
 from sluice.dag.sinks.base import SinkChunk, bind_sink
-from sluice.sinks.telegram import TelegramSink as V1TelegramSink
 
 
 class TelegramDagSink(V1PushSinkAdapter):

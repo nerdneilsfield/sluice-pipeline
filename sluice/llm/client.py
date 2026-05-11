@@ -8,10 +8,10 @@ in :mod:`sluice.llm.middleware`. Stages should not use this directly.
 from dataclasses import dataclass
 
 from sluice.core.errors import QuotaExhausted, RateLimitError
+from sluice.core.logging_setup import get_logger
 from sluice.llm.budget import CallCost, RunBudget, compute_cost
 from sluice.llm.pool import ProviderPool
 from sluice.llm.provider import Endpoint
-from sluice.logging_setup import get_logger
 
 log = get_logger(__name__)
 

@@ -11,12 +11,12 @@ from prefect.settings import (
     temporary_settings,
 )
 
+from sluice.core.env import resolve_env
 from sluice.core.errors import ConfigError
 from sluice.dag.config import PipelineDef, TaskConfig
 from sluice.dag.flows import rotate_task_flow, run_pipeline_flow
 from sluice.dag.sluice_config import SluiceConfig
 from sluice.dag.validator import ValidationError, validate_task
-from sluice.loader import resolve_env
 
 try:
     from prefect.types.entrypoint import EntrypointType

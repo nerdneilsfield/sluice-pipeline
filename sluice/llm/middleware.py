@@ -30,6 +30,7 @@ from sluice.core.errors import (
     QuotaExhausted,
     RateLimitError,
 )
+from sluice.core.logging_setup import get_logger
 from sluice.llm.budget import CallCost, RunBudget
 from sluice.llm.client import StageLLMConfig, raw_chat
 from sluice.llm.pool import ProviderPool
@@ -37,7 +38,6 @@ from sluice.llm.tokens import (
     count_message_tokens,
     truncate_messages_to_tokens,
 )
-from sluice.logging_setup import get_logger
 
 log = get_logger(__name__)
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from sluice.dag.sinks._impl.notion import NotionSink as V1NotionSink
 from sluice.dag.sinks._v1_push import bool_param, env_param, int_param, rendered_context, text_param
 from sluice.dag.sinks.base import EmissionResult, Sink, SinkChunk, bind_sink
-from sluice.sinks.notion import NotionSink as V1NotionSink
 
 
 class NotionDagSink(Sink):

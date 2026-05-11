@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from sluice.context import PipelineContext
+from sluice.core.env import resolve_env
+from sluice.dag.sinks._impl._push_base import PushBatchItem
 from sluice.dag.sinks.base import EmissionResult, Sink, SinkChunk
-from sluice.loader import resolve_env
-from sluice.sinks._push_base import PushBatchItem
 
 
 @dataclass(frozen=True)

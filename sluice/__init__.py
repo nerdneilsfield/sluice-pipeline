@@ -1,1 +1,1 @@
-import sluice.enrichers  # noqa: F401
+"""Sluice package."""
