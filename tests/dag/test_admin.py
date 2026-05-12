@@ -1,8 +1,11 @@
+import tomllib
+from dataclasses import replace
 from pathlib import Path
 
 import aiosqlite
 import pytest
 
+from sluice.core.errors import ConfigError
 from sluice.dag.admin import (
     kill_item,
     list_items,
@@ -125,6 +128,15 @@ async def test_kill_item_sets_global_tombstone(tmp_path: Path):
         assert row["dropped_at"] is not None
 
 
+@pytest.mark.asyncio
+async def test_kill_item_validates_task_before_update(tmp_path: Path):
+    task_dir = make_task_dir(tmp_path, name="t1", pipeline_names=["p1"], stage_names=["s1"])
+    task = replace(load_task(task_dir), name="../bad")
+
+    with pytest.raises(ConfigError, match="invalid task"):
+        await kill_item(task, item_id="X")
+
+
 def test_scaffold_emits_five_files(tmp_path: Path):
     old = tmp_path / "old.toml"
     old.write_text(
@@ -159,3 +171,39 @@ out = "./out"
         assert (out_dir / filename).exists()
     assert "https://example.com/rss" in (out_dir / "sources.toml").read_text()
     assert "demo_main" in (out_dir / "pipelines.toml").read_text()
+
+
+def test_scaffold_escapes_top_level_toml_values(tmp_path: Path):
+    old = tmp_path / "old.toml"
+    old.write_text(
+        """\
+id = "demo"
+cron = "0 8 * * *"
+timezone = "Etc/\\"Quoted\\""
+window = "24\\"h"
+db_path = "data/\\"demo\\".db"
+
+[[sources]]
+type = "rss"
+url = "https://example.com/rss"
+
+[[stages]]
+name = "fetch"
+type = "fetch_rss"
+
+[[sinks]]
+id = "local"
+type = "file_md"
+out = "./out"
+"""
+    )
+    out_dir = tmp_path / "tasks" / "demo"
+
+    scaffold_from_v1(old_path=old, out_dir=out_dir)
+
+    task_doc = tomllib.loads((out_dir / "task.toml").read_text())
+    pipelines_doc = tomllib.loads((out_dir / "pipelines.toml").read_text())
+    assert task_doc["task"]["timezone"] == 'Etc/"Quoted"'
+    assert task_doc["task"]["db_path"] == 'data/"demo".db'
+    assert task_doc["task"]["window"]["length"] == '24"h'
+    assert pipelines_doc["pipelines"][0]["cron"] == "0 8 * * *"

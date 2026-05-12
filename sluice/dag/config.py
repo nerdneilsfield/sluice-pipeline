@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+CONCURRENCY_STRATEGIES = frozenset({"queue", "enqueue", "cancel_new"})
+
 
 @dataclass(frozen=True)
 class SourceDef:
@@ -61,6 +63,14 @@ class PipelineDef:
             )
         if self.input_mode is None:
             object.__setattr__(self, "input_mode", "union")
+        if (
+            self.concurrency_strategy is not None
+            and self.concurrency_strategy not in CONCURRENCY_STRATEGIES
+        ):
+            raise ValueError(
+                "concurrency_strategy must be one of queue/enqueue/cancel_new, "
+                f"got {self.concurrency_strategy!r}"
+            )
 
 
 @dataclass(frozen=True)

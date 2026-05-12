@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tomllib
 from datetime import UTC, datetime
 from pathlib import Path
@@ -143,6 +144,7 @@ async def kill_item(
     item_id: str,
     reason: str = "killed_by_operator",
 ) -> None:
+    _validate_admin_task(task)
     async with aiosqlite.connect(task.db_path) as db:
         cur = await db.execute(
             "UPDATE items SET dropped=1, dropped_reason=?, dropped_at=? WHERE item_id=?",
@@ -157,7 +159,7 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return repr(value)
+        return json.dumps(value)
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     return repr(value)
@@ -189,15 +191,15 @@ def scaffold_from_v1(*, old_path: Path, out_dir: Path) -> None:
     (out_dir / "task.toml").write_text(
         f"""\
 [task]
-name = "{name}"
-db_path = "{db_path}"
-seen_db = "data/{name}_seen.db"
+name = {_toml_value(name)}
+db_path = {_toml_value(db_path)}
+seen_db = {_toml_value(f"data/{name}_seen.db")}
 enabled = true
-timezone = "{timezone}"
+timezone = {_toml_value(timezone)}
 
 [task.window]
-anchor = "{anchor}"
-length = "{window}"
+anchor = {_toml_value(anchor)}
+length = {_toml_value(window)}
 
 [task.deployments]
 pipelines = "all"
@@ -240,8 +242,8 @@ pipelines = "all"
     (out_dir / "pipelines.toml").write_text(
         f"""\
 [[pipelines]]
-name = "{name}_main"
-cron = "{anchor}"
+name = {_toml_value(f"{name}_main")}
+cron = {_toml_value(anchor)}
 sources = {_toml_value(source_names)}
 stages = {_toml_value(stage_names)}
 sinks = {_toml_value(sink_names)}

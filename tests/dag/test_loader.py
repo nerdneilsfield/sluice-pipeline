@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from sluice.core.errors import ConfigError
 from sluice.dag.loader import load_all_tasks, load_task
 
 FIXTURE = Path(__file__).parent / "fixtures" / "example_task"
@@ -90,6 +91,23 @@ def test_load_task_pipeline_cron_missing_defaults_to_none(tmp_path: Path):
     (d / "pipelines.toml").write_text("\n".join(lines) + "\n")
     t = load_task(d)
     assert next(p for p in t.pipelines if p.name == "fetch_blog").cron is None
+
+
+def test_load_task_invalid_pipeline_concurrency_strategy_raises(tmp_path: Path):
+    import shutil
+
+    d = tmp_path / "task"
+    shutil.copytree(FIXTURE, d)
+    text = (d / "pipelines.toml").read_text()
+    text = text.replace(
+        'name    = "fetch_blog"',
+        'name    = "fetch_blog"\nconcurrency_strategy = "bogus"',
+        1,
+    )
+    (d / "pipelines.toml").write_text(text)
+
+    with pytest.raises(ConfigError, match="concurrency_strategy"):
+        load_task(d)
 
 
 def test_load_task_rotation_cron(tmp_path: Path):

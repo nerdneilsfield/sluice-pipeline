@@ -4,7 +4,9 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from sluice.core.errors import ConfigError
 from sluice.dag.config import (
+    CONCURRENCY_STRATEGIES,
     DeploymentsDef,
     PipelineDef,
     SinkDef,
@@ -33,6 +35,16 @@ def _split_named(entry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]
     head = {k: v for k, v in entry.items() if k in known}
     params = {k: v for k, v in entry.items() if k not in known}
     return head, params
+
+
+def _pipeline_concurrency_strategy(entry: dict[str, Any]) -> str | None:
+    strategy = entry.get("concurrency_strategy")
+    if strategy is not None and strategy not in CONCURRENCY_STRATEGIES:
+        raise ConfigError(
+            "pipeline.concurrency_strategy must be one of queue/enqueue/cancel_new, "
+            f"got {strategy!r}"
+        )
+    return strategy
 
 
 def load_task(task_dir: Path) -> TaskConfig:
@@ -79,7 +91,7 @@ def load_task(task_dir: Path) -> TaskConfig:
             cron=entry.get("cron"),
             input_mode=entry.get("input_mode", "union"),
             max_attempts=int(entry.get("max_attempts", 3)),
-            concurrency_strategy=entry.get("concurrency_strategy"),
+            concurrency_strategy=_pipeline_concurrency_strategy(entry),
         )
         for entry in pipelines_doc
     ]

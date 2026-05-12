@@ -99,7 +99,7 @@ sudo systemctl enable --now sluice-worker.service
 Use the v2 admin commands during validation:
 
 ```bash
-sluice retry ai_news main --config-dir configs
+sluice retry --task ai_news --pipeline main --config-dir configs
 sluice items show ai_news <item-id> --config-dir configs
 sluice items kill ai_news <item-id> --config-dir configs
 ```
