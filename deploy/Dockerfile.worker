@@ -10,11 +10,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml README.md LICENSE /app/
 COPY sluice /app/sluice
 RUN pip install --no-cache-dir -e .
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin sluice \
+    && mkdir -p /data \
+    && chown sluice:sluice /data
 
 ENV PYTHONUNBUFFERED=1 \
     PREFECT_HOME=/data/prefect
 
 VOLUME ["/data"]
+
+USER sluice
 
 ENTRYPOINT ["prefect", "worker", "start"]
 CMD ["--pool", "default"]

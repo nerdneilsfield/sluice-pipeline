@@ -1,3 +1,5 @@
+import sys
+import types
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -25,6 +27,33 @@ def test_cli_retry_single_item(tmp_path: Path):
     )
     assert result.exit_code == 0, result.output
     assert "Cleared 1" in result.output
+
+
+def test_cli_retry_remote_triggers_prefect_deployment(tmp_path: Path, monkeypatch):
+    configs = make_configs_dir(tmp_path, tasks={"t1": {"pipelines": ["p1"], "stages": ["s1"]}})
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "t1", "-c", str(configs)])
+    assert result.exit_code == 0, result.output
+    seed_pipeline_state_sync(configs / "../data/t1.db", pipeline="p1", item_id="X", status="failed")
+    calls = []
+
+    async def fake_run_deployment(*, name: str):
+        calls.append(name)
+
+    prefect_module = types.ModuleType("prefect")
+    deployments_module = types.ModuleType("prefect.deployments")
+    deployments_module.run_deployment = fake_run_deployment
+    prefect_module.deployments = deployments_module
+    monkeypatch.setitem(sys.modules, "prefect", prefect_module)
+    monkeypatch.setitem(sys.modules, "prefect.deployments", deployments_module)
+
+    result = runner.invoke(
+        app, ["retry", "--task", "t1", "--pipeline", "p1", "--remote", "-c", str(configs)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["sluice-run-pipeline/t1-p1"]
+    assert "Triggered Prefect run." in result.output
 
 
 def test_cli_items_list(tmp_path: Path):
