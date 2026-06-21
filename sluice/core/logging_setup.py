@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import datetime
 from json import dumps
 from pathlib import Path
@@ -59,6 +61,30 @@ class _TqdmStderrSink:
 
 _CONSOLE_SINK = _TqdmStderrSink()
 _CONTEXT_SKIP_KEYS = {"component", "_console_context"}
+_REDACTED = "<redacted>"
+_SECRET_KEY_RE = re.compile(
+    r"(secret|token|password|api[_-]?key|authorization)",
+    re.IGNORECASE,
+)
+_BEARER_RE = re.compile(r"\b(Bearer)\s+[A-Za-z0-9._~+/\-=]+", re.IGNORECASE)
+_SECRET_TEXT_KEY = (
+    r"[A-Za-z0-9_.-]*(?:secret|token|password|api[_-]?key|authorization)"
+    r"[A-Za-z0-9_.-]*"
+)
+_SECRET_WORD_TEXT_KEY = (
+    r"(?:[A-Za-z0-9_.-]+secret[A-Za-z0-9_.-]*|"
+    r"[A-Za-z0-9_.-]*(?:token|password|api[_-]?key|authorization)[A-Za-z0-9_.-]*)"
+)
+_TEXT_SECRET_ASSIGNMENT_RE = re.compile(
+    rf"\b({_SECRET_TEXT_KEY})\b(\s*(?:=|:)\s*)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s,;&]+)",
+    re.IGNORECASE,
+)
+_TEXT_SECRET_WORD_RE = re.compile(
+    rf"\b({_SECRET_WORD_TEXT_KEY})\b(\s+)"
+    r"(\"[^\"]*\"|'[^']*'|[^\s,;&]+)",
+    re.IGNORECASE,
+)
 _CONTEXT_KEY_ORDER = [
     "pipeline_id",
     "run_key",
@@ -97,6 +123,48 @@ _CONTEXT_KEY_ORDER = [
 def _write_console(message: Any) -> None:
     _CONSOLE_SINK.write(str(message))
     _CONSOLE_SINK.flush()
+
+
+def _is_secret_key(key: Any) -> bool:
+    return bool(_SECRET_KEY_RE.search(str(key)))
+
+
+def _redact_text(value: str) -> str:
+    value = _BEARER_RE.sub(r"\1 " + _REDACTED, value)
+    value = _TEXT_SECRET_ASSIGNMENT_RE.sub(r"\1\2" + _REDACTED, value)
+    return _TEXT_SECRET_WORD_RE.sub(r"\1\2" + _REDACTED, value)
+
+
+def _redact_sensitive_data(value: Any, *, key: Any | None = None) -> Any:
+    if key is not None and _is_secret_key(key):
+        return _REDACTED
+    if isinstance(value, str):
+        return _redact_text(value)
+    if isinstance(value, Mapping):
+        return {
+            item_key: _redact_sensitive_data(item_value, key=item_key)
+            for item_key, item_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sensitive_data(item) for item in value)
+    return value
+
+
+def _redact_exception(exception: Any) -> None:
+    value = getattr(exception, "value", None)
+    if not isinstance(value, BaseException):
+        return
+    with suppress(AttributeError, TypeError):
+        value.args = tuple(_redact_sensitive_data(arg) for arg in value.args)
+
+
+def _redact_record(record: dict[str, Any]) -> bool:
+    record["message"] = _redact_text(str(record["message"]))
+    record["extra"] = _redact_sensitive_data(record["extra"])
+    _redact_exception(record.get("exception"))
+    return True
 
 
 def _stringify_context_value(value: Any) -> str:
@@ -216,7 +284,8 @@ def configure_cli_logging(*, verbose: bool = False, log_file: str | Path | None 
         level=console_level,
         colorize=True,
         backtrace=verbose,
-        diagnose=verbose,
+        diagnose=False,
+        filter=cast(Any, _redact_record),
         format=cast(Any, _console_format),
     )
 
@@ -231,6 +300,7 @@ def configure_cli_logging(*, verbose: bool = False, log_file: str | Path | None 
             enqueue=True,
             backtrace=True,
             diagnose=False,
+            filter=cast(Any, _redact_record),
             rotation="20 MB",
             retention=5,
         )
