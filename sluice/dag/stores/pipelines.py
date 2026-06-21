@@ -15,6 +15,52 @@ class PipelinesStore:
         row = await cur.fetchone()
         return None if row is None else int(row[0])
 
+    async def get_cycle_id(self, run_id: int) -> str | None:
+        cur = await self.conn.execute(
+            "SELECT cycle_id FROM pipelines WHERE id = ?",
+            (run_id,),
+        )
+        row = await cur.fetchone()
+        return row[0] if row else None
+
+    async def get_lease_state(self, run_id: int) -> dict | None:
+        cur = await self.conn.execute(
+            "SELECT lease_owner, lease_version, lease_until, heartbeat_at, status "
+            "FROM pipelines WHERE id = ?",
+            (run_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "lease_owner": row[0],
+            "lease_version": row[1],
+            "lease_until": row[2],
+            "heartbeat_at": row[3],
+            "status": row[4],
+        }
+
+    async def set_lease(
+        self,
+        *,
+        run_id: int,
+        lease_owner: str,
+        lease_until: str,
+        heartbeat_at: str,
+        lease_version: int,
+    ) -> int:
+        """Set lease fields. Fenced: only updates if lease_version matches.
+
+        Returns the number of rows updated. Zero means the fencing token did
+        not match (the row was already recovered or fenced by drain).
+        """
+        cur = await self.conn.execute(
+            "UPDATE pipelines SET lease_owner = ?, lease_until = ?, "
+            "heartbeat_at = ?, lease_version = ? WHERE id = ?",
+            (lease_owner, lease_until, heartbeat_at, lease_version, run_id),
+        )
+        return cur.rowcount or 0
+
     async def upsert_running(
         self,
         *,
@@ -67,3 +113,25 @@ class PipelinesStore:
             """,
             (finished_at, status, items_in, items_out, error_msg, run_id),
         )
+
+    async def finalize_v3(
+        self,
+        run_id: int,
+        *,
+        finished_at: str,
+        status: str,
+        items_in: int | None,
+        items_out: int | None,
+        error_msg: str | None,
+        lease_owner: str,
+        lease_version: int,
+    ) -> int:
+        """Fenced finalize: only updates if lease_owner/version match. Returns rowcount."""
+        cur = await self.conn.execute(
+            "UPDATE pipelines SET finished_at = ?, status = ?, items_in = ?, "
+            "items_out = ?, error_msg = ? "
+            "WHERE id = ? AND lease_owner = ? AND lease_version = ? AND status = 'running'",
+            (finished_at, status, items_in, items_out, error_msg,
+             run_id, lease_owner, lease_version),
+        )
+        return cur.rowcount or 0
