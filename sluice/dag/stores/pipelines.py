@@ -95,6 +95,47 @@ class PipelinesStore:
             raise RuntimeError("pipeline upsert did not return an id")
         return int(row[0])
 
+    async def upsert_running_v3(
+        self,
+        *,
+        run_key: str,
+        task: str,
+        pipeline_name: str,
+        cycle_anchor: str,
+        cycle_id: str,
+        trigger: str,
+        started_at: str,
+    ) -> int:
+        """Like upsert_running but also sets cycle_id. Used by tx0 under v3.
+
+        Caller must ensure the pipelines table has the cycle_id column (i.e.
+        apply_v3_migrations has run); otherwise this raises OperationalError.
+        """
+        cur = await self.conn.execute(
+            """
+            INSERT INTO pipelines (
+              run_key, task, pipeline_name, cycle_anchor, cycle_id,
+              trigger, started_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
+            ON CONFLICT(run_key) DO UPDATE SET
+              status = 'running',
+              cycle_id = excluded.cycle_id,
+              started_at = excluded.started_at,
+              finished_at = NULL,
+              items_in = NULL,
+              items_out = NULL,
+              error_msg = NULL
+            """,
+            (run_key, task, pipeline_name, cycle_anchor, cycle_id, trigger, started_at),
+        )
+        await cur.close()
+        row = await (
+            await self.conn.execute("SELECT id FROM pipelines WHERE run_key = ?", (run_key,))
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("pipeline upsert did not return an id")
+        return int(row[0])
+
     async def finalize(
         self,
         run_id: int,

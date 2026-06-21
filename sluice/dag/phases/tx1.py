@@ -26,16 +26,38 @@ def build_tx1_job(
     items: list[Item],
     driver_result: DriverResult,
     out: dict[str, Any],
+    pipeline_run_id: int | None = None,
+    cycle_id: str | None = None,
+    runtime_core: str = "v2",
 ) -> WriteJob:
+    """Build the post-stage writer job that persists new items, stage state,
+    and attempt logs.
+
+    v2 path (default): calls PipelinesStore.upsert_running to create/attach
+    the run, then uses legacy state writes.
+
+    v3 path: caller (tx0) has already created the run with lease. We skip
+    upsert_running and use run-scoped store methods with the run_id/cycle_id
+    provided.
+    """
+
     async def job(active, seen) -> None:  # noqa: ARG001
-        run_id = await PipelinesStore(active).upsert_running(
-            run_key=run_key,
-            task=task.name,
-            pipeline_name=pipeline.name,
-            cycle_anchor=cycle_anchor,
-            trigger=trigger,
-            started_at=started_at,
-        )
+        if runtime_core == "v3":
+            if pipeline_run_id is None:
+                raise RuntimeError("v3 tx1 requires pipeline_run_id from tx0")
+            run_id = pipeline_run_id
+            effective_cycle_id = cycle_id or cycle_anchor
+        else:
+            run_id = await PipelinesStore(active).upsert_running(
+                run_key=run_key,
+                task=task.name,
+                pipeline_name=pipeline.name,
+                cycle_anchor=cycle_anchor,
+                trigger=trigger,
+                started_at=started_at,
+            )
+            effective_cycle_id = cycle_anchor
+
         now = datetime.now(timezone.utc).isoformat()
         items_store = ItemsStore(active)
 
@@ -68,10 +90,12 @@ def build_tx1_job(
                 started_at=started_at,
             )
             drops = {
-                drop.item_id: drop for drop in driver_result.drops_per_stage.get(stage_name, ())
+                drop.item_id: drop
+                for drop in driver_result.drops_per_stage.get(stage_name, ())
             }
             errors = {
-                error.item_id: error for error in driver_result.errors_per_stage.get(stage_name, ())
+                error.item_id: error
+                for error in driver_result.errors_per_stage.get(stage_name, ())
             }
             skipped = driver_result.skipped_per_stage.get(stage_name, set())
             done_ids = driver_result.done_ids_per_stage.get(stage_name, set())
@@ -87,60 +111,125 @@ def build_tx1_job(
                     status = "failed"
                     error_class, error_msg = error.error_class, error.error_msg
 
-                attempt_no = await log_store.next_attempt_no(
-                    pipeline_name=pipeline.name,
-                    stage_name=stage_name,
-                    item_id=item_id,
-                )
-                await log_store.append(
-                    stage_run_id=stage_run_id,
-                    pipeline_run_id=run_id,
-                    pipeline_name=pipeline.name,
-                    stage_name=stage_name,
-                    item_id=item_id,
-                    attempt_no=attempt_no,
-                    status=status,
-                    processed_at=now,
-                    error_class=error_class,
-                    error_msg=error_msg,
-                )
-                prior = await state_store.attempts(
-                    pipeline_name=pipeline.name,
-                    item_id=item_id,
-                )
+                if runtime_core == "v3":
+                    attempt_no = await log_store.next_attempt_no_v3(
+                        run_id=run_id,
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                    )
+                    await log_store.append_v3(
+                        stage_run_id=stage_run_id,
+                        pipeline_run_id=run_id,
+                        run_id=run_id,
+                        cycle_id=effective_cycle_id,
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                        attempt_no=attempt_no,
+                        status=status,
+                        processed_at=now,
+                        error_class=error_class,
+                        error_msg=error_msg,
+                    )
+                    prior = await state_store.attempts_v3(
+                        run_id=run_id,
+                        pipeline_name=pipeline.name,
+                        item_id=item_id,
+                    )
+                else:
+                    attempt_no = await log_store.next_attempt_no(
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                    )
+                    await log_store.append(
+                        stage_run_id=stage_run_id,
+                        pipeline_run_id=run_id,
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                        attempt_no=attempt_no,
+                        status=status,
+                        processed_at=now,
+                        error_class=error_class,
+                        error_msg=error_msg,
+                    )
+                    prior = await state_store.attempts(
+                        pipeline_name=pipeline.name,
+                        item_id=item_id,
+                    )
+
                 attempts = prior + 1 if status == "failed" else prior
                 if status in ("done", "dropped") and attempts == 0:
                     attempts = 1
-                await state_store.upsert(
-                    pipeline_name=pipeline.name,
-                    item_id=item_id,
-                    status=status,
-                    attempts=attempts,
-                    last_stage_run_id=stage_run_id,
-                    last_pipeline_run_id=run_id,
-                    last_processed_at=now,
-                    last_error_class=error_class,
-                    last_error_msg=error_msg,
-                )
+
+                if runtime_core == "v3":
+                    await state_store.upsert_v3(
+                        run_id=run_id,
+                        pipeline_name=pipeline.name,
+                        item_id=item_id,
+                        cycle_id=effective_cycle_id,
+                        status=status,
+                        attempts=attempts,
+                        last_stage_run_id=stage_run_id,
+                        last_processed_at=now,
+                        last_error_class=error_class,
+                        last_error_msg=error_msg,
+                    )
+                else:
+                    await state_store.upsert(
+                        pipeline_name=pipeline.name,
+                        item_id=item_id,
+                        status=status,
+                        attempts=attempts,
+                        last_stage_run_id=stage_run_id,
+                        last_pipeline_run_id=run_id,
+                        last_processed_at=now,
+                        last_error_class=error_class,
+                        last_error_msg=error_msg,
+                    )
 
             for item_id in skipped:
-                attempt_no = await log_store.next_attempt_no(
-                    pipeline_name=pipeline.name,
-                    stage_name=stage_name,
-                    item_id=item_id,
-                )
-                await log_store.append(
-                    stage_run_id=stage_run_id,
-                    pipeline_run_id=run_id,
-                    pipeline_name=pipeline.name,
-                    stage_name=stage_name,
-                    item_id=item_id,
-                    attempt_no=attempt_no,
-                    status="skipped",
-                    processed_at=now,
-                    error_class=None,
-                    error_msg=None,
-                )
+                if runtime_core == "v3":
+                    attempt_no = await log_store.next_attempt_no_v3(
+                        run_id=run_id,
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                    )
+                    await log_store.append_v3(
+                        stage_run_id=stage_run_id,
+                        pipeline_run_id=run_id,
+                        run_id=run_id,
+                        cycle_id=effective_cycle_id,
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                        attempt_no=attempt_no,
+                        status="skipped",
+                        processed_at=now,
+                        error_class=None,
+                        error_msg=None,
+                    )
+                else:
+                    attempt_no = await log_store.next_attempt_no(
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                    )
+                    await log_store.append(
+                        stage_run_id=stage_run_id,
+                        pipeline_run_id=run_id,
+                        pipeline_name=pipeline.name,
+                        stage_name=stage_name,
+                        item_id=item_id,
+                        attempt_no=attempt_no,
+                        status="skipped",
+                        processed_at=now,
+                        error_class=None,
+                        error_msg=None,
+                    )
 
             await stages_store.finalize(
                 stage_run_id,

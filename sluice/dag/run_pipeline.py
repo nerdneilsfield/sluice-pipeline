@@ -22,6 +22,7 @@ from sluice.dag.phases.resume import load_resume_done
 from sluice.dag.phases.run_key_resolve import resolve_run_key
 from sluice.dag.phases.seen_post import build_seen_post_job
 from sluice.dag.phases.skip_compute import compute_skip_ids
+from sluice.dag.phases.tx0 import build_tx0_job, make_lease_owner
 from sluice.dag.phases.tx1 import build_tx1_job
 from sluice.dag.phases.tx2 import build_tx2_job
 from sluice.dag.rotation.admission import (
@@ -89,6 +90,8 @@ async def run_pipeline(
     writer: WriterThread,
     now: datetime | None = None,
     trigger: str = "manual",
+    runtime_core: str = "v2",
+    lease_duration_seconds: float = 30 * 60.0,
 ) -> RunResult:
     validate_task(task)
     pipeline = next(
@@ -126,6 +129,8 @@ async def run_pipeline(
             writer=writer,
             now=now,
             trigger=trigger,
+            runtime_core=runtime_core,
+            lease_duration_seconds=lease_duration_seconds,
         )
     finally:
         try:
@@ -141,6 +146,8 @@ async def _run_pipeline_admitted(
     writer: WriterThread,
     now: datetime | None = None,
     trigger: str = "manual",
+    runtime_core: str = "v2",
+    lease_duration_seconds: float = 30 * 60.0,
 ) -> RunResult:
     validate_task(task)
     pipeline = next(
@@ -157,6 +164,29 @@ async def _run_pipeline_admitted(
     cycle_anchor = compute_cycle_anchor(task.window.anchor, task.timezone or "UTC", now)
     fresh_run_key = make_run_key(task.name, pipeline.name, cycle_anchor)
     started_at = now.isoformat()
+
+    # v3: create the run row with lease BEFORE stages run so drain can see us.
+    tx0_out: dict = {}
+    lease_owner = ""
+    lease_version = 0
+    if runtime_core == "v3":
+        lease_owner = make_lease_owner()
+        await (
+            await writer.submit(
+                build_tx0_job(
+                    task=task,
+                    pipeline=pipeline,
+                    run_key=fresh_run_key,
+                    cycle_anchor=cycle_anchor.isoformat(),
+                    trigger=trigger,
+                    started_at=started_at,
+                    lease_owner=lease_owner,
+                    lease_duration_seconds=lease_duration_seconds,
+                    out=tx0_out,
+                )
+            )
+        )
+        lease_version = tx0_out.get("lease_version", 0)
 
     skip_ids: set[str] = set()
     rows: list[dict] = []
@@ -259,6 +289,9 @@ async def _run_pipeline_admitted(
                 items=all_items,
                 driver_result=driver_result,
                 out=tx1_out,
+                pipeline_run_id=tx0_out.get("pipeline_run_id"),
+                cycle_id=tx0_out.get("cycle_id"),
+                runtime_core=runtime_core,
             )
         )
     )
@@ -280,6 +313,10 @@ async def _run_pipeline_admitted(
                     items_in=items_in,
                     run_level_error=str(exc),
                     out=tx2_out,
+                    cycle_id=tx0_out.get("cycle_id"),
+                    lease_owner=lease_owner or None,
+                    lease_version=lease_version or None,
+                    runtime_core=runtime_core,
                 )
             )
         )
@@ -342,6 +379,10 @@ async def _run_pipeline_admitted(
                 items_in=items_in,
                 run_level_error=None,
                 out=tx2_out,
+                cycle_id=tx0_out.get("cycle_id"),
+                lease_owner=lease_owner or None,
+                lease_version=lease_version or None,
+                runtime_core=runtime_core,
             )
         )
     )

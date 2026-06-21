@@ -163,6 +163,68 @@ async def test_run_pipeline_fetches_renders_sinks_and_marks_success(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_run_pipeline_v3_path_writes_run_scoped_state(tmp_path, monkeypatch):
+    """End-to-end v3: tx0 creates run with lease, tx1/tx2 use run-scoped writes."""
+    from sluice.dag import db as db_module
+    from sluice.dag.dynamic_tables import (
+        migrate_task_dynamic_tables,
+        upgrade_task_dynamic_tables,
+    )
+
+    async def fake_fetch(self, url):
+        return RSS
+
+    monkeypatch.setattr(FetchRssExecutor, "_default_fetch_text", fake_fetch)
+    task = _task(tmp_path)
+    # Migrate to v3 schema BEFORE running
+    async with db_module.open_active_db(task.db_path) as conn:
+        await migrate_task_dynamic_tables(conn, task)
+        await conn.commit()
+        await db_module.apply_v3_migrations(conn)
+        await upgrade_task_dynamic_tables(conn, task)
+    async with db_module.open_seen_db(task.seen_db):
+        pass
+
+    writer = WriterThread(active_path=task.db_path, seen_path=task.seen_db)
+    await writer.start()
+    try:
+        result = await run_pipeline(
+            task,
+            "P",
+            writer=writer,
+            now=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
+            runtime_core="v3",
+        )
+    finally:
+        await writer.stop()
+
+    assert result.status == "success"
+    assert result.items_in == 1
+    async with db_module.open_active_db(task.db_path) as active:
+        # Pipeline row carries lease metadata and cycle_id
+        cur = await active.execute(
+            "SELECT status, lease_owner, lease_version, cycle_id FROM pipelines "
+            "WHERE run_key = ?",
+            (result.run_key,),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == "success"
+        assert row[1] is not None and row[1] != ""
+        assert row[2] >= 1
+        assert row[3] != ""
+
+        # Pipeline state is run-scoped
+        cur = await active.execute(
+            "SELECT run_id, item_id, status FROM pipeline_P"
+        )
+        rows = await cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0][1] == "feed:g1"
+        assert rows[0][2] == "success"
+
+
+@pytest.mark.asyncio
 async def test_run_pipeline_source_params_cannot_override_source_name(tmp_path, monkeypatch):
     seen_urls = []
 
