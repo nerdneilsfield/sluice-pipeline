@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
+import json
 import logging
 import secrets
 from datetime import datetime, timezone
-from typing import Any
 
 import aiosqlite
 
-from sluice.dag.stores.pipelines import PipelinesStore
 from sluice.dag.stores.sink_outbox import SinkOutboxStore
 
 logger = logging.getLogger(__name__)
@@ -164,7 +161,7 @@ async def _dispatch_one(
     counts: dict[str, int],
 ) -> None:
     """Send one outbox row and mark the outcome. Updates ``counts`` in place."""
-    import json
+    from sluice.dag.sinks.base import SinkChunk
 
     now = datetime.now(timezone.utc)
     try:
@@ -178,6 +175,13 @@ async def _dispatch_one(
             counts["failed"] += 1
         return
 
+    # Reconstruct a SinkChunk matching what sink.chunks() originally produced.
+    chunk = SinkChunk(
+        ordinal=row["ordinal"],
+        payload=payload.get("payload"),
+        message_kind=row["message_kind"],
+        items_in_chunk=tuple(payload.get("items_in_chunk") or ()),
+    )
     params = {
         "sink_id": row["sink_id"],
         "sink_type": row["sink_type"],
@@ -188,12 +192,10 @@ async def _dispatch_one(
         "message_kind": row["message_kind"],
     }
     try:
-        await sink.emit(payload=payload, params=params)
+        await sink.emit(chunk, params)
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         cls = type(exc).__name__
-        # Treat all sink errors as retryable by default. Real permanent
-        # failures should be re-classified by caller policy.
         from datetime import timedelta
 
         next_at = (now + timedelta(seconds=retry_backoff_seconds)).isoformat()

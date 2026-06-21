@@ -110,6 +110,7 @@ def test_load_sluice_config_wraps_invalid_encoding(tmp_path):
 def test_runtime_config_v3_flags_default_off():
     cfg = RuntimeConfig()
     assert cfg.runtime_core == "v2"
+    assert cfg.enable_experimental_v3 is False
     assert cfg.enable_outbox_dispatch is False
     assert cfg.enable_lease_recovery is False
     assert cfg.enable_rotation_manifest is False
@@ -121,6 +122,7 @@ def test_load_sluice_config_parses_v3_runtime_flags(tmp_path):
         """
         [runtime]
         runtime_core = "v3"
+        enable_experimental_v3 = true
         enable_outbox_dispatch = true
         enable_lease_recovery = true
         enable_rotation_manifest = true
@@ -128,9 +130,23 @@ def test_load_sluice_config_parses_v3_runtime_flags(tmp_path):
     )
     cfg = load_sluice_config(path)
     assert cfg.runtime.runtime_core == "v3"
+    assert cfg.runtime.enable_experimental_v3 is True
     assert cfg.runtime.enable_outbox_dispatch is True
     assert cfg.runtime.enable_lease_recovery is True
     assert cfg.runtime.enable_rotation_manifest is True
+
+
+def test_load_sluice_config_rejects_v3_without_experimental_flag(tmp_path):
+    """v3 is non-production; operators must acknowledge by setting the flag."""
+    path = tmp_path / "sluice.toml"
+    path.write_text(
+        """
+        [runtime]
+        runtime_core = "v3"
+        """
+    )
+    with pytest.raises(ConfigError, match="enable_experimental_v3"):
+        load_sluice_config(path)
 
 
 def test_load_sluice_config_rejects_invalid_runtime_core(tmp_path):

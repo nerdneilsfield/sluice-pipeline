@@ -92,6 +92,7 @@ async def run_pipeline(
     trigger: str = "manual",
     runtime_core: str = "v2",
     lease_duration_seconds: float = 30 * 60.0,
+    enable_outbox_dispatch: bool = False,
 ) -> RunResult:
     validate_task(task)
     pipeline = next(
@@ -131,6 +132,7 @@ async def run_pipeline(
             trigger=trigger,
             runtime_core=runtime_core,
             lease_duration_seconds=lease_duration_seconds,
+            enable_outbox_dispatch=enable_outbox_dispatch,
         )
     finally:
         try:
@@ -148,6 +150,7 @@ async def _run_pipeline_admitted(
     trigger: str = "manual",
     runtime_core: str = "v2",
     lease_duration_seconds: float = 30 * 60.0,
+    enable_outbox_dispatch: bool = False,
 ) -> RunResult:
     validate_task(task)
     pipeline = next(
@@ -330,11 +333,65 @@ async def _run_pipeline_admitted(
         )
 
     emission_results = []
+    outbox_specs: list[dict] = []
     try:
         if driver_result.new_items:
             await (await writer.submit(build_seen_post_job(driver_result.new_items)))
 
-        if pipeline.sinks:
+        if pipeline.sinks and runtime_core == "v3":
+            # v3: render chunks only; do NOT send. Sink send happens in the
+            # outbox dispatcher after tx2 commits the enqueued rows.
+            import hashlib
+            import json as _json
+
+            for sink_id in pipeline.sinks:
+                sink_def = next(s for s in task.sinks if s.name == sink_id)
+                sink = get_sink_class(sink_def.type)()
+                sink_params = dict(sink_def.params)
+                sink_params.update(
+                    task=task.name,
+                    pipeline=pipeline.name,
+                    run_key=effective_run_key,
+                    cycle_anchor=cycle_anchor.isoformat(),
+                    sink_id=sink_id,
+                    config_root=task.task_dir,
+                )
+                try:
+                    chunks = await sink.chunks(
+                        driver_result.rendered_output, sink_params
+                    )
+                    payloads = []
+                    for chunk in chunks:
+                        payload_json = _json.dumps(
+                            {
+                                "payload": chunk.payload,
+                                "items_in_chunk": list(chunk.items_in_chunk),
+                            },
+                            default=str,
+                            ensure_ascii=False,
+                        )
+                        idem_key = hashlib.sha256(
+                            f"{effective_run_key}:{sink_id}:{chunk.ordinal}".encode()
+                        ).hexdigest()
+                        payloads.append(
+                            (chunk.ordinal, idem_key, payload_json, chunk.message_kind)
+                        )
+                    outbox_specs.append({
+                        "sink_id": sink_id,
+                        "sink_type": sink_def.type,
+                        "payloads": payloads,
+                    })
+                finally:
+                    if hasattr(sink, "aclose"):
+                        try:
+                            await sink.aclose()
+                        except Exception as aclose_exc:  # noqa: BLE001
+                            logger.warning(
+                                "sink aclose failed during v3 render: %s",
+                                aclose_exc,
+                            )
+        elif pipeline.sinks:
+            # v2: send inline via SinkEmitter.
             emitter = SinkEmitter(
                 writer=writer,
                 run_key=effective_run_key,
@@ -383,9 +440,31 @@ async def _run_pipeline_admitted(
                 lease_owner=lease_owner or None,
                 lease_version=lease_version or None,
                 runtime_core=runtime_core,
+                outbox_specs=outbox_specs or None,
             )
         )
     )
+
+    # v3 post-tx2: if outbox rows were enqueued and dispatcher is enabled,
+    # process them now. Otherwise the operator must run a dispatcher worker.
+    if (
+        runtime_core == "v3"
+        and tx2_out.get("outbox_enqueued")
+        and enable_outbox_dispatch
+    ):
+        try:
+            from sluice.dag.outbox_dispatcher import dispatch_outbox
+
+            def _sink_factory(sink_type: str):
+                return get_sink_class(sink_type)()
+
+            await dispatch_outbox(task.db_path, sink_factory=_sink_factory)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "outbox dispatch failed for run %s: %s; pipeline stays "
+                "pending_delivery; operator should rerun dispatcher",
+                effective_run_key, exc,
+            )
 
     if pipeline.post_run_cleanup not in (None, "none"):
         sink_failed = bool(pipeline.sinks) and any(

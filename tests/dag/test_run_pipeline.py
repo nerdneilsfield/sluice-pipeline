@@ -194,11 +194,15 @@ async def test_run_pipeline_v3_path_writes_run_scoped_state(tmp_path, monkeypatc
             writer=writer,
             now=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
             runtime_core="v3",
+            enable_outbox_dispatch=False,  # tx2 enqueues; dispatcher deferred
         )
     finally:
         await writer.stop()
 
-    assert result.status == "success"
+    # Under v3, tx2 enqueues outbox rows and sets status='pending_delivery'.
+    # Without enable_outbox_dispatch the dispatcher does not run, so the
+    # pipeline stays pending until an external dispatcher advances it.
+    assert result.status == "pending_delivery"
     assert result.items_in == 1
     async with db_module.open_active_db(task.db_path) as active:
         # Pipeline row carries lease metadata and cycle_id
@@ -209,7 +213,7 @@ async def test_run_pipeline_v3_path_writes_run_scoped_state(tmp_path, monkeypatc
         )
         row = await cur.fetchone()
         assert row is not None
-        assert row[0] == "success"
+        assert row[0] == "pending_delivery"
         assert row[1] is not None and row[1] != ""
         assert row[2] >= 1
         assert row[3] != ""
@@ -222,6 +226,16 @@ async def test_run_pipeline_v3_path_writes_run_scoped_state(tmp_path, monkeypatc
         assert len(rows) == 1
         assert rows[0][1] == "feed:g1"
         assert rows[0][2] == "success"
+
+        # Outbox row was enqueued for the file_md sink
+        cur = await active.execute(
+            "SELECT sink_id, sink_type, status FROM sink_outbox"
+        )
+        outbox = await cur.fetchall()
+        assert len(outbox) == 1
+        assert outbox[0][0] == "out"
+        assert outbox[0][1] == "file_md"
+        assert outbox[0][2] == "pending"
 
 
 @pytest.mark.asyncio

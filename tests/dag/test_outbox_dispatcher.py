@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,8 +23,12 @@ class _FakeSink:
         self.fail_forever = fail_forever
         self.closed = False
 
-    async def emit(self, payload, params):
-        self.calls.append({"payload": payload, "params": params})
+    async def chunks(self, rendered, params):
+        from sluice.dag.sinks.base import SinkChunk
+        return [SinkChunk(ordinal=0, payload=rendered, message_kind="markdown")]
+
+    async def emit(self, chunk, params):
+        self.calls.append({"chunk": chunk, "params": params})
         if self.fail_forever or len(self.calls) <= self.fail_first:
             raise RuntimeError(f"sink fail #{len(self.calls)}")
 

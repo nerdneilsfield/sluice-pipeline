@@ -25,8 +25,12 @@ class RuntimeConfig:
 
     v3 core rollout flags:
 
-    - ``runtime_core`` selects the runner core (``"v2"`` default; ``"v3"`` is
-      experimental until v3.1 security hardening lands).
+    - ``runtime_core`` selects the runner core (``"v2"`` default; ``"v3"``
+      requires ``enable_experimental_v3 = true`` and is **non-production**
+      until v3.1 security hardening + delivery plumbing land).
+    - ``enable_experimental_v3`` must be explicitly set to ``true`` to
+      accept ``runtime_core = "v3"``. Operators acknowledge that v3 paths
+      (outbox dispatch, manifest-aware rotation, heartbeat) are incomplete.
     - ``enable_outbox_dispatch`` gates the durable sink outbox dispatcher.
     - ``enable_lease_recovery`` gates lease/heartbeat/fencing recovery.
     - ``enable_rotation_manifest`` gates the sidecar rotation manifest.
@@ -39,6 +43,7 @@ class RuntimeConfig:
     image: str | None = None
     concurrency_strategy: str = "queue"
     runtime_core: str = "v2"
+    enable_experimental_v3: bool = False
     enable_outbox_dispatch: bool = False
     enable_lease_recovery: bool = False
     enable_rotation_manifest: bool = False
@@ -89,6 +94,17 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
             "runtime.runtime_core must be 'v2' or 'v3', "
             f"got {runtime_core!r}"
         )
+    enable_experimental_v3 = _require_bool(
+        runtime, "enable_experimental_v3", default=False
+    )
+    if runtime_core == "v3" and not enable_experimental_v3:
+        raise ConfigError(
+            "runtime.runtime_core = 'v3' is non-production and requires "
+            "runtime.enable_experimental_v3 = true to acknowledge that "
+            "outbox dispatch, manifest-aware rotation, heartbeat wiring, "
+            "and the crash-recovery matrix are not yet complete. "
+            "Set the flag explicitly to enable v3 mode."
+        )
     enable_outbox_dispatch = _require_bool(
         runtime, "enable_outbox_dispatch", default=False
     )
@@ -112,6 +128,7 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
             image=runtime.get("image"),
             concurrency_strategy=concurrency_strategy,
             runtime_core=runtime_core,
+            enable_experimental_v3=enable_experimental_v3,
             enable_outbox_dispatch=enable_outbox_dispatch,
             enable_lease_recovery=enable_lease_recovery,
             enable_rotation_manifest=enable_rotation_manifest,
