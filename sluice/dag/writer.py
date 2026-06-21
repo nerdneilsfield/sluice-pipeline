@@ -33,6 +33,7 @@ class WriterThread:
         self._rotation_lock = RotationLock(active_path) if hold_rotation_lock else None
         self._queue: asyncio.Queue[tuple[WriteJob, asyncio.Future[None]] | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
+        self._fatal: BaseException | None = None
 
     async def start(self) -> None:
         if self._task is not None:
@@ -40,7 +41,9 @@ class WriterThread:
         if self._rotation_lock is not None:
             self._rotation_lock.acquire()
         try:
+            self._fatal = None
             self._task = asyncio.create_task(self._run(), name="dag-writer")
+            self._task.add_done_callback(self._on_task_done)
         except Exception:
             if self._rotation_lock is not None:
                 self._rotation_lock.release()
@@ -51,20 +54,65 @@ class WriterThread:
         if task is None:
             return
         try:
-            await self._queue.put(None)
-            await task
+            if not task.done():
+                await self._queue.put(None)
+                try:
+                    await task
+                except Exception as exc:  # noqa: BLE001
+                    self._fatal = exc
+                    self._fail_pending(exc)
+            else:
+                exc = self._task_exception(task)
+                if exc is not None:
+                    self._fatal = exc
+                    self._fail_pending(exc)
         finally:
             self._task = None
+            self._fatal = None
             if self._rotation_lock is not None:
                 self._rotation_lock.release()
 
     async def submit(self, job: WriteJob) -> asyncio.Future[None]:
         if self._task is None:
             raise RuntimeError("writer is not started")
+        if self._fatal is not None:
+            raise RuntimeError(f"writer task failed: {self._fatal}") from self._fatal
+        if self._task.done():
+            exc = self._task_exception(self._task)
+            if exc is not None:
+                self._fatal = exc
+                self._fail_pending(exc)
+                raise RuntimeError(f"writer task failed: {exc}") from exc
+            raise RuntimeError("writer is not running")
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[None] = loop.create_future()
         await self._queue.put((job, fut))
         return fut
+
+    def _on_task_done(self, task: asyncio.Task[None]) -> None:
+        exc = self._task_exception(task)
+        if exc is None:
+            return
+        self._fatal = exc
+        self._fail_pending(exc)
+
+    @staticmethod
+    def _task_exception(task: asyncio.Task[None]) -> BaseException | None:
+        if task.cancelled():
+            return RuntimeError("writer task was cancelled")
+        return task.exception()
+
+    def _fail_pending(self, exc: BaseException) -> None:
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if item is None:
+                continue
+            _, fut = item
+            if not fut.done():
+                fut.set_exception(exc)
 
     async def _run(self) -> None:
         async with open_active_db(self.active_path) as active:

@@ -25,33 +25,29 @@ class PipelinesStore:
         trigger: str,
         started_at: str,
     ) -> int:
-        existing = await self.get_run_id(run_key)
-        if existing is None:
-            cur = await self.conn.execute(
-                """
-                INSERT INTO pipelines (
-                  run_key, task, pipeline_name, cycle_anchor,
-                  trigger, started_at, status
-                ) VALUES (?, ?, ?, ?, ?, ?, 'running')
-                """,
-                (run_key, task, pipeline_name, cycle_anchor, trigger, started_at),
-            )
-            return int(cur.lastrowid)
-
-        await self.conn.execute(
+        cur = await self.conn.execute(
             """
-            UPDATE pipelines
-            SET status = 'running',
-                started_at = ?,
-                finished_at = NULL,
-                items_in = NULL,
-                items_out = NULL,
-                error_msg = NULL
-            WHERE id = ?
+            INSERT INTO pipelines (
+              run_key, task, pipeline_name, cycle_anchor,
+              trigger, started_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, 'running')
+            ON CONFLICT(run_key) DO UPDATE SET
+              status = 'running',
+              started_at = excluded.started_at,
+              finished_at = NULL,
+              items_in = NULL,
+              items_out = NULL,
+              error_msg = NULL
             """,
-            (started_at, existing),
+            (run_key, task, pipeline_name, cycle_anchor, trigger, started_at),
         )
-        return existing
+        await cur.close()
+        row = await (
+            await self.conn.execute("SELECT id FROM pipelines WHERE run_key = ?", (run_key,))
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("pipeline upsert did not return an id")
+        return int(row[0])
 
     async def finalize(
         self,

@@ -265,44 +265,68 @@ async def _run_pipeline_admitted(
     pipeline_run_id = tx1_out["pipeline_run_id"]
     items_in = tx1_out["items_in"]
 
-    if driver_result.new_items:
-        try:
-            await (await writer.submit(build_seen_post_job(driver_result.new_items)))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "seen post-tx1 write failed for %s items: %s",
-                len(driver_result.new_items),
-                exc,
-            )
-
-    emission_results = []
-    if pipeline.sinks:
-        emitter = SinkEmitter(
-            writer=writer,
-            run_key=effective_run_key,
-            pipeline_name=pipeline.name,
-        )
-        for sink_id in pipeline.sinks:
-            sink_def = next(sink for sink in task.sinks if sink.name == sink_id)
-            sink = get_sink_class(sink_def.type)()
-            sink_params = dict(sink_def.params)
-            sink_params.update(
-                task=task.name,
-                pipeline=pipeline.name,
-                run_key=effective_run_key,
-                cycle_anchor=cycle_anchor.isoformat(),
-                sink_id=sink_id,
-                config_root=task.task_dir,
-            )
-            emission_results.extend(
-                await emitter.emit_all(
-                    sink_id=sink_id,
-                    sink_type=sink_def.type,
-                    sink=sink,
-                    rendered=driver_result.rendered_output,
-                    params=sink_params,
+    async def finalize_tx1_error(exc: Exception) -> RunResult:
+        tx2_out: dict = {}
+        await (
+            await writer.submit(
+                build_tx2_job(
+                    pipeline=pipeline,
+                    stage_defs=stage_defs,
+                    pipeline_run_id=pipeline_run_id,
+                    run_key=effective_run_key,
+                    items=all_items,
+                    driver_result=driver_result,
+                    emission_results=[],
+                    items_in=items_in,
+                    run_level_error=str(exc),
+                    out=tx2_out,
                 )
             )
+        )
+        return RunResult(
+            pipeline_name=pipeline.name,
+            run_key=effective_run_key,
+            status=tx2_out["status"],
+            items_in=items_in,
+            items_out=tx2_out["items_out"],
+            error_msg=tx2_out["error_msg"],
+        )
+
+    emission_results = []
+    try:
+        if driver_result.new_items:
+            await (await writer.submit(build_seen_post_job(driver_result.new_items)))
+
+        if pipeline.sinks:
+            emitter = SinkEmitter(
+                writer=writer,
+                run_key=effective_run_key,
+                pipeline_name=pipeline.name,
+            )
+            for sink_id in pipeline.sinks:
+                sink_def = next(sink for sink in task.sinks if sink.name == sink_id)
+                sink = get_sink_class(sink_def.type)()
+                sink_params = dict(sink_def.params)
+                sink_params.update(
+                    task=task.name,
+                    pipeline=pipeline.name,
+                    run_key=effective_run_key,
+                    cycle_anchor=cycle_anchor.isoformat(),
+                    sink_id=sink_id,
+                    config_root=task.task_dir,
+                )
+                emission_results.extend(
+                    await emitter.emit_all(
+                        sink_id=sink_id,
+                        sink_type=sink_def.type,
+                        sink=sink,
+                        rendered=driver_result.rendered_output,
+                        params=sink_params,
+                    )
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("post-tx1 pipeline phase failed for %s: %s", pipeline.name, exc)
+        return await finalize_tx1_error(exc)
 
     tx2_out: dict = {}
     await (
@@ -326,13 +350,17 @@ async def _run_pipeline_admitted(
         sink_failed = bool(pipeline.sinks) and any(
             not result.success for result in emission_results
         )
-        await apply_post_run_cleanup(
-            writer=writer,
-            task=task,
-            pipeline=pipeline,
-            sink_failed=sink_failed,
-            working_set_ids={item["item_id"] for item in all_items},
-        )
+        try:
+            await apply_post_run_cleanup(
+                writer=writer,
+                task=task,
+                pipeline=pipeline,
+                sink_failed=sink_failed,
+                working_set_ids={item["item_id"] for item in all_items},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("post-run cleanup failed for %s: %s", pipeline.name, exc)
+            return await finalize_tx1_error(exc)
 
     return RunResult(
         pipeline_name=pipeline.name,
