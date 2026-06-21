@@ -9,8 +9,8 @@ and Notion in plain TOML — think of it as n8n in code form.**
 [![Python](https://img.shields.io/pypi/pyversions/sluice-pipeline.svg?color=blue)](https://pypi.org/project/sluice-pipeline/)
 [![License](https://img.shields.io/github/license/nerdneilsfield/sluice-pipeline.svg)](https://github.com/nerdneilsfield/sluice-pipeline/blob/master/LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/nerdneilsfield/sluice-pipeline/ci.yml?branch=master&label=CI)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
-[![Coverage](https://img.shields.io/badge/coverage-80%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
-[![Tests](https://img.shields.io/badge/tests-408%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
+[![Coverage](https://img.shields.io/badge/coverage-77%25-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline)
+[![Tests](https://img.shields.io/badge/tests-421%20passing-brightgreen.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/sluice-pipeline.svg?style=social)](https://github.com/nerdneilsfield/sluice-pipeline)
 
 [**English**](./README.md) · [**简体中文**](./README_ZH.md) · [PyPI](https://pypi.org/project/sluice-pipeline/) · [GitHub](https://github.com/nerdneilsfield/sluice-pipeline)
@@ -864,6 +864,10 @@ $EDITOR .env
 docker compose -f docker-compose.prefect.yml up
 ```
 
+Set `PREFECT_API_AUTH_STRING` in `.env` before starting this stack. The Prefect
+port is bound to `127.0.0.1:4200` by default; put it behind a TLS reverse proxy
+instead of changing the bind address directly.
+
 This starts three things:
 - **Prefect server** — API + dashboard at **http://localhost:4200**
 - **sluice deploy** — auto-registers all cron-enabled pipelines on container start
@@ -1006,8 +1010,8 @@ scheduling, SSRF guard.
 git clone https://github.com/nerdneilsfield/sluice-pipeline
 cd sluice-pipeline
 uv sync --all-extras                # or pip install -e '.[dev,all]'
-pytest -q                           # 408 tests
-pytest --cov=sluice                 # 80% coverage
+pytest -q                           # 421 tests
+pytest --cov=sluice                 # 77% coverage
 ruff check .
 ty check                            # 0 errors
 ```

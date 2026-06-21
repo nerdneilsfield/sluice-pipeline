@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+- Docker Compose deployments now require explicit `POSTGRES_*` values and bind
+  Prefect's host port to `127.0.0.1` by default. Prefect compose stacks also
+  require a non-empty `PREFECT_API_AUTH_STRING`.
+
 ## 0.2.0 — 2026-04-29 (sluice "v1.1" milestone)
 
 ### Added
