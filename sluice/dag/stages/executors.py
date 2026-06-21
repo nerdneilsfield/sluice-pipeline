@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from functools import cmp_to_key
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -143,9 +144,7 @@ class FetchRssExecutor(StageExecutor):
             for entry in list(feed.entries):
                 published = self._entry_date(entry)
                 if published is not None:
-                    if published > window_end + timedelta(hours=1):
-                        continue
-                    if published < window_start or published > window_end:
+                    if published < window_start or published > window_end + timedelta(hours=1):
                         continue
                 guid = str(
                     getattr(entry, "id", None)
@@ -284,6 +283,8 @@ class FilterExecutor(StageExecutor):
         if op == "not_exists":
             return value is None
         if value is None:
+            if op in {"not_contains", "not_in", "not_matches"}:
+                return True
             return False
         if op == "eq":
             return value == target
@@ -578,18 +579,16 @@ class SortExecutor(StageExecutor):
 
     async def execute(self, ctx: StageContext) -> StageResult:
         sort_by = ctx.params.get("sort_by", ctx.params.get("field", "published_at"))
+        sort_type = ctx.params.get("sort_type", "auto")
         reverse = ctx.params.get("sort_order", "desc") == "desc"
         missing = ctx.params.get("sort_missing", "last")
 
-        def key(item: Item) -> tuple[int, Any]:
-            value = _item_value(item, sort_by, MISSING)
-            if value is MISSING or value is None:
-                return (0 if missing == "first" else 2, "")
-            return (1, self._coerce(value))
-
-        present = [item for item in ctx.items if key(item)[0] == 1]
-        absent = [item for item in ctx.items if key(item)[0] != 1]
-        present.sort(key=lambda item: key(item)[1], reverse=reverse)
+        present, absent = self._partition_sorted(
+            ctx.items,
+            sort_by=sort_by,
+            sort_type=sort_type,
+            reverse=reverse,
+        )
         if missing == "drop":
             drops = []
             for item in absent:
@@ -603,19 +602,66 @@ class SortExecutor(StageExecutor):
             ctx.items[:] = present + absent
         return StageResult()
 
+    @classmethod
+    def _partition_sorted(
+        cls,
+        items: list[Item],
+        *,
+        sort_by: str,
+        sort_type: str = "auto",
+        reverse: bool,
+    ) -> tuple[list[Item], list[Item]]:
+        present: list[tuple[Item, tuple[int, Any]]] = []
+        absent: list[Item] = []
+        for item in items:
+            value = _item_value(item, sort_by, MISSING)
+            if value is MISSING or value is None:
+                absent.append(item)
+                continue
+            present.append((item, cls._coerce(value, sort_type=sort_type)))
+        present.sort(
+            key=cmp_to_key(lambda left, right: cls._compare(left[1], right[1], reverse=reverse))
+        )
+        return [item for item, _key in present], absent
+
     @staticmethod
-    def _coerce(value: Any) -> Any:
+    def _coerce(value: Any, *, sort_type: str = "auto") -> tuple[int, Any]:
+        if sort_type == "string":
+            return (2, str(value).lower())
+        if sort_type == "number":
+            try:
+                return (1, float(value))
+            except (TypeError, ValueError):
+                return (3, str(value).lower())
+        if sort_type == "datetime":
+            parsed = value if isinstance(value, datetime) else _parse_dt(str(value))
+            if parsed is not None:
+                return (0, parsed.timestamp())
+            return (3, str(value).lower())
+        if isinstance(value, datetime):
+            return (0, value.timestamp())
         if isinstance(value, str):
             parsed = _parse_dt(value)
             if parsed is not None:
-                return parsed.timestamp()
+                return (0, parsed.timestamp())
             try:
-                return float(value)
+                return (1, float(value))
             except ValueError:
-                return value.lower()
-        if isinstance(value, datetime):
-            return value.timestamp()
-        return value
+                return (2, value.lower())
+        if isinstance(value, (int, float)):
+            return (1, float(value))
+        return (3, str(value).lower())
+
+    @staticmethod
+    def _compare(left: tuple[int, Any], right: tuple[int, Any], *, reverse: bool) -> int:
+        left_type, left_value = left
+        right_type, right_value = right
+        if left_type != right_type:
+            return -1 if left_type < right_type else 1
+        if left_value == right_value:
+            return 0
+        result = -1 if left_value < right_value else 1
+        return -result if reverse else result
 
 
 class LimitExecutor(StageExecutor):
@@ -623,13 +669,49 @@ class LimitExecutor(StageExecutor):
 
     async def execute(self, ctx: StageContext) -> StageResult:
         top_n = int(ctx.params.get("top_n", ctx.params.get("limit", len(ctx.items))))
-        live_ids = {item["item_id"] for item in ctx.live_items()}
-        keep_ids = {item["item_id"] for item in ctx.items[:top_n] if item["item_id"] in live_ids}
+        ordered_items = list(ctx.items)
+        sort_by = ctx.params.get("sort_by")
+        if sort_by:
+            reverse = ctx.params.get("sort_order", "desc") == "desc"
+            sort_type = ctx.params.get("sort_type", "auto")
+            present, absent = SortExecutor._partition_sorted(
+                ordered_items,
+                sort_by=sort_by,
+                sort_type=sort_type,
+                reverse=reverse,
+            )
+            ordered_items = present + absent
+            ctx.items[:] = ordered_items
+
+        group_by = ctx.params.get("group_by")
+        per_group_max = ctx.params.get("per_group_max")
+        group_counts: dict[Any, int] = {}
+        keep_ids: set[Any] = set()
+        for item in ordered_items:
+            if item.is_dropped():
+                continue
+            if group_by and per_group_max is not None:
+                group_value = _item_value(item, group_by, MISSING)
+                group_key = self._hashable_key(group_value)
+                if group_counts.get(group_key, 0) >= int(per_group_max):
+                    continue
+                group_counts[group_key] = group_counts.get(group_key, 0) + 1
+            if len(keep_ids) >= top_n:
+                continue
+            keep_ids.add(item["item_id"])
         return StageResult(
             drops=[
                 _drop(item, "limit") for item in ctx.live_items() if item["item_id"] not in keep_ids
             ]
         )
+
+    @staticmethod
+    def _hashable_key(value: Any) -> Any:
+        try:
+            hash(value)
+        except TypeError:
+            return json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
+        return value
 
 
 class RenderExecutor(StageExecutor):
