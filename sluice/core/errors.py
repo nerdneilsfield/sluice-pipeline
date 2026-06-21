@@ -55,3 +55,7 @@ class AllProvidersExhausted(LLMError):
     def __init__(self, model_chain: list[str]):
         super().__init__(f"all tiers exhausted: {model_chain}")
         self.model_chain = model_chain
+
+
+class UpgradeError(SluiceError):
+    """Raised when a v3 upgrade step cannot complete safely."""
