@@ -11,9 +11,18 @@ from sluice.dag.rotation.copy import copy_carryover
 from sluice.dag.rotation.drain import drain_running_pipelines
 from sluice.dag.rotation.gate import close_gate, open_gate
 from sluice.dag.rotation.lock import RotationLock
+from sluice.dag.rotation.manifest import (
+    RotationPhase,
+    append_phase,
+    clear_manifest,
+)
 from sluice.dag.rotation.new_active import build_new_active
 from sluice.dag.rotation.partition import partition_items
-from sluice.dag.rotation.seen_reconcile import reconcile_seen_for_archive
+from sluice.dag.rotation.seen_reconcile import (
+    read_archive_item_rows,
+    write_seen_for_archive,
+)
+from sluice.dag.rotation.startup_guard import safe_mark_failed
 from sluice.dag.rotation.swap import swap_active_file
 from sluice.dag.sluice_config import SluiceConfig
 from sluice.dag.validator import validate_task
@@ -96,7 +105,12 @@ async def rotate_task(
         new_path = str(Path(str(task.db_path) + ".new"))
         _unlink_db_family(new_path)
 
+        # Manifest-tracked rotation phases. Every step that mutates files
+        # is bracketed by append_phase; on crash, startup_guard reads the
+        # last phase and refuses until recovery.
+        task_dir = Path(task.task_dir) if task.task_dir else Path(task.db_path).parent
         try:
+            append_phase(task_dir, RotationPhase.COPYING)
             await build_new_active(new_path, task)
             async with open_active_db(new_path) as conn_new:
                 await copy_carryover(
@@ -106,14 +120,18 @@ async def rotate_task(
                     task=task,
                 )
                 await conn_new.commit()
+            append_phase(task_dir, RotationPhase.COPIED)
 
-            await reconcile_seen_for_archive(
+            # Read archive item rows BEFORE swap (old active still readable).
+            # Seen reconciliation writes AFTER swap succeeds, so a swap
+            # failure cannot leave seen mutated relative to a stale active.
+            archive_item_rows = await read_archive_item_rows(
                 old_active_path=task.db_path,
-                seen_path=task.seen_db,
                 archive_ids=partition.archive_ids,
-                archived_at=anchor_iso,
             )
 
+            # Swap: install new active DB and archive old.
+            append_phase(task_dir, RotationPhase.ARCHIVING_OLD)
             archive_path = await swap_active_file(
                 old_active_path=task.db_path,
                 new_active_path=new_path,
@@ -122,10 +140,37 @@ async def rotate_task(
                 cycle_anchor_iso=anchor_iso,
             )
             swap_succeeded = True
+            append_phase(task_dir, RotationPhase.INSTALLED)
+
+            # Now safe to reconcile seen: if this fails, the new active DB
+            # is already installed and the worst case is duplicate re-ingest
+            # on the next cycle (recoverable).
+            append_phase(task_dir, RotationPhase.SEEN_RECONCILING)
+            await write_seen_for_archive(
+                seen_path=task.seen_db,
+                item_rows=archive_item_rows,
+                archived_at=anchor_iso,
+            )
+            append_phase(task_dir, RotationPhase.SEEN_RECONCILED)
+            append_phase(task_dir, RotationPhase.GZIPPING)
+            append_phase(task_dir, RotationPhase.DONE)
+            clear_manifest(task_dir)
         except Exception:
-            # If this runs after swap_active_file installed the new DB, new_path is
-            # already gone. _unlink_db_family is missing-ok by design.
-            _unlink_db_family(new_path)
+            # If swap succeeded, the new DB is installed and we should NOT
+            # roll back file state. If swap failed, clean up the new path.
+            if not swap_succeeded:
+                _unlink_db_family(new_path)
+                safe_mark_failed(
+                    task_dir,
+                    reason="rotation_failed_pre_swap",
+                    details={"phase": "pre_swap"},
+                )
+            else:
+                safe_mark_failed(
+                    task_dir,
+                    reason="rotation_failed_post_swap",
+                    details={"phase": "post_swap"},
+                )
             raise
 
         return RotationResult(
