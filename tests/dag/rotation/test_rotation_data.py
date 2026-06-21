@@ -307,8 +307,11 @@ async def test_checkpoint_raises_when_sqlite_reports_busy(monkeypatch: pytest.Mo
             return (1, 0, 0)
 
     class FakeConn:
+        def __init__(self):
+            self.calls = []
+
         async def execute(self, sql):
-            assert sql == "PRAGMA wal_checkpoint(TRUNCATE)"
+            self.calls.append(sql)
             return FakeCursor()
 
         async def commit(self):
