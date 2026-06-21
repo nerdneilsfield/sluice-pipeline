@@ -321,7 +321,8 @@ async def _backfill_stage_attempt_log(
         run_row = await run_cur.fetchone()
         if run_row is None:
             raise UpgradeError(
-                f"stage_attempt_log id={log_id} references missing pipeline_run_id={pipeline_run_id}"
+                f"stage_attempt_log id={log_id} references missing "
+                f"pipeline_run_id={pipeline_run_id}"
             )
         _id, cycle_anchor = run_row
         await conn.execute(

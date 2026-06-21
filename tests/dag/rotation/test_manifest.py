@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from sluice.dag.rotation.manifest import (
-    ManifestRecord,
     RotationPhase,
     append_phase,
     atomic_write_json,
@@ -106,8 +105,6 @@ def test_atomic_write_json_cleans_up_temp_on_failure(
     target = tmp_path / "out.json"
     target.write_text("existing")
 
-    real_replace = os.replace
-
     def failing_replace(src, dst):
         raise OSError("injected replace failure")
 
@@ -118,6 +115,3 @@ def test_atomic_write_json_cleans_up_temp_on_failure(
     assert not (tmp_path / "out.json.tmp").exists()
     # Original untouched
     assert target.read_text() == "existing"
-
-
-import os

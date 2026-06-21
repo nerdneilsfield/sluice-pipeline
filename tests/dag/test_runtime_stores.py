@@ -5,15 +5,14 @@ from pathlib import Path
 import pytest
 
 from sluice.dag import db
-from sluice.dag._name import safe_name
 from sluice.dag.dynamic_tables import (
     migrate_task_dynamic_tables,
     upgrade_task_dynamic_tables,
 )
 from sluice.dag.stores.pipeline_state import PipelineStateStore
+from sluice.dag.stores.pipelines import PipelinesStore
 from sluice.dag.stores.stage_attempt_log import StageAttemptLogStore
 from sluice.dag.stores.stage_state import StageStateStore
-from sluice.dag.stores.pipelines import PipelinesStore
 
 
 async def _v3_db(tmp_path: Path, *, pipeline_name: str = "blog", stage_name: str = "extract"):
@@ -149,7 +148,7 @@ async def test_stage_attempt_log_next_attempt_no_v3_scoped_by_run(tmp_path: Path
             "VALUES (?, 'extract', 'n', 'success')",
             (run_b,),
         )
-        stage_run_b = cur.lastrowid
+        # stage_run_b intentionally unused; we only need the stage row to exist
 
         store = StageAttemptLogStore(conn)
         # Append two attempts for run_a, one for run_b, all on same item

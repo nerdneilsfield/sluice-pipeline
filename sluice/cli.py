@@ -361,7 +361,9 @@ def upgrade_v3(
     from sluice.dag.upgrade import UpgradeService
 
     cfg = load_task(task_dir)
-    service = UpgradeService(task_dir=task_dir, db_path=Path(cfg.db_path), seen_path=Path(cfg.seen_db))
+    service = UpgradeService(
+        task_dir=task_dir, db_path=Path(cfg.db_path), seen_path=Path(cfg.seen_db),
+    )
 
     if dry_run:
         result = asyncio.run(service.dry_run())
@@ -383,9 +385,14 @@ def upgrade_v3(
             if not result.ok:
                 typer.echo(f"upgrade step failed: {result.error}", err=True)
                 raise typer.Exit(code=1)
-        result = asyncio.run(service.write_runtime_marker(runtime_core="v3"))
+        result = asyncio.run(
+            service.write_runtime_marker(runtime_core="v3")
+        )
     else:
-        typer.echo("specify one of --dry-run / --backup <dir> / --restore <dir> / --recover", err=True)
+        typer.echo(
+            "specify one of --dry-run / --backup <dir> / --restore <dir> / --recover",
+            err=True,
+        )
         raise typer.Exit(code=2)
 
     if not result.ok:

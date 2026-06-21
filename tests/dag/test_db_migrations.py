@@ -121,8 +121,8 @@ async def test_apply_v3_migrations_creates_sink_outbox(tmp_path: Path):
     assert "UNIQUE(idempotency_key)" in sql_compact
     assert "REFERENCES pipelines(id)" in sql
     assert "ON DELETE CASCADE" in sql
-    assert "CHECK(status IN ('pending','sent','retryable','failed'))" in sql or \
-        "CHECK(status IN ('pending','sent','retryable','failed'))".replace(" ", "") in sql.replace(" ", "")
+    check_clause = "CHECK(status IN ('pending','sent','retryable','failed'))"
+    assert check_clause in sql or check_clause.replace(" ", "") in sql.replace(" ", "")
     assert len(indexes) >= 2
 
 

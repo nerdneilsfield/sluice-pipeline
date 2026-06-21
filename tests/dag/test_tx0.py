@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -31,7 +30,10 @@ def _task(tmp_path: Path) -> TaskConfig:
         window=WindowDef(anchor="0 8 * * *", length="24h"),
         deployments=DeploymentsDef(pipelines="all"),
         sources=[SourceDef("feed", "rss", {"url": "x"})],
-        sinks=[SinkDef("out", "file_md", {"out_dir": str(tmp_path / "out"), "filename_template": "d.md"})],
+        sinks=[SinkDef(
+            "out", "file_md",
+            {"out_dir": str(tmp_path / "out"), "filename_template": "d.md"},
+        )],
         stages=[StageDef("fetch", "fetch_rss", {}), StageDef("dedupe", "dedupe", {})],
         pipelines=[
             PipelineDef(
