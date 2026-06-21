@@ -78,16 +78,40 @@ def deploy(
     typer.echo(f"Registered {n_pip} pipeline deployment(s) + {n_rot} rotation deployment(s).")
 
 
+def _assert_clean_rotation(task_dir: Path) -> None:
+    """Refuse to proceed if rotation is in a recoverable state.
+
+    Called by every CLI command that opens task.db_path. Prevents silent
+    empty-DB creation over a mid-swap task.
+    """
+    from sluice.dag.rotation.startup_guard import (
+        RotationRecoveryRequired,
+        assert_clean_rotation_state,
+    )
+
+    try:
+        assert_clean_rotation_state(task_dir)
+    except RotationRecoveryRequired as exc:
+        typer.echo(f"rotation recovery required: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
+
+
 @app.command()
 def migrate(
     task_name: str = typer.Argument(..., metavar="TASK"),
     config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
 ):
     """Apply schema migrations and create per-stage/per-pipeline tables for TASK."""
+    task_dir = config_dir / "tasks" / task_name
+    if not task_dir.exists():
+        typer.echo(f"task not found: {task_dir}", err=True)
+        raise typer.Exit(code=2)
+    _assert_clean_rotation(task_dir)
+
     from sluice.dag.admin import migrate_task
     from sluice.dag.loader import load_task
 
-    task = load_task(config_dir / "tasks" / task_name)
+    task = load_task(task_dir)
     asyncio.run(migrate_task(task))
     typer.echo(f"Migrated task {task_name!r}.")
 
@@ -155,10 +179,17 @@ def items_kill(
     reason: str = typer.Option("killed_by_operator", "--reason"),
     config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
 ):
+    """Mark one item as dropped so subsequent runs skip it."""
+    task_dir = config_dir / "tasks" / task_name
+    if not task_dir.exists():
+        typer.echo(f"task not found: {task_dir}", err=True)
+        raise typer.Exit(code=2)
+    _assert_clean_rotation(task_dir)
+
     from sluice.dag.admin import kill_item
     from sluice.dag.loader import load_task
 
-    task = load_task(config_dir / "tasks" / task_name)
+    task = load_task(task_dir)
     try:
         asyncio.run(kill_item(task, item_id=item_id, reason=reason))
     except KeyError:
@@ -426,6 +457,74 @@ def upgrade_v3(
         typer.echo(f"upgrade failed: {result.error}", err=True)
         raise typer.Exit(code=1)
     typer.echo(json.dumps({"ok": True, "phase": result.phase.value if result.phase else None}))
+
+
+@app.command("rotation-recover")
+def rotation_recover(
+    task: str = typer.Option(..., "-t", "--task"),
+    config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Clear the .failed marker and sidecar manifest even when the "
+            "active DB is missing; operator asserts recovery is unnecessary."
+        ),
+    ),
+):
+    """Clear a stuck rotation .failed marker and sidecar manifest.
+
+    Use after a rotation crash when the active DB is intact and the
+    operator has verified no real recovery is needed. With --force, also
+    clears when active DB is missing (operator takes responsibility for
+    restoring it separately).
+    """
+    task_dir = config_dir / "tasks" / task
+    if not task_dir.exists():
+        typer.echo(f"task not found: {task_dir}", err=True)
+        raise typer.Exit(code=2)
+
+    from pathlib import Path as _Path
+
+    from sluice.dag.loader import load_task
+    from sluice.dag.rotation.manifest import (
+        clear_failed,
+        clear_manifest,
+        has_failed_marker,
+        latest_phase,
+        manifest_path,
+    )
+
+    cfg = load_task(task_dir)
+    active_missing = not _Path(cfg.db_path).exists()
+
+    if active_missing and not force:
+        typer.echo(
+            f"active DB missing at {cfg.db_path}; refusing to clear markers "
+            "without --force (operator must restore the active DB separately)",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    phase = latest_phase(task_dir)
+    failed = has_failed_marker(task_dir)
+    if not failed and phase is None:
+        typer.echo("no rotation failed marker or manifest found; nothing to recover")
+        return
+
+    clear_failed(task_dir)
+    clear_manifest(task_dir)
+    typer.echo(
+        json.dumps(
+            {
+                "ok": True,
+                "cleared_failed_marker": failed,
+                "cleared_manifest_phase": phase.value if phase else None,
+                "active_db_present": not active_missing,
+                "manifest_path": str(manifest_path(task_dir)),
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

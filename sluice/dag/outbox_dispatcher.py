@@ -23,18 +23,30 @@ async def finalize_delivery(
     based on outbox counts.
 
     Returns the new status if advanced, or None if the row was not in
-    'pending_delivery' or no outbox rows exist.
+    'pending_delivery' or outbox is not fully resolved yet.
 
     Monotonic: only updates rows WHERE status = 'pending_delivery'. Never
     moves success/partial/failed backward.
+
+    Counts BOTH 'pending' and 'retryable' as "still in flight". The
+    pipeline cannot advance while either is non-zero — otherwise
+    unclaimed rows would silently leave messages undelivered.
     """
-    store = SinkOutboxStore(active)
-    sent, retryable, failed = await store.count_terminal_for_run(run_id)
-    total = sent + retryable + failed
+    cur = await active.execute(
+        "SELECT status, COUNT(*) FROM sink_outbox WHERE run_id = ? "
+        "GROUP BY status",
+        (run_id,),
+    )
+    rows = await cur.fetchall()
+    counts = dict(rows)
+    sent = int(counts.get("sent", 0))
+    retryable = int(counts.get("retryable", 0))
+    failed = int(counts.get("failed", 0))
+    pending = int(counts.get("pending", 0))
+    total = sent + retryable + failed + pending
     if total == 0:
         return None
-
-    if retryable > 0:
+    if pending > 0 or retryable > 0:
         return None  # still in flight
     if failed > 0 and sent > 0:
         new_status = "partial"
