@@ -38,37 +38,20 @@ class SinkOutboxStore:
         trying to rewrite history.
 
         Returns the number of newly-inserted rows.
+
+        Concurrency: uses ``INSERT OR IGNORE`` so concurrent enqueues for the
+        same (run_id, sink_id, ordinal) do not raise IntegrityError. After
+        each insert we re-SELECT to verify the row's payload hash matches
+        and raise if not.
         """
         if not payloads:
             return 0
         now = datetime.now(timezone.utc).isoformat()
         inserted = 0
         for ordinal, idempotency_key, payload_json, message_kind in payloads:
-            existing = await (
-                await self.conn.execute(
-                    "SELECT idempotency_key, payload_json FROM sink_outbox "
-                    "WHERE run_id = ? AND sink_id = ? AND ordinal = ?",
-                    (run_id, sink_id, ordinal),
-                )
-            ).fetchone()
-            if existing is not None:
-                existing_idem, existing_payload = existing
-                existing_hash = hashlib.sha256(
-                    (existing_payload or "").encode("utf-8")
-                ).hexdigest()
-                new_hash = hashlib.sha256(
-                    payload_json.encode("utf-8")
-                ).hexdigest()
-                if existing_idem != idempotency_key or existing_hash != new_hash:
-                    raise RuntimeError(
-                        f"outbox row (run_id={run_id}, sink_id={sink_id!r}, "
-                        f"ordinal={ordinal}) already exists with a different "
-                        "payload or idempotency key; refusing to overwrite"
-                    )
-                continue  # idempotent replay
-            await self.conn.execute(
+            cur = await self.conn.execute(
                 """
-                INSERT INTO sink_outbox (
+                INSERT OR IGNORE INTO sink_outbox (
                   run_id, run_key, sink_id, sink_type, ordinal,
                   idempotency_key, message_kind, payload_json, status,
                   attempts, next_attempt_at, claim_owner, claim_token,
@@ -83,7 +66,31 @@ class SinkOutboxStore:
                     now, now,
                 ),
             )
-            inserted += 1
+            if cur.rowcount:
+                inserted += 1
+            # Verify existing-or-new row matches the caller's payload.
+            existing = await (
+                await self.conn.execute(
+                    "SELECT idempotency_key, payload_json FROM sink_outbox "
+                    "WHERE run_id = ? AND sink_id = ? AND ordinal = ?",
+                    (run_id, sink_id, ordinal),
+                )
+            ).fetchone()
+            if existing is None:
+                continue  # INSERT OR IGNORE somehow left no row; defensive
+            existing_idem, existing_payload = existing
+            existing_hash = hashlib.sha256(
+                (existing_payload or "").encode("utf-8")
+            ).hexdigest()
+            new_hash = hashlib.sha256(
+                payload_json.encode("utf-8")
+            ).hexdigest()
+            if existing_idem != idempotency_key or existing_hash != new_hash:
+                raise RuntimeError(
+                    f"outbox row (run_id={run_id}, sink_id={sink_id!r}, "
+                    f"ordinal={ordinal}) already exists with a different "
+                    "payload or idempotency key; refusing to overwrite"
+                )
         return inserted
 
     async def claim_pending(

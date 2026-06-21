@@ -87,9 +87,11 @@ class HeartbeatTask:
         try:
             from sluice.dag.writer import WriteJob
 
-            await self._writer.submit(WriteJob(run=_job))
-            # writer.submit returns the awaited future; the job has run by now.
-            # We need to await the future too.
+            # Double-await: writer.submit enqueues and returns a future; the
+            # future resolves once the job has actually executed on the
+            # writer thread. Without the inner await, `out` would still be
+            # empty when we read it.
+            await (await self._writer.submit(WriteJob(run=_job)))
         except Exception as exc:  # noqa: BLE001
             logger.error("heartbeat writer job failed: %s", exc)
             return False

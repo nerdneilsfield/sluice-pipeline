@@ -123,7 +123,6 @@ async def test_claim_pending_returns_batch_with_token(tmp_path: Path):
             batch_size=10,
         )
     assert len(claimed) == 2
-    assert {c["claim_owner"] for c in claimed} == {"dispatcher-A"} if False else True
     assert all(c["idempotency_key"].startswith("idem-") for c in claimed)
 
 
