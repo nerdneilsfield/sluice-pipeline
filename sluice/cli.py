@@ -326,5 +326,61 @@ def gc_rotate(
         raise typer.Exit(code=1)
 
 
+upgrade_app = typer.Typer(no_args_is_help=True, help="v3 core upgrade workflow")
+app.add_typer(upgrade_app, name="upgrade")
+
+
+@upgrade_app.command("v3")
+def upgrade_v3(
+    task: str = typer.Option(..., "-t", "--task"),
+    config_dir: Path = typer.Option(Path("./configs"), "--config-dir", "-c"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    backup_dir: Path | None = typer.Option(None, "--backup"),
+    restore: Path | None = typer.Option(None, "--restore", help="restore from a backup dir"),
+    recover: bool = typer.Option(False, "--recover", help="recover an interrupted upgrade"),
+):
+    """Run the v3 core upgrade workflow for one task."""
+    task_dir = config_dir / "tasks" / task
+    if not task_dir.exists():
+        typer.echo(f"task not found: {task_dir}", err=True)
+        raise typer.Exit(code=2)
+
+    from sluice.dag.loader import load_task
+    from sluice.dag.upgrade import UpgradeService
+
+    cfg = load_task(task_dir)
+    service = UpgradeService(task_dir=task_dir, db_path=Path(cfg.db_path), seen_path=Path(cfg.seen_db))
+
+    if dry_run:
+        result = asyncio.run(service.dry_run())
+    elif restore is not None:
+        result = asyncio.run(service.restore(restore))
+    elif recover:
+        result = asyncio.run(service.recover(None))
+    elif backup_dir is not None:
+        result = asyncio.run(service.backup(backup_dir))
+        if not result.ok:
+            typer.echo(f"backup failed: {result.error}", err=True)
+            raise typer.Exit(code=1)
+        # Continue with fixed + dynamic migration and marker write.
+        for step in (
+            service.apply_fixed_migration,
+            service.apply_dynamic_migration,
+        ):
+            result = asyncio.run(step())
+            if not result.ok:
+                typer.echo(f"upgrade step failed: {result.error}", err=True)
+                raise typer.Exit(code=1)
+        result = asyncio.run(service.write_runtime_marker(runtime_core="v3"))
+    else:
+        typer.echo("specify one of --dry-run / --backup <dir> / --restore <dir> / --recover", err=True)
+        raise typer.Exit(code=2)
+
+    if not result.ok:
+        typer.echo(f"upgrade failed: {result.error}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps({"ok": True, "phase": result.phase.value if result.phase else None}))
+
+
 if __name__ == "__main__":
     app()
