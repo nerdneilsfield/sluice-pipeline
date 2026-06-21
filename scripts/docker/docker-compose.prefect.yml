@@ -8,7 +8,8 @@
 #   $EDITOR .env
 #   docker compose -f docker-compose.prefect.yml up
 #
-# Prefect UI will be available at http://localhost:4200
+# Prefect UI will be available on the host loopback interface at
+# http://localhost:4200
 #
 # To trigger a pipeline manually from the Prefect UI or CLI:
 #   prefect deployment run sluice-<pipeline_id>/sluice-<pipeline_id>
@@ -20,13 +21,13 @@ services:
     env_file:
       - .env
     ports:
-      - "4200:4200"
+      - "127.0.0.1:4200:4200"
     volumes:
       # Persist Prefect's own SQLite state (flows, runs, deployments)
       - prefect-data:/root/.prefect
     environment:
       TZ: ${TZ:-UTC}
-      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?Set PREFECT_AUTH_STRING in scripts/docker/.env}
+      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_API_AUTH_STRING:?PREFECT_API_AUTH_STRING must be set}
       PREFECT_UI_API_URL: ${PREFECT_UI_API_URL:-http://localhost:4200/api}
     healthcheck:
       test:
@@ -57,7 +58,7 @@ services:
       TZ: ${TZ:-UTC}
       # Point sluice (and Prefect client) at the local Prefect server
       PREFECT_API_URL: ${PREFECT_API_URL:-http://prefect-server:4200/api}
-      PREFECT_API_AUTH_STRING: ${PREFECT_AUTH_STRING:?Set PREFECT_AUTH_STRING in scripts/docker/.env}
+      PREFECT_API_AUTH_STRING: ${PREFECT_API_AUTH_STRING:?PREFECT_API_AUTH_STRING must be set}
     depends_on:
       prefect-server:
         condition: service_healthy

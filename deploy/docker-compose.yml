@@ -2,9 +2,9 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-prefect}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prefect}
-      POSTGRES_DB: ${POSTGRES_DB:-prefect}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (no weak default)}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -13,18 +13,19 @@ services:
     depends_on:
       - postgres
     environment:
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER:-prefect}:${POSTGRES_PASSWORD:-prefect}@postgres:5432/${POSTGRES_DB:-prefect}
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (no weak default)}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
       PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_SERVER_API_AUTH_STRING: ${PREFECT_API_AUTH_STRING:?PREFECT_API_AUTH_STRING must be set}
     command: prefect server start --host 0.0.0.0
     ports:
-      - "4200:4200"
+      - "127.0.0.1:4200:4200"
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health', timeout=2).read()",
+          "import base64, os, urllib.request; req = urllib.request.Request('http://localhost:4200/api/health'); auth = os.environ['PREFECT_SERVER_API_AUTH_STRING']; req.add_header('Authorization', 'Basic ' + base64.b64encode(auth.encode()).decode()); urllib.request.urlopen(req, timeout=2).read()",
         ]
       interval: 5s
       timeout: 3s
@@ -37,7 +38,7 @@ services:
         condition: service_healthy
     environment:
       PREFECT_API_URL: http://prefect-server:4200/api
-      PREFECT_API_AUTH_STRING: ${PREFECT_API_AUTH_STRING:-}
+      PREFECT_API_AUTH_STRING: ${PREFECT_API_AUTH_STRING:?PREFECT_API_AUTH_STRING must be set}
     volumes:
       # Compose resolves host paths relative to deploy/docker-compose.yml.
       - ../data:/data
