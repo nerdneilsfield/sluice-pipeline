@@ -13,6 +13,7 @@ from sluice.dag.sinks._impl._push_base import PushBatchItem, PushSinkBase
 # Pre-process non-standard bullet (U+00B7) into standard Markdown "-" so
 # markdown-it renders them as real <ul>/<li> lists in HTML emails.
 _BULLET_RE = re.compile(r"^[ \t]*·[ \t]", re.MULTILINE)
+_SMTP_TIMEOUT_SECONDS = 30.0
 
 
 def _smtp_tls_kwargs(port: int, starttls: bool) -> dict:
@@ -35,21 +36,25 @@ async def _aiosmtplib_send(
     recipient: str,
     mail_domain: str = "localhost",
 ) -> str:
+    tls_kwargs = _smtp_tls_kwargs(port, starttls)
+    if username and not (tls_kwargs["use_tls"] or tls_kwargs["start_tls"]):
+        raise RuntimeError("SMTP authentication requires TLS or STARTTLS")
     smtp = aiosmtplib.SMTP(
         hostname=host,
         port=port,
         local_hostname=mail_domain,
-        **_smtp_tls_kwargs(port, starttls),
+        timeout=_SMTP_TIMEOUT_SECONDS,
+        **tls_kwargs,
     )
     try:
-        await smtp.connect()
+        await smtp.connect(timeout=_SMTP_TIMEOUT_SECONDS)
         if username:
             await smtp.login(username, password)
         # Use sendmail() with raw bytes to guarantee headers are not stripped
         raw = message.as_bytes()
         msg_id = message["Message-ID"] or "no-id"
         sender = message["From"]
-        await smtp.sendmail(sender, [recipient], raw)
+        await smtp.sendmail(sender, [recipient], raw, timeout=_SMTP_TIMEOUT_SECONDS)
         await smtp.quit()
     except Exception:
         try:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,15 @@ def chunks_from_batch(batch: list[PushBatchItem]) -> list[SinkChunk]:
         )
         for ordinal, item in enumerate(batch, start=1)
     ]
+
+
+async def aclose_if_available(resource: object) -> None:
+    aclose = getattr(resource, "aclose", None)
+    if aclose is None:
+        return
+    result = aclose()
+    if inspect.isawaitable(result):
+        await result
 
 
 class V1PushSinkAdapter(Sink):

@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 import uuid
 
@@ -21,6 +22,10 @@ _FEISHU_MAX_TEXT = 4000
 _FEISHU_MAX_POST_CONTENT = 4000
 _FEISHU_MIN_SEND_GAP = 0.2
 _MAX_429_RETRIES = 2
+_RETRY_AFTER_RE = re.compile(
+    r"(?:retry[_ -]?after|Retry-After)\s*[:=]?\s*(?P<seconds>\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 
 
 def _sign(secret: str, ts: int) -> str:
@@ -78,6 +83,21 @@ def _split_post_line(line: list[dict], max_chars: int) -> list[list[dict]]:
 
 def _post_content_size(content: list[list[dict]]) -> int:
     return sum(len(seg.get("text", "")) for line in content for seg in line)
+
+
+def _parse_retry_after(value, default: float) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return default
+    return seconds if seconds >= 0 else default
+
+
+def _parse_retry_after_text(text: str, default: float) -> float:
+    match = _RETRY_AFTER_RE.search(text)
+    if match is None:
+        return default
+    return _parse_retry_after(match.group("seconds"), default)
 
 
 class FeishuSink(PushSinkBase):
@@ -362,13 +382,9 @@ class FeishuSink(PushSinkBase):
                     except RuntimeError as exc:
                         if "Too Many Requests" not in str(exc) or attempt >= _MAX_429_RETRIES:
                             raise
-                        retry_after = _FEISHU_MIN_SEND_GAP * 10
-                        for part in str(exc).split():
-                            try:
-                                retry_after = float(part)
-                                break
-                            except ValueError:
-                                continue
+                        retry_after = _parse_retry_after_text(
+                            str(exc), _FEISHU_MIN_SEND_GAP * 10
+                        )
                         self._next_send_mono = time.monotonic() + retry_after
                         continue
                     gap = max(_FEISHU_MIN_SEND_GAP, self._delay)
@@ -383,13 +399,9 @@ class FeishuSink(PushSinkBase):
                     except RuntimeError as exc:
                         if "Too Many Requests" not in str(exc) or attempt >= _MAX_429_RETRIES:
                             raise
-                        retry_after = _FEISHU_MIN_SEND_GAP * 10
-                        for part in str(exc).split():
-                            try:
-                                retry_after = float(part)
-                                break
-                            except ValueError:
-                                continue
+                        retry_after = _parse_retry_after_text(
+                            str(exc), _FEISHU_MIN_SEND_GAP * 10
+                        )
                         self._next_send_mono = time.monotonic() + retry_after
                         continue
                     gap = max(_FEISHU_MIN_SEND_GAP, self._delay)
@@ -406,9 +418,11 @@ class FeishuSink(PushSinkBase):
         for attempt in range(1 + _MAX_429_RETRIES):
             resp = await self._client.post(self._url, json=body)
             if resp.status_code == 429:
-                retry_after = _FEISHU_MIN_SEND_GAP * 10
+                retry_after = _parse_retry_after(
+                    resp.headers.get("Retry-After"), _FEISHU_MIN_SEND_GAP * 10
+                )
                 try:
-                    retry_after = float(resp.json().get("retry_after", retry_after))
+                    retry_after = _parse_retry_after(resp.json().get("retry_after"), retry_after)
                 except Exception:
                     pass
                 self._next_send_mono = time.monotonic() + retry_after

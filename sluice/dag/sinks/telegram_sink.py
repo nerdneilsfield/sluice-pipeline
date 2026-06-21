@@ -6,6 +6,7 @@ from sluice.dag.sinks._impl.telegram import TelegramSink as V1TelegramSink
 from sluice.dag.sinks._v1_push import (
     PushPayload,
     V1PushSinkAdapter,
+    aclose_if_available,
     bool_param,
     chunks_from_batch,
     env_param,
@@ -41,7 +42,11 @@ class TelegramDagSink(V1PushSinkAdapter):
         )
 
     async def _build_batch(self, rendered: Any, params: dict):
-        return self._sink(params).build_batch(rendered_context(rendered, params))
+        sink = self._sink(params)
+        try:
+            return sink.build_batch(rendered_context(rendered, params))
+        finally:
+            await aclose_if_available(sink)
 
     async def chunks(self, rendered: Any, params: dict) -> list[SinkChunk]:
         return chunks_from_batch(await self._build_batch(rendered, params))
@@ -50,7 +55,11 @@ class TelegramDagSink(V1PushSinkAdapter):
         payload = chunk.payload
         raw_payload = payload.payload if isinstance(payload, PushPayload) else payload
         recipient = payload.recipient if isinstance(payload, PushPayload) else None
-        return await self._sink(params).send_one(raw_payload, recipient=recipient)
+        sink = self._sink(params)
+        try:
+            return await sink.send_one(raw_payload, recipient=recipient)
+        finally:
+            await aclose_if_available(sink)
 
 
 bind_sink("telegram", TelegramDagSink)
