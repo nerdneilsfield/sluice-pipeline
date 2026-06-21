@@ -160,9 +160,15 @@ def _toml_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, str):
         return json.dumps(value)
+    if value is None:
+        raise ConfigError("unsupported TOML value: None")
+    if isinstance(value, dict):
+        raise ConfigError("unsupported TOML value: dict")
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
-    return repr(value)
+    if isinstance(value, int | float):
+        return repr(value)
+    raise ConfigError(f"unsupported TOML value: {type(value).__name__}")
 
 
 def _toml_array(array_name: str, entries: list[dict[str, Any]]) -> str:
