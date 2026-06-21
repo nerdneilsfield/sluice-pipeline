@@ -264,3 +264,38 @@ async def test_sink_pending_retry_is_not_dropped_by_seen_dedupe(tmp_path, monkey
         assert (await cur.fetchone())[0] == "success"
         cur = await active.execute("SELECT count(*) FROM pipeline_P_sink_pending")
         assert (await cur.fetchone())[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_emission_exception_after_tx1_finalizes_failed_and_deadmits(tmp_path, monkeypatch):
+    async def fake_fetch(self, url):
+        return RSS
+
+    async def raise_after_tx1(self, **kwargs):
+        raise RuntimeError("emission transport exploded")
+
+    monkeypatch.setattr(FetchRssExecutor, "_default_fetch_text", fake_fetch)
+    monkeypatch.setattr("sluice.dag.run_pipeline.SinkEmitter.emit_all", raise_after_tx1)
+    task = _task(tmp_path)
+    await ensure_dynamic_tables(task)
+    writer = WriterThread(active_path=task.db_path, seen_path=task.seen_db)
+    await writer.start()
+    try:
+        result = await run_pipeline(
+            task,
+            "P",
+            writer=writer,
+            now=datetime(2026, 5, 4, 8, 0, tzinfo=timezone.utc),
+        )
+    finally:
+        await writer.stop()
+
+    assert result.status == "failed"
+    assert result.error_msg == "emission transport exploded"
+    async with db.open_active_db(task.db_path) as active:
+        cur = await active.execute(
+            "SELECT status, error_msg FROM pipelines WHERE pipeline_name = 'P'"
+        )
+        assert await cur.fetchone() == ("failed", "emission transport exploded")
+        cur = await active.execute("SELECT count(*) FROM pipeline_admissions")
+        assert (await cur.fetchone())[0] == 0

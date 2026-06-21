@@ -6,7 +6,9 @@ import sys
 import pytest
 
 import sluice.dag.sinks  # noqa: F401
-from sluice.dag.sinks.base import get_sink_class
+from sluice.dag.sinks._impl._push_base import PushBatchItem
+from sluice.dag.sinks._v1_push import PushPayload
+from sluice.dag.sinks.base import SinkChunk, get_sink_class
 from sluice.dag.sinks.file_md import FileMdSink
 
 
@@ -20,6 +22,26 @@ class _NotionAdapter:
 
     async def replace_page_blocks(self, page_id, markdown):  # pragma: no cover - create path only
         raise AssertionError("not used")
+
+
+class _CloseTrackingPushImpl:
+    def __init__(self, *, fail_build=False, fail_send=False):
+        self.fail_build = fail_build
+        self.fail_send = fail_send
+        self.closed = False
+
+    def build_batch(self, ctx):
+        if self.fail_build:
+            raise RuntimeError("build failed")
+        return [PushBatchItem(kind="item", payload=f"payload:{ctx.context['markdown']}")]
+
+    async def send_one(self, payload, recipient=None):
+        if self.fail_send:
+            raise RuntimeError("send failed")
+        return f"sent:{payload}:{recipient}"
+
+    async def aclose(self):
+        self.closed = True
 
 
 @pytest.mark.asyncio
@@ -42,6 +64,79 @@ async def test_builtin_sink_adapters_are_bound():
     assert get_sink_class("telegram") is TelegramDagSink
     assert get_sink_class("feishu") is FeishuDagSink
     assert get_sink_class("notion") is NotionDagSink
+
+
+@pytest.mark.parametrize(
+    "module_name,class_name",
+    [
+        ("sluice.dag.sinks.telegram_sink", "TelegramDagSink"),
+        ("sluice.dag.sinks.feishu_sink", "FeishuDagSink"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_push_adapter_closes_impl_after_chunks_success(monkeypatch, module_name, class_name):
+    module = __import__(module_name, fromlist=[class_name])
+    cls = getattr(module, class_name)
+    impl = _CloseTrackingPushImpl()
+
+    monkeypatch.setattr(cls, "_sink", lambda self, params: impl)
+    sink = cls()
+
+    chunks = await sink.chunks("# hello", {"sink_id": "push"})
+
+    assert chunks[0].payload.payload == "payload:# hello"
+    assert impl.closed
+
+
+@pytest.mark.parametrize(
+    "module_name,class_name",
+    [
+        ("sluice.dag.sinks.telegram_sink", "TelegramDagSink"),
+        ("sluice.dag.sinks.feishu_sink", "FeishuDagSink"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_push_adapter_closes_impl_after_chunks_exception(
+    monkeypatch, module_name, class_name
+):
+    module = __import__(module_name, fromlist=[class_name])
+    cls = getattr(module, class_name)
+    impl = _CloseTrackingPushImpl(fail_build=True)
+
+    monkeypatch.setattr(cls, "_sink", lambda self, params: impl)
+    sink = cls()
+
+    with pytest.raises(RuntimeError, match="build failed"):
+        await sink.chunks("# hello", {"sink_id": "push"})
+
+    assert impl.closed
+
+
+@pytest.mark.parametrize(
+    "module_name,class_name",
+    [
+        ("sluice.dag.sinks.telegram_sink", "TelegramDagSink"),
+        ("sluice.dag.sinks.feishu_sink", "FeishuDagSink"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_push_adapter_closes_impl_after_emit_exception(monkeypatch, module_name, class_name):
+    module = __import__(module_name, fromlist=[class_name])
+    cls = getattr(module, class_name)
+    impl = _CloseTrackingPushImpl(fail_send=True)
+
+    monkeypatch.setattr(cls, "_sink", lambda self, params: impl)
+    sink = cls()
+    chunk = SinkChunk(
+        ordinal=1,
+        payload=PushPayload("payload", "recipient"),
+        message_kind="item",
+    )
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        await sink.emit(chunk, {"sink_id": "push"})
+
+    assert impl.closed
 
 
 @pytest.mark.asyncio

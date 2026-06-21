@@ -5,7 +5,8 @@ import pytest
 import respx
 
 from sluice.config import BaseEndpoint, KeyConfig, ModelEntry, Provider, ProvidersConfig
-from sluice.core.errors import AllProvidersExhausted, ConfigError
+from sluice.core.errors import AllProvidersExhausted, BudgetExceeded, ConfigError
+from sluice.llm.budget import RunBudget
 from sluice.llm.client import StageLLMConfig
 from sluice.llm.middleware import LLMMiddleware
 from sluice.llm.pool import ProviderPool
@@ -23,7 +24,12 @@ def _ok(text: str = "ok") -> httpx.Response:
 
 
 def make_pool(
-    monkeypatch, *, primary_input: int = 10_000, long_ctx_input: int = 1_000_000
+    monkeypatch,
+    *,
+    primary_input: int = 10_000,
+    long_ctx_input: int = 1_000_000,
+    primary_input_price_per_1k: float = 0.0,
+    primary_output_price_per_1k: float = 0.0,
 ) -> ProviderPool:
     monkeypatch.setenv("K", "v")
     return ProviderPool(
@@ -39,7 +45,14 @@ def make_pool(
                             key=[KeyConfig(value="env:K", weight=1)],
                         )
                     ],
-                    models=[ModelEntry(model_name="m1", max_input_tokens=primary_input)],
+                    models=[
+                        ModelEntry(
+                            model_name="m1",
+                            max_input_tokens=primary_input,
+                            input_price_per_1k=primary_input_price_per_1k,
+                            output_price_per_1k=primary_output_price_per_1k,
+                        )
+                    ],
                 ),
                 Provider(
                     name="p2",
@@ -78,6 +91,29 @@ async def test_chat_success(monkeypatch):
         r.post("/chat/completions").mock(return_value=_ok("hi"))
         out = await LLMMiddleware(pool, cfg).chat([{"role": "user", "content": "hello"}])
         assert out == "hi"
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_fails_without_provider_fallback(monkeypatch):
+    pool = make_pool(
+        monkeypatch,
+        primary_input_price_per_1k=1.0,
+        primary_output_price_per_1k=1.0,
+    )
+    cfg = StageLLMConfig(model="p1/m1", fallback_model="p2/m2", same_model_retries=0)
+    budget = RunBudget(max_calls=10, max_usd=0.001)
+    with respx.mock(assert_all_called=False) as r:
+        primary_route = r.post("https://main/chat/completions").mock(return_value=_ok("primary"))
+        fallback_route = r.post("https://fb/chat/completions").mock(return_value=_ok("fallback"))
+
+        with pytest.raises(BudgetExceeded):
+            await LLMMiddleware(pool, cfg, budget=budget).chat(
+                [{"role": "user", "content": "hello"}]
+            )
+
+        assert primary_route.call_count == 0
+        assert fallback_route.call_count == 0
+        assert budget.calls == 0
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sqlite3
 
 import pytest
@@ -69,6 +70,74 @@ async def test_writer_propagates_errors(tmp_path):
             await f
     finally:
         await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_writer_fatal_exit_fails_pending_and_rejects_later_submit(tmp_path):
+    active = tmp_path / "active.db"
+    seen = tmp_path / "seen.db"
+    writer = WriterThread(active_path=str(active), seen_path=str(seen))
+    release = asyncio.Event()
+
+    async def fatal_run():
+        await release.wait()
+        raise RuntimeError("writer task died")
+
+    writer._run = fatal_run  # type: ignore[method-assign]
+    await writer.start()
+    try:
+
+        async def noop(active_conn, seen_conn):
+            pass
+
+        pending = await writer.submit(WriteJob(run=noop))
+        release.set()
+
+        with pytest.raises(RuntimeError, match="writer task died"):
+            await asyncio.wait_for(pending, timeout=0.5)
+
+        with pytest.raises(RuntimeError, match="writer task died"):
+            await writer.submit(WriteJob(run=noop))
+    finally:
+        with contextlib.suppress(RuntimeError):
+            await writer.stop()
+
+
+@pytest.mark.asyncio
+async def test_writer_open_db_failure_rejects_submit_and_stop_releases_lock(
+    tmp_path, monkeypatch
+):
+    active = tmp_path / "active.db"
+    seen = tmp_path / "seen.db"
+    writer = WriterThread(active_path=str(active), seen_path=str(seen))
+
+    @contextlib.asynccontextmanager
+    async def fail_open_active_db(path):
+        raise RuntimeError("open active failed")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr("sluice.dag.writer.open_active_db", fail_open_active_db)
+
+    await writer.start()
+    try:
+
+        async def noop(active_conn, seen_conn):
+            pass
+
+        pending = await writer.submit(WriteJob(run=noop))
+        await asyncio.sleep(0)
+
+        with pytest.raises(RuntimeError, match="open active failed"):
+            await asyncio.wait_for(pending, timeout=0.5)
+
+        with pytest.raises(RuntimeError, match="open active failed"):
+            await writer.submit(WriteJob(run=noop))
+    finally:
+        await writer.stop()
+
+    lock = RotationLock(active)
+    lock.acquire()
+    lock.release()
 
 
 @pytest.mark.asyncio

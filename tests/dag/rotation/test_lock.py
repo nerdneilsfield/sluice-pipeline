@@ -88,6 +88,53 @@ def test_lock_held_by_live_process_blocks(tmp_path):
     assert lock.is_held()
 
 
+def test_lock_with_live_pid_but_mismatched_identity_is_stale(tmp_path, monkeypatch):
+    db = _path(tmp_path)
+    lock_file = Path(str(db) + ".rotation.lock")
+    lock_file.write_text(f"{os.getpid()}\t2099-01-01T00:00:00+00:00\told-start\tboot-a")
+    monkeypatch.setattr(
+        "sluice.dag.rotation.lock._get_process_identity",
+        lambda pid: ("new-start", "boot-a"),
+    )
+
+    lock = RotationLock(db, stale_after_seconds=999_999)
+
+    assert not lock.is_held()
+    assert not lock_file.exists()
+    lock.acquire()
+    lock.release()
+
+
+def test_lock_with_live_pid_and_matching_identity_is_held(tmp_path, monkeypatch):
+    db = _path(tmp_path)
+    lock_file = Path(str(db) + ".rotation.lock")
+    lock_file.write_text(f"{os.getpid()}\t2099-01-01T00:00:00+00:00\tstart-a\tboot-a")
+    monkeypatch.setattr(
+        "sluice.dag.rotation.lock._get_process_identity",
+        lambda pid: ("start-a", "boot-a"),
+    )
+
+    lock = RotationLock(db, stale_after_seconds=999_999)
+
+    assert lock.is_held()
+    with pytest.raises(RuntimeError, match="already held"):
+        lock.acquire()
+
+
+def test_old_format_lock_with_live_pid_is_conservatively_held(tmp_path, monkeypatch):
+    db = _path(tmp_path)
+    lock_file = Path(str(db) + ".rotation.lock")
+    lock_file.write_text(f"{os.getpid()}\t2099-01-01T00:00:00+00:00")
+    monkeypatch.setattr(
+        "sluice.dag.rotation.lock._get_process_identity",
+        lambda pid: ("different-start", "different-boot"),
+    )
+
+    lock = RotationLock(db, stale_after_seconds=999_999)
+
+    assert lock.is_held()
+
+
 def test_malformed_recent_lock_is_held(tmp_path):
     db = _path(tmp_path)
     lock_file = Path(str(db) + ".rotation.lock")

@@ -7,6 +7,7 @@ import pytest
 
 from sluice.core.errors import ConfigError
 from sluice.dag.admin import (
+    _toml_value,
     kill_item,
     list_items,
     migrate_task,
@@ -207,3 +208,13 @@ out = "./out"
     assert task_doc["task"]["db_path"] == 'data/"demo".db'
     assert task_doc["task"]["window"]["length"] == '24"h'
     assert pipelines_doc["pipelines"][0]["cron"] == "0 8 * * *"
+
+
+@pytest.mark.parametrize("value", [None, {"nested": "table"}])
+def test_toml_value_rejects_unsupported_values(value):
+    with pytest.raises(ConfigError):
+        _toml_value(value)
+
+
+def test_toml_value_escapes_strings():
+    assert _toml_value('Etc/"Quoted"') == '"Etc/\\"Quoted\\""'

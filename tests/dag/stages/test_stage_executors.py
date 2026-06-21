@@ -107,6 +107,34 @@ async def test_fetch_rss_uses_injected_fetch_and_skips_known_ids():
 
 
 @pytest.mark.asyncio
+async def test_fetch_rss_includes_items_within_window_end_grace():
+    rss = """<?xml version="1.0"?><rss><channel>
+    <item><guid>late</guid><link>https://example.com/late</link><title>Late</title>
+      <pubDate>Mon, 04 May 2026 02:30:00 GMT</pubDate></item>
+    <item><guid>too-late</guid><link>https://example.com/too-late</link><title>Too Late</title>
+      <pubDate>Mon, 04 May 2026 03:30:00 GMT</pubDate></item>
+    </channel></rss>"""
+
+    executor = get_executor_class("fetch_rss")(
+        _fetch_text=lambda _url: rss,
+        _now=lambda: datetime(2026, 5, 4, 2, tzinfo=timezone.utc),
+    )
+
+    result = await executor.execute(
+        make_ctx(
+            "fetch_rss",
+            params={
+                "feeds": [{"name": "feed", "url": "https://feed.example/rss"}],
+                "window_start": "2026-05-04T00:00:00+00:00",
+                "window_end": "2026-05-04T02:00:00+00:00",
+            },
+        )
+    )
+
+    assert [item["item_id"] for item in result.new_items] == ["feed:late"]
+
+
+@pytest.mark.asyncio
 async def test_drop_stages_return_drop_records():
     a = make_item("a", url="https://x/a")
     b = make_item("b", url="https://x/a")
@@ -122,6 +150,33 @@ async def test_drop_stages_return_drop_records():
         make_ctx("cross_dedupe", items=[c, d], params={"key": "url"})
     )
     assert [(drop.item_id, drop.reason) for drop in cross.drops] == [("d", "duplicate:url")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("op", "value"),
+    [
+        ("not_contains", "spam"),
+        ("not_in", ["spam"]),
+        ("not_matches", "spam"),
+    ],
+)
+async def test_filter_negative_ops_treat_missing_field_as_not_matching(op, value):
+    item = make_item("a")
+
+    result = await get_executor_class("filter")().execute(
+        make_ctx(
+            "filter",
+            items=[item],
+            params={
+                "mode": "keep_if_all",
+                "rules": [{"field": "extras.category", "op": op, "value": value}],
+            },
+        )
+    )
+
+    assert result.drops == []
+    assert not item.is_dropped()
 
 
 @pytest.mark.asyncio
@@ -177,6 +232,76 @@ async def test_field_filter_html_strip_sort_limit_and_render():
         )
     )
     assert rendered.rendered_output == "beta,gamma"
+
+
+@pytest.mark.asyncio
+async def test_sort_handles_mixed_value_types_without_crashing():
+    dated = make_item("dated", published_at=datetime(2026, 5, 4, 2, tzinfo=timezone.utc))
+    text = make_item("text", published_at="not-a-date")
+    missing = make_item("missing", published_at=None)
+    items = [text, missing, dated]
+
+    result = await get_executor_class("sort")().execute(
+        make_ctx(
+            "sort",
+            items=items,
+            params={"sort_by": "published_at", "sort_order": "desc"},
+        )
+    )
+
+    assert result.errors == []
+    assert [item["item_id"] for item in items] == ["dated", "text", "missing"]
+
+
+@pytest.mark.asyncio
+async def test_sort_type_string_forces_lexical_order():
+    two = make_item("two", score="2")
+    ten = make_item("ten", score="10")
+    items = [two, ten]
+
+    await get_executor_class("sort")().execute(
+        make_ctx(
+            "sort",
+            items=items,
+            params={
+                "sort_by": "score",
+                "sort_type": "string",
+                "sort_order": "asc",
+            },
+        )
+    )
+
+    assert [item["item_id"] for item in items] == ["ten", "two"]
+
+
+@pytest.mark.asyncio
+async def test_limit_sorts_and_caps_per_group_before_global_top_n():
+    a = make_item("a", source_name="x", score=9)
+    b = make_item("b", source_name="x", score=8)
+    c = make_item("c", source_name="y", score=7)
+    d = make_item("d", source_name="y", score=6)
+    items = [d, c, b, a]
+
+    result = await get_executor_class("limit")().execute(
+        make_ctx(
+            "limit",
+            items=items,
+            params={
+                "sort_by": "score",
+                "sort_order": "desc",
+                "group_by": "source_name",
+                "per_group_max": 1,
+                "top_n": 2,
+            },
+        )
+    )
+
+    assert [item["item_id"] for item in items] == ["a", "b", "c", "d"]
+    assert [drop.item_id for drop in result.drops] == ["b", "d"]
+    assert not a.is_dropped()
+    assert not c.is_dropped()
+    assert b.is_dropped()
+    assert d.is_dropped()
 
 
 @pytest.mark.asyncio

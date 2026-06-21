@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -204,6 +205,64 @@ async def test_pipelines_upsert_resets_on_retry(tmp_path):
         assert items_in is None
         assert items_out is None
         assert err is None
+
+
+@pytest.mark.asyncio
+async def test_pipelines_upsert_running_concurrent_same_run_key_is_atomic(tmp_path):
+    p = tmp_path / "active.db"
+    async with db.open_active_db(str(p)):
+        pass
+
+    arrived = 0
+    both_looked_up = asyncio.Event()
+
+    def pause_after_lookup(store: PipelinesStore) -> None:
+        original = store.get_run_id
+
+        async def wrapped(run_key: str) -> int | None:
+            nonlocal arrived
+            result = await original(run_key)
+            arrived += 1
+            if arrived == 2:
+                both_looked_up.set()
+            await both_looked_up.wait()
+            return result
+
+        store.get_run_id = wrapped
+
+    async with db.open_active_db(str(p)) as conn_a, db.open_active_db(str(p)) as conn_b:
+        store_a = PipelinesStore(conn_a)
+        store_b = PipelinesStore(conn_b)
+        pause_after_lookup(store_a)
+        pause_after_lookup(store_b)
+
+        async def upsert(store: PipelinesStore, conn, started_at: str) -> int:
+            run_id = await store.upsert_running(
+                run_key="same-rk",
+                task="t",
+                pipeline_name="p",
+                cycle_anchor="c",
+                trigger="cron",
+                started_at=started_at,
+            )
+            await conn.commit()
+            return run_id
+
+        run_ids = await asyncio.gather(
+            upsert(store_a, conn_a, "2026-05-03T08:00:00+00:00"),
+            upsert(store_b, conn_b, "2026-05-03T08:30:00+00:00"),
+        )
+
+    async with db.open_active_db(str(p)) as conn:
+        cur = await conn.execute(
+            "SELECT id, status, finished_at, items_in, items_out, error_msg FROM pipelines"
+        )
+        rows = await cur.fetchall()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert run_ids == [row[0], row[0]]
+    assert row[1:] == ("running", None, None, None, None)
 
 
 @pytest.mark.asyncio
