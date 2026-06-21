@@ -214,7 +214,7 @@ Recovery phase matrix:
 | `copying` | old active, maybe new temp | old active valid | remove incomplete new temp, reopen gate | old active invalid |
 | `copied` | old active, complete new temp | both integrity checks pass | continue to archive old | any DB invalid |
 | `archiving_old` | old active or archive temp, new temp | one valid old copy exists | finish old archive move or restore old active | neither old copy valid |
-| `installing_new` | archive temp, maybe active, new temp | new temp valid | install new active or restore old active | both active and new invalid |
+| `installing_new` | archive temp, maybe active, new temp | new temp valid, or active/archive temp valid for old restore | install new active or restore old active | new invalid and no valid old active/archive temp |
 | `installed` | active is new, archive temp | active integrity check passes | run seen reconcile | active missing/invalid |
 | `seen_reconciling` | active is new, archive temp | active valid | retry idempotent seen reconcile | seen DB unavailable after retries |
 | `seen_reconciled` | active is new, archive temp | active valid | gzip archive temp | archive temp missing |
@@ -287,15 +287,39 @@ same transaction, and never moves `success`, `partial`, or `failed` backward.
 `partial` with `delivery_pending = true`; detailed/admin views may show the
 internal status.
 
+### Runtime Resource Lifecycle
+
+Long-running runners must own and close network resources explicitly:
+
+- when the LLM `ProviderPool` is per-run, the runner owns it and closes it in a
+  `finally` block after heartbeat shutdown and before returning from pipeline
+  execution;
+- when a future worker shares a `ProviderPool` across concurrent runs, ownership
+  moves to the worker lifecycle or a reference-counted manager; per-run code
+  must not close a shared pool;
+- the outbox dispatcher owns sink instances and uses an async lifecycle
+  protocol: `async with sink` when supported, otherwise call an `aclose()` helper
+  in `finally` if the sink exposes one;
+- sink lifecycle scope is one claimed batch per sink instance. The dispatcher
+  may reuse a sink only inside that batch scope; batch completion or
+  cancellation must close it;
+- sink send failures, retry scheduling, cancellation, and finalization must all
+  pass through the same cleanup path.
+
+This is part of the v3 runtime contract, not optional hygiene. A v3 runner or
+dispatcher that leaks `httpx.AsyncClient`, SMTP, or provider-pool clients is a
+runtime bug.
+
 ### Rotation Startup Order
 
 Process startup and pre-rotation order is fixed:
 
-1. acquire rotation lock;
-2. read sidecar manifest and run recovery;
-3. validate the existing active DB and run integrity check;
-4. open or keep closed the rotation gate;
-5. start writer/admissions only after recovery succeeds.
+1. acquire shared `runtime-core.lock` for the whole runner/admin lifetime;
+2. acquire rotation lock;
+3. read sidecar manifest and run recovery;
+4. validate the existing active DB and run integrity check;
+5. open or keep closed the rotation gate;
+6. start writer/admissions only after recovery succeeds.
 
 If `.failed` exists, or if active DB is missing without a valid sidecar
 recovery path, `open_active_db()` must not create an empty active DB. Only
@@ -324,10 +348,15 @@ Upgrade path:
 
 1. `sluice upgrade v3 --dry-run` validates fixed schema, dynamic table
    discovery, available disk, backup path, and rotation sidecar location.
-2. `sluice upgrade v3 --backup <dir>` checkpoints DBs, writes backups, applies
-   fixed migration, runs dynamic migration, and records a v3 marker.
-3. Mixed v2/v3 runners are forbidden for the same task once v3 migration starts.
-4. Rollback is backup restore only after stopping all runners; no automatic
+2. `sluice upgrade v3 --backup <dir>` checkpoints DBs, writes backups, writes an
+   upgrade manifest, applies fixed migration, runs dynamic migration, and records
+   a v3 marker as the final phase.
+3. `sluice upgrade v3 --restore <backup_dir>` validates `backup_manifest.json`,
+   writes a restore manifest, verifies file hashes and `PRAGMA integrity_check`,
+   restores active DB, seen DB, and sidecar state with atomic file operations,
+   then writes a runtime marker matching the restored DB runtime/schema.
+4. Mixed v2/v3 runners are forbidden for the same task once v3 migration starts.
+5. Rollback is backup restore only after stopping all runners; no automatic
    downgrade is promised.
 
 The upgrade command writes `backup_manifest.json` with active DB, seen DB,
@@ -335,6 +364,52 @@ sidecar directory, schema versions, file hashes, and restore instructions.
 Runner startup must compare DB v3 marker, task flag, and process
 `runtime_core`; mismatch fails closed.
 Normal startup with `runtime_core = "v2"` must not mutate a v2 DB to v3.
+
+Runner startup also checks DB-external runtime files:
+
+```text
+<task-dir>/.sluice/runtime-core.lock
+<task-dir>/.sluice/runtime-core.json
+<task-dir>/.sluice/upgrade/<id>.manifest.json
+<task-dir>/.sluice/restore/<id>.manifest.json
+```
+
+The marker records task name, runtime core, schema version, upgrade id, backup
+manifest hash, and restored runtime when applicable. All runner, admin, upgrade,
+restore, and recovery commands first lock `runtime-core.lock`. Runners and admin
+commands hold a shared flock for their whole running lifetime, not only startup.
+Upgrade, restore, and recovery hold an exclusive flock for the whole operation.
+Marker read/write happens only while this lock is held. If the marker, active
+DB marker, and config/process runtime core disagree, startup fails closed before
+opening writer/admission paths. Restoring a pre-v3 backup writes
+`runtime_core = "v2"` unless the operator passes an explicit target runtime and
+the restored DB has already been migrated to that target.
+
+Lock order is fixed across all paths:
+
+1. runtime lock;
+2. rotation lock;
+3. DB writer/admission gates.
+
+Reverse acquisition is forbidden and covered by tests.
+
+Upgrade and restore manifests are phase journals. Upgrade phases include:
+
+```text
+backup_written -> fixed_migrated -> dynamic_migrated -> marker_written -> done
+```
+
+Restore phases include:
+
+```text
+validating -> restoring_active -> restoring_seen -> restoring_sidecar
+-> marker_written -> done
+```
+
+Each phase uses temp file write, file fsync, replace, and parent fsync before
+advancing. Startup that finds an incomplete upgrade/restore manifest fails
+closed and points the operator to explicit `sluice upgrade v3 --recover` or
+`sluice upgrade v3 --restore <backup_dir>`.
 
 ## Error Handling
 
@@ -361,10 +436,24 @@ Add focused regression tests before implementation:
 - outbox claim is atomic across two dispatchers and expired claims are retried;
 - outbox retry keeps ordinal, payload, and idempotency key stable;
 - provider without idempotency is documented as at-least-once;
+- `ProviderPool` and sink clients close on success, failure, retryable send
+  errors, and cancellation;
+- runtime lock/marker rejects mixed v2/v3 runners, already-running runner
+  upgrades, and upgrade/restore races;
+- `sluice upgrade v3 --restore <backup_dir>` validates hashes and integrity
+  before restoring files;
+- upgrade/restore manifests recover or fail closed after injected crash in every
+  phase;
 - rotation recovery covers every manifest phase, missing active DB, corrupt
   sidecar, missing active DB without sidecar, WAL checkpoint failure, DB file
   fsync failure, and parent fsync failure injection;
 - existing CLI/config/stage/sink black-box tests pass unchanged.
+
+Security hardening that is not required to make the v3 storage model correct is
+tracked separately in `2026-06-21-v3.1-security-hardening-design.md` and
+implemented by `2026-06-21-v3.1-security-hardening.md`. That follow-up must
+remove direct `jinja2.Template` use and add prompt boundary plus LLM output
+schema validation before v3 is considered production-ready.
 
 ## Rollout
 
@@ -373,13 +462,18 @@ Ship as separate reviewable commits or PRs:
 1. fixed schema migration and v3 flags;
 2. task-aware dynamic migration;
 3. upgrade command and compatibility smoke tests;
-4. tx0, run-scoped state, and attempt scoping;
-5. leased heartbeat and fencing recovery;
-6. outbox schema/store and enqueue-only tx2;
-7. dispatcher claim/send/mark and delivery finalization;
-8. sidecar rotation manifest persistence;
-9. swap primitive refactor and startup recovery;
-10. compatibility docs, migration guide, and operator recovery guide.
+4. store-layer run-scoped state and attempt scoping;
+5. phase-layer tx0/tx1/tx2 threading and resume/skip semantics;
+6. eligibility, cleanup, admin, and rotation readers updated for explicit scope;
+7. leased heartbeat, fencing recovery, and LLM provider-pool cleanup;
+8. outbox schema/store and enqueue-only tx2;
+9. dispatcher claim/send/mark, sink lifecycle cleanup, and delivery
+   finalization;
+10. sidecar rotation manifest persistence;
+11. swap happy path and manifest-backed primitives;
+12. crash recovery matrix and startup recovery;
+13. compatibility docs, migration guide, operator recovery guide, and v3.1
+    security hardening handoff.
 
 Then do lower-risk cleanup: merge sink layers, add store helpers, and split the
 executor god module.

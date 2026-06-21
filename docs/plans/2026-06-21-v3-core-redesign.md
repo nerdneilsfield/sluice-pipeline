@@ -6,7 +6,7 @@
 
 **Architecture:** Add v3 migration artifacts behind an upgrade gate; the upgrade service applies fixed schema changes after backup, then runs task-aware dynamic migrations. Introduce `tx0` so every pipeline has `run_id` before stage execution. Persist sink payloads before dispatch and use a DB-external rotation sidecar manifest for recovery before opening active DB.
 
-**Tech Stack:** Python 3.12, `aiosqlite`, existing `WriteJob`/`WriterThread`, pytest, ruff, ty.
+**Tech Stack:** Python 3.11+, `aiosqlite`, existing `WriteJob`/`WriterThread`, pytest, ruff, ty.
 
 ---
 
@@ -131,6 +131,9 @@ rtk git commit -m "feat(schema): Upgrade dynamic state tables"
 **Files:**
 - Modify: `sluice/cli.py`
 - Create: `sluice/dag/upgrade.py`
+- Create: `sluice/dag/runtime_lock.py`
+- Modify: `sluice/dag/run_pipeline.py`
+- Modify: `sluice/dag/admin.py`
 - Test: `tests/dag/test_upgrade.py`
 - Test: `tests/dag/test_cli_compat.py`
 
@@ -144,6 +147,27 @@ Assert:
 - `sluice upgrade v3 --backup <dir>` writes active/seen DB backups and
   `backup_manifest.json`;
 - restore validation runs `integrity_check` and verifies hashes;
+- `sluice upgrade v3 --restore <backup_dir>` refuses live runners, verifies
+  `backup_manifest.json` hashes, validates `PRAGMA integrity_check`, restores
+  active DB, seen DB, and sidecar files, then writes a fresh runtime marker;
+- runner startup locks `<task-dir>/.sluice/runtime-core.lock`, reads
+  `<task-dir>/.sluice/runtime-core.json`, holds the shared lock for the entire
+  runner/admin lifetime, and fails closed when sidecar marker, DB marker, config
+  `runtime_core`, and process `runtime_core` disagree;
+- `sluice upgrade v3 --backup`, `--restore`, and `--recover` fail while an
+  already-running runner holds the shared runtime lock;
+- upgrade, restore, and recovery commands take an exclusive flock and reject
+  concurrent runner startup or already-running runners;
+- upgrade writes phase manifest
+  `backup_written -> fixed_migrated -> dynamic_migrated -> marker_written`;
+- restore writes phase manifest
+  `validating -> restoring_active -> restoring_seen -> restoring_sidecar -> marker_written`;
+- startup finds incomplete upgrade/restore manifests and fails closed with
+  explicit recover/restore instructions;
+- `sluice upgrade v3 --recover` can safely finish `marker_written`, retry
+  idempotent post-backup migration phases when hashes and schema match, or fail
+  closed with a required `--restore <backup_dir>` when the manifest phase is
+  ambiguous;
 - startup fails closed when DB marker, task `runtime_core`, and process
   `runtime_core` mismatch;
 - `runtime_core = "v2"` startup does not apply v3 fixed migration;
@@ -152,34 +176,75 @@ Assert:
 
 **Step 2: Implement upgrade service**
 
-Add backup manifest fields: active DB path/hash/schema, seen DB
-path/hash/schema, sidecar dir, task name, timestamp, and restore instructions.
-Mixed v2/v3 runners are forbidden once v3 marker exists.
+Add backup manifest fields: active DB path/hash/schema/runtime, seen DB
+path/hash/schema/runtime, sidecar dir, task name, timestamp, and restore
+instructions. Mixed v2/v3 runners are forbidden once v3 marker exists. Persist
+`<task-dir>/.sluice/runtime-core.lock` as the stable lock file and
+`<task-dir>/.sluice/runtime-core.json` with task name, runtime core, schema
+version, upgrade id, and backup manifest hash. Add `--restore <backup_dir>` to
+validate the backup manifest and restore active DB, seen DB, and sidecar state
+only while holding the exclusive runtime lock for the full operation. The
+restored marker must match the restored DB runtime/schema; a v2 backup restores
+a v2 marker unless an explicit migrated target is provided.
+
+Add `sluice/dag/runtime_lock.py` as the common lock helper. Runner and admin
+entrypoints acquire a shared lock for their whole lifetime. Upgrade, restore,
+and recover acquire an exclusive lock for their whole operation.
 
 **Step 3: Verify and commit**
 
 ```bash
 rtk env COVERAGE_FILE=/tmp/sluice-v3-upgrade.coverage uv run pytest -q tests/dag/test_upgrade.py tests/dag/test_cli_compat.py
-rtk git add sluice/cli.py sluice/dag/upgrade.py tests/dag/test_upgrade.py tests/dag/test_cli_compat.py
+rtk git add sluice/cli.py sluice/dag/upgrade.py sluice/dag/runtime_lock.py sluice/dag/run_pipeline.py sluice/dag/admin.py tests/dag/test_upgrade.py tests/dag/test_cli_compat.py
 rtk git commit -m "feat(upgrade): Add v3 upgrade workflow"
 ```
 
-### Task 4: Introduce tx0 and Run-Scoped State
+### Task 4a: Store-Layer Run-Scoped State
 
 **Files:**
-- Modify: `sluice/dag/rotation/admission.py`
 - Modify: `sluice/dag/stores/pipelines.py`
 - Modify: `sluice/dag/stores/pipeline_state.py`
 - Modify: `sluice/dag/stores/stage_state.py`
 - Modify: `sluice/dag/stores/stage_attempt_log.py`
+- Test: `tests/dag/test_runtime_stores.py`
+
+**Step 1: Write failing tests**
+
+Assert:
+
+- two runs with same `item_id` in same cycle create two state rows;
+- `next_attempt_no` is scoped by `run_id`;
+- all dynamic readers require `run_id`, or explicitly document cycle aggregate
+  lookup.
+
+**Step 2: Update store APIs**
+
+Thread `run_id` and `cycle_id` through `PipelineStateStore`,
+`StageStateStore`, `StageAttemptLogStore`, and `PipelineStore` helpers. Bare
+`item_id` lookup is forbidden in new v3 APIs. Keep temporary compatibility
+wrappers for unchanged callers with an explicit `legacy=True` or
+`scope="legacy"` argument so this commit can pass v2 smoke tests; Task 4b/4c
+remove runtime use of those wrappers.
+
+**Step 3: Verify and commit**
+
+```bash
+rtk env COVERAGE_FILE=/tmp/sluice-v3-store-state.coverage uv run pytest -q tests/dag/test_runtime_stores.py
+rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
+rtk ruff check sluice/dag/stores tests/dag/test_runtime_stores.py
+rtk git add sluice/dag/stores/pipelines.py sluice/dag/stores/pipeline_state.py sluice/dag/stores/stage_state.py sluice/dag/stores/stage_attempt_log.py tests/dag/test_runtime_stores.py
+rtk git commit -m "feat(runtime): Scope stores by run"
+```
+
+### Task 4b: Phase-Layer tx0 and Run Threading
+
+**Files:**
+- Modify: `sluice/dag/rotation/admission.py`
+- Modify: `sluice/dag/run_pipeline.py`
 - Modify: `sluice/dag/phases/tx1.py`
 - Modify: `sluice/dag/phases/tx2.py`
 - Modify: `sluice/dag/phases/resume.py`
 - Modify: `sluice/dag/phases/skip_compute.py`
-- Modify: `sluice/dag/eligibility.py`
-- Modify: `sluice/dag/cleanup.py`
-- Modify: `sluice/dag/rotation/partition.py`
-- Test: `tests/dag/test_runtime_stores.py`
 - Test: `tests/dag/test_run_pipeline.py`
 
 **Step 1: Write failing tests**
@@ -191,10 +256,7 @@ Assert:
 - admission row is linked to `run_id`;
 - tx0 never takes over expired/fenced rows and does not overwrite live rows with
   another lease owner/version;
-- two runs with same `item_id` in same cycle create two state rows;
-- `next_attempt_no` is scoped by `run_id`;
-- all dynamic readers require `run_id`, or explicitly document cycle aggregate
-  lookup.
+- tx1, tx2, resume, and skip paths use the `run_id` produced by tx0.
 
 **Step 2: Implement tx0**
 
@@ -204,19 +266,53 @@ when owner/version match the same admission; otherwise skip or fail closed.
 Expired rows are recovered only by drain fencing. Stage execution receives
 `run_id` before any stage runs.
 
-**Step 3: Thread `run_id` and `cycle_id`**
+**Step 3: Thread `run_id` and `cycle_id` through phases**
 
-Update all store APIs and query sites. Bare `item_id` lookup is forbidden
-outside migration/admin legacy inspection paths.
+Update phase call sites so they receive explicit run context instead of deriving
+state from pipeline/item names.
 
 **Step 4: Verify and commit**
 
 ```bash
-rtk env COVERAGE_FILE=/tmp/sluice-v3-state.coverage uv run pytest -q tests/dag/test_runtime_stores.py tests/dag/test_run_pipeline.py
+rtk env COVERAGE_FILE=/tmp/sluice-v3-phase-state.coverage uv run pytest -q tests/dag/test_run_pipeline.py
 rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
-rtk ruff check sluice/dag tests/dag/test_runtime_stores.py tests/dag/test_run_pipeline.py
-rtk git add sluice/dag/rotation/admission.py sluice/dag/stores/pipelines.py sluice/dag/stores/pipeline_state.py sluice/dag/stores/stage_state.py sluice/dag/stores/stage_attempt_log.py sluice/dag/phases/tx1.py sluice/dag/phases/tx2.py sluice/dag/phases/resume.py sluice/dag/phases/skip_compute.py sluice/dag/eligibility.py sluice/dag/cleanup.py sluice/dag/rotation/partition.py tests/dag/test_runtime_stores.py tests/dag/test_run_pipeline.py
-rtk git commit -m "feat(runtime): Scope state by run"
+rtk ruff check sluice/dag/rotation/admission.py sluice/dag/run_pipeline.py sluice/dag/phases tests/dag/test_run_pipeline.py
+rtk git add sluice/dag/rotation/admission.py sluice/dag/run_pipeline.py sluice/dag/phases/tx1.py sluice/dag/phases/tx2.py sluice/dag/phases/resume.py sluice/dag/phases/skip_compute.py tests/dag/test_run_pipeline.py
+rtk git commit -m "feat(runtime): Create runs before stages"
+```
+
+### Task 4c: Eligibility and Legacy Readers Use Explicit Scope
+
+**Files:**
+- Modify: `sluice/dag/eligibility.py`
+- Modify: `sluice/dag/cleanup.py`
+- Modify: `sluice/dag/admin.py`
+- Modify: `sluice/dag/rotation/partition.py`
+- Modify: `sluice/dag/rotation/copy.py`
+- Test: `tests/dag/test_eligibility.py`
+- Test: `tests/dag/test_admin.py`
+- Test: `tests/dag/rotation/test_copy.py`
+
+**Step 1: Write failing tests**
+
+Assert eligibility, cleanup, admin inspection, partitioning, and rotation copy
+paths never silently aggregate by bare `item_id`. Current-run reads use
+`run_id`; cycle views use `cycle_id` plus a deterministic latest-run rule;
+legacy reads are allowed only in migration/admin commands that label the data as
+legacy.
+
+**Step 2: Update readers**
+
+Convert every runtime reader to require one of: `run_id`, `cycle_id`, or an
+explicit `legacy=True` inspection mode.
+
+**Step 3: Verify and commit**
+
+```bash
+rtk env COVERAGE_FILE=/tmp/sluice-v3-scope-readers.coverage uv run pytest -q tests/dag/test_eligibility.py tests/dag/test_admin.py tests/dag/rotation/test_copy.py
+rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
+rtk git add sluice/dag/eligibility.py sluice/dag/cleanup.py sluice/dag/admin.py sluice/dag/rotation/partition.py sluice/dag/rotation/copy.py tests/dag/test_eligibility.py tests/dag/test_admin.py tests/dag/rotation/test_copy.py
+rtk git commit -m "feat(runtime): Require scoped state reads"
 ```
 
 ### Task 5: Add Leases, Heartbeats, and Fencing
@@ -226,8 +322,10 @@ rtk git commit -m "feat(runtime): Scope state by run"
 - Modify: `sluice/dag/rotation/drain.py`
 - Modify: `sluice/dag/stores/pipelines.py`
 - Modify: `sluice/dag/run_pipeline.py`
+- Modify: `sluice/llm/pool.py`
 - Test: `tests/dag/rotation/test_drain.py`
 - Test: `tests/dag/test_run_pipeline.py`
+- Test: `tests/llm/test_pool.py`
 
 **Step 1: Write failing tests**
 
@@ -239,12 +337,19 @@ Assert:
 - expired running rows are fenced by incrementing `lease_version`;
 - late finalize with old owner/version fails and cannot overwrite failed;
 - fake clock proves heartbeat extends long-running stages.
+- runner closes `ProviderPool` in `finally` after success, stage failure,
+  cancellation, and fenced finalize failure.
 
 **Step 2: Implement heartbeat task**
 
 Runner starts a background heartbeat at `lease_duration / 3` and stops it in
 `finally`. Heartbeat refreshes admission and pipeline leases using fenced
 `WHERE id/run_id, lease_owner, lease_version`.
+
+Close the runner-owned LLM `ProviderPool` in the same `finally` path after the
+heartbeat task is cancelled and awaited. The close path must run whether the
+pipeline succeeds, fails during stages, is cancelled, or loses the fencing
+token.
 
 **Step 3: Implement drain recovery**
 
@@ -257,9 +362,9 @@ Drain classifies admissions:
 **Step 4: Verify and commit**
 
 ```bash
-rtk env COVERAGE_FILE=/tmp/sluice-v3-lease.coverage uv run pytest -q tests/dag/rotation/test_drain.py tests/dag/test_run_pipeline.py
+rtk env COVERAGE_FILE=/tmp/sluice-v3-lease.coverage uv run pytest -q tests/dag/rotation/test_drain.py tests/dag/test_run_pipeline.py tests/llm/test_pool.py
 rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
-rtk git add sluice/dag/rotation/admission.py sluice/dag/rotation/drain.py sluice/dag/stores/pipelines.py sluice/dag/run_pipeline.py tests/dag/rotation/test_drain.py tests/dag/test_run_pipeline.py
+rtk git add sluice/dag/rotation/admission.py sluice/dag/rotation/drain.py sluice/dag/stores/pipelines.py sluice/dag/run_pipeline.py sluice/llm/pool.py tests/dag/rotation/test_drain.py tests/dag/test_run_pipeline.py tests/llm/test_pool.py
 rtk git commit -m "feat(runtime): Fence expired pipeline leases"
 ```
 
@@ -267,6 +372,8 @@ rtk git commit -m "feat(runtime): Fence expired pipeline leases"
 
 **Files:**
 - Create: `sluice/dag/stores/sink_outbox.py`
+- Modify: `sluice/dag/stores/sink_pending.py`
+- Modify: `sluice/dag/phases/run_key_resolve.py`
 - Modify: `sluice/dag/phases/tx2.py`
 - Modify: `sluice/dag/run_pipeline.py`
 - Modify: `sluice/cli.py`
@@ -281,7 +388,8 @@ Assert tx2 writes deterministic outbox rows with stable `payload_json`,
 transaction; pipeline status becomes `pending_delivery` when required rows are
 pending; legacy CLI/API presents that status as `partial` with
 `delivery_pending = true`; when `enable_outbox_dispatch = false`, formal v3 runs
-fail closed before enqueueing delivery work.
+fail closed before enqueueing delivery work; v3 never replays legacy
+`sink_pending` rows or resolves run keys from legacy pending delivery tables.
 
 **Step 2: Implement store enqueue**
 
@@ -290,12 +398,16 @@ It may update only unclaimed `pending`/`retryable` rows. For existing claimed,
 sent, or failed rows, it no-ops after verifying payload hash and
 `idempotency_key`; mismatch raises.
 
+Disable legacy `sink_pending` runtime paths when `runtime_core = "v3"`. Existing
+v2 `sink_pending` rows are migration blockers from Task 2; after upgrade, the
+outbox dispatcher is the only delivery replay source.
+
 **Step 3: Verify and commit**
 
 ```bash
 rtk env COVERAGE_FILE=/tmp/sluice-v3-outbox-enqueue.coverage uv run pytest -q tests/dag/test_emission.py tests/dag/test_run_pipeline.py
 rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
-rtk git add sluice/dag/stores/sink_outbox.py sluice/dag/phases/tx2.py sluice/dag/run_pipeline.py tests/dag/test_emission.py tests/dag/test_run_pipeline.py
+rtk git add sluice/dag/stores/sink_outbox.py sluice/dag/stores/sink_pending.py sluice/dag/phases/run_key_resolve.py sluice/dag/phases/tx2.py sluice/dag/run_pipeline.py sluice/cli.py tests/dag/test_emission.py tests/dag/test_run_pipeline.py tests/dag/test_cli_compat.py
 rtk git commit -m "feat(sinks): Enqueue durable sink outbox rows"
 ```
 
@@ -303,6 +415,8 @@ rtk git commit -m "feat(sinks): Enqueue durable sink outbox rows"
 
 **Files:**
 - Modify: `sluice/dag/emission.py`
+- Modify: `sluice/dag/sinks/base.py`
+- Modify: `sluice/dag/sinks/_v1_push.py`
 - Modify: `sluice/dag/stores/sink_outbox.py`
 - Modify: `sluice/dag/stores/pipelines.py`
 - Modify: `sluice/dag/run_pipeline.py`
@@ -320,6 +434,8 @@ Assert:
 - after every mark, `finalize_delivery(run_id)` advances
   `pending_delivery` to `success`, `partial`, or `failed`;
 - retry preserves payload, ordinal, and idempotency key.
+- dispatcher closes sink clients on sent, retryable, failed, and cancellation
+  paths.
 
 **Step 2: Implement claim/send/mark**
 
@@ -346,12 +462,21 @@ Email sends deterministic `Message-ID`. Webhook sinks pass
 `Idempotency-Key`/dedupe fields where providers support them. Docs and tests
 must state unsupported providers remain at-least-once.
 
-**Step 4: Verify and commit**
+**Step 4: Add sink lifecycle cleanup**
+
+Define a sink lifecycle helper used by the dispatcher. It must prefer
+`async with sink` when a sink implements async context management and otherwise
+call `aclose()` in `finally` when present. The helper is part of the dispatcher
+contract; individual sinks must not rely on process exit to close network
+clients. The lifecycle scope is one claimed batch for one sink instance; the
+dispatcher must not carry unmanaged sink instances across batches.
+
+**Step 5: Verify and commit**
 
 ```bash
 rtk env COVERAGE_FILE=/tmp/sluice-v3-dispatch.coverage uv run pytest -q tests/dag/test_emission.py tests/dag/sinks/test_sink_adapters.py
 rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
-rtk git add sluice/dag/emission.py sluice/dag/stores/sink_outbox.py sluice/dag/stores/pipelines.py sluice/dag/run_pipeline.py tests/dag/test_emission.py tests/dag/sinks/test_sink_adapters.py
+rtk git add sluice/dag/emission.py sluice/dag/sinks/base.py sluice/dag/sinks/_v1_push.py sluice/dag/stores/sink_outbox.py sluice/dag/stores/pipelines.py sluice/dag/run_pipeline.py tests/dag/test_emission.py tests/dag/sinks/test_sink_adapters.py
 rtk git commit -m "feat(sinks): Dispatch outbox with claim leases"
 ```
 
@@ -368,8 +493,7 @@ Assert atomic sidecar writes:
 
 - temp file write, file fsync, replace, parent fsync;
 - DB artifact fsync failure fails closed before phase advance;
-- corrupt sidecar creates `.failed` and refuses recovery;
-- active DB missing but sidecar present does not create empty active DB.
+- corrupt sidecar creates `.failed` and refuses recovery.
 
 **Step 2: Implement manifest persistence**
 
@@ -384,31 +508,18 @@ rtk git add sluice/dag/rotation/manifest.py sluice/dag/rotation/orchestrator.py 
 rtk git commit -m "feat(rotation): Persist sidecar manifests"
 ```
 
-### Task 9: Refactor Swap Primitives and Recovery
+### Task 9a: Refactor Swap Happy Path and Primitives
 
 **Files:**
 - Modify: `sluice/dag/rotation/swap.py`
 - Modify: `sluice/dag/rotation/orchestrator.py`
-- Modify: `sluice/dag/db.py`
-- Test: `tests/dag/rotation/test_orchestrator.py`
 - Test: `tests/dag/rotation/test_swap.py`
 
 **Step 1: Write failing tests**
 
-Simulate crash/recovery for:
-
-- `copying`, `copied`, `archiving_old`, `installing_new`, `installed`,
-  `seen_reconciling`, `seen_reconciled`, `gzipping`;
-- after manifest write before file op;
-- after `os.replace` before parent fsync;
-- old active missing/new temp exists;
-- both active and new exist;
-- WAL checkpoint failure;
-- checkpoint result busy nonzero;
-- `-wal` exists with nonzero size after checkpoint;
-- integrity check failure;
-- DB file fsync failure;
-- gzip temp exists.
+Assert the happy path uses manifest-backed primitives for checkpoint, integrity
+check, archive old, install new, seen reconcile, and gzip archive. Assert each
+DB artifact and parent directory is fsynced before the manifest advances.
 
 **Step 2: Refactor swap**
 
@@ -421,20 +532,63 @@ archive temp, and gzip temp files are fsynced before advancing phases.
 `seen_reconcile` runs only after new active install, integrity check, DB file
 fsync, and parent fsync.
 
-**Step 3: Enforce startup order**
+**Step 3: Verify and commit**
 
-Startup/pre-rotation must: acquire rotation lock, run sidecar recovery, validate
-an existing active DB, then open gate/start writer. If `.failed` exists, or if
-active DB is missing without a valid sidecar recovery path, refuse runner/admin
-actions except explicit init/recovery commands. Do not auto-create an empty
-active DB.
+```bash
+rtk env COVERAGE_FILE=/tmp/sluice-v3-swap-primitives.coverage uv run pytest -q tests/dag/rotation/test_swap.py
+rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
+rtk git add sluice/dag/rotation/swap.py sluice/dag/rotation/orchestrator.py tests/dag/rotation/test_swap.py
+rtk git commit -m "feat(rotation): Refactor manifest-backed swaps"
+```
 
-**Step 4: Verify and commit**
+### Task 9b: Add Crash Recovery Matrix and Startup Guard
+
+**Files:**
+- Modify: `sluice/dag/rotation/swap.py`
+- Modify: `sluice/dag/rotation/orchestrator.py`
+- Modify: `sluice/dag/db.py`
+- Modify: `sluice/dag/run_pipeline.py`
+- Modify: `sluice/dag/admin.py`
+- Modify: `sluice/cli.py`
+- Test: `tests/dag/rotation/test_orchestrator.py`
+- Test: `tests/dag/rotation/test_swap.py`
+- Test: `tests/dag/test_cli_compat.py`
+
+**Step 1: Write failing tests**
+
+Simulate crash/recovery for:
+
+- `copying`, `copied`, `archiving_old`, `installing_new`, `installed`,
+  `seen_reconciling`, `seen_reconciled`, `gzipping`;
+- after manifest write before file op;
+- after `os.replace` before parent fsync;
+- active DB missing but sidecar present does not create empty active DB;
+- runner/admin/CLI/gc-rotate entrypoints run sidecar recovery before any
+  `open_active_db()` path can create an empty active DB;
+- old active missing/new temp exists;
+- both active and new exist;
+- WAL checkpoint failure;
+- checkpoint result busy nonzero;
+- `-wal` exists with nonzero size after checkpoint;
+- integrity check failure;
+- DB file fsync failure;
+- gzip temp exists.
+
+**Step 2: Enforce startup order**
+
+Startup/pre-rotation must: acquire runtime lock, acquire rotation lock, run
+sidecar recovery, validate an existing active DB, then open gate/start writer.
+Runner, admin, CLI, and `gc-rotate` entrypoints must pass through this guard
+before any `open_active_db()` call. If `.failed` exists, or if active DB is
+missing without a valid sidecar recovery path, refuse runner/admin actions
+except explicit init/recovery commands. Do not auto-create an empty active DB.
+
+**Step 3: Verify and commit**
 
 ```bash
 rtk env COVERAGE_FILE=/tmp/sluice-v3-rotation.coverage uv run pytest -q tests/dag/rotation/test_orchestrator.py tests/dag/rotation/test_swap.py
 rtk env COVERAGE_FILE=/tmp/sluice-v3-compat.coverage uv run pytest -q tests/dag/test_cli_compat.py
-rtk git add sluice/dag/rotation/swap.py sluice/dag/rotation/orchestrator.py sluice/dag/db.py tests/dag/rotation/test_orchestrator.py tests/dag/rotation/test_swap.py
+rtk git add sluice/dag/rotation/swap.py sluice/dag/rotation/orchestrator.py sluice/dag/db.py sluice/dag/run_pipeline.py sluice/dag/admin.py sluice/cli.py tests/dag/rotation/test_orchestrator.py tests/dag/rotation/test_swap.py tests/dag/test_cli_compat.py
 rtk git commit -m "feat(rotation): Recover manifest-tracked swaps"
 ```
 
@@ -463,11 +617,19 @@ Document:
 
 - `sluice upgrade v3 --dry-run`;
 - backup and restore path;
+- `sluice upgrade v3 --restore <backup_dir>` hash/integrity validation;
 - `backup_manifest.json` fields and restore validation;
 - mixed v2/v3 runner prohibition;
+- runtime sidecar marker and startup flock behavior;
 - outbox retry operations;
 - failed rotation sidecar recovery;
 - stuck `pending_delivery` triage.
+- v3.1 security hardening implementation plan:
+  `docs/plans/2026-06-21-v3.1-security-hardening.md`.
+- production gate: if v3.1 hardening is not merged, `runtime_core = "v3"` must
+  remain documented as non-production/security-hardening-pending.
+- release blocker: without v3.1 Task 4 merged, operators must not
+  production-enable `runtime_core = "v3"`.
 
 **Step 3: Full verification**
 
