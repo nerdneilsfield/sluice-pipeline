@@ -105,3 +105,43 @@ def test_load_sluice_config_wraps_invalid_encoding(tmp_path):
 
     with pytest.raises(ConfigError, match="invalid encoding"):
         load_sluice_config(path)
+
+
+def test_runtime_config_v3_flags_default_off():
+    cfg = RuntimeConfig()
+    assert cfg.runtime_core == "v2"
+    assert cfg.enable_outbox_dispatch is False
+    assert cfg.enable_lease_recovery is False
+    assert cfg.enable_rotation_manifest is False
+
+
+def test_load_sluice_config_parses_v3_runtime_flags(tmp_path):
+    path = tmp_path / "sluice.toml"
+    path.write_text(
+        """
+        [runtime]
+        runtime_core = "v3"
+        enable_outbox_dispatch = true
+        enable_lease_recovery = true
+        enable_rotation_manifest = true
+        """
+    )
+    cfg = load_sluice_config(path)
+    assert cfg.runtime.runtime_core == "v3"
+    assert cfg.runtime.enable_outbox_dispatch is True
+    assert cfg.runtime.enable_lease_recovery is True
+    assert cfg.runtime.enable_rotation_manifest is True
+
+
+def test_load_sluice_config_rejects_invalid_runtime_core(tmp_path):
+    path = tmp_path / "sluice.toml"
+    path.write_text("[runtime]\nruntime_core = 'v4'\n")
+    with pytest.raises(ConfigError, match="runtime_core"):
+        load_sluice_config(path)
+
+
+def test_load_sluice_config_rejects_non_bool_outbox_flag(tmp_path):
+    path = tmp_path / "sluice.toml"
+    path.write_text("[runtime]\nenable_outbox_dispatch = 'yes'\n")
+    with pytest.raises(ConfigError, match="enable_outbox_dispatch"):
+        load_sluice_config(path)

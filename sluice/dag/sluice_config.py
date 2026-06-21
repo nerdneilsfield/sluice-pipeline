@@ -22,6 +22,14 @@ class RuntimeConfig:
     ``image`` must reference an image that has already been built and pushed.
     The deploy command passes it to Prefect with ``build=False`` and
     ``push=False``.
+
+    v3 core rollout flags:
+
+    - ``runtime_core`` selects the runner core (``"v2"`` default; ``"v3"`` is
+      experimental until v3.1 security hardening lands).
+    - ``enable_outbox_dispatch`` gates the durable sink outbox dispatcher.
+    - ``enable_lease_recovery`` gates lease/heartbeat/fencing recovery.
+    - ``enable_rotation_manifest`` gates the sidecar rotation manifest.
     """
 
     prefect_api_url: str = ""
@@ -30,6 +38,10 @@ class RuntimeConfig:
     default_timezone: str = "UTC"
     image: str | None = None
     concurrency_strategy: str = "queue"
+    runtime_core: str = "v2"
+    enable_outbox_dispatch: bool = False
+    enable_lease_recovery: bool = False
+    enable_rotation_manifest: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +83,21 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
             "runtime.concurrency_strategy must be one of queue/enqueue/cancel_new, "
             f"got {concurrency_strategy!r}"
         )
+    runtime_core = runtime.get("runtime_core", "v2")
+    if runtime_core not in {"v2", "v3"}:
+        raise ConfigError(
+            "runtime.runtime_core must be 'v2' or 'v3', "
+            f"got {runtime_core!r}"
+        )
+    enable_outbox_dispatch = _require_bool(
+        runtime, "enable_outbox_dispatch", default=False
+    )
+    enable_lease_recovery = _require_bool(
+        runtime, "enable_lease_recovery", default=False
+    )
+    enable_rotation_manifest = _require_bool(
+        runtime, "enable_rotation_manifest", default=False
+    )
     return SluiceConfig(
         rotation=RotationConfig(
             drain_timeout_seconds=_parse_duration(rotation.get("drain_timeout", "30m"), 30 * 60.0),
@@ -84,5 +111,18 @@ def load_sluice_config(config_path: Path | None = None) -> SluiceConfig:
             default_timezone=runtime.get("default_timezone", "UTC"),
             image=runtime.get("image"),
             concurrency_strategy=concurrency_strategy,
+            runtime_core=runtime_core,
+            enable_outbox_dispatch=enable_outbox_dispatch,
+            enable_lease_recovery=enable_lease_recovery,
+            enable_rotation_manifest=enable_rotation_manifest,
         ),
     )
+
+
+def _require_bool(data: dict, key: str, *, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(
+            f"runtime.{key} must be a boolean, got {type(value).__name__}: {value!r}"
+        )
+    return value
