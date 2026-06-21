@@ -25,6 +25,7 @@ from sluice.dag.phases.skip_compute import compute_skip_ids
 from sluice.dag.phases.tx0 import build_tx0_job, make_lease_owner
 from sluice.dag.phases.tx1 import build_tx1_job
 from sluice.dag.phases.tx2 import build_tx2_job
+from sluice.dag.heartbeat import HeartbeatTask
 from sluice.dag.rotation.admission import (
     RotationGateClosed,
     build_admission_job,
@@ -152,6 +153,87 @@ async def _run_pipeline_admitted(
     lease_duration_seconds: float = 30 * 60.0,
     enable_outbox_dispatch: bool = False,
 ) -> RunResult:
+    """Outer wrapper: set up lease + heartbeat, run body, always stop heartbeat."""
+    # The body lives in _run_pipeline_body. The heartbeat finally-cleanup
+    # must fire on early return, exception, and normal completion alike.
+    heartbeat: HeartbeatTask | None = None
+    tx0_out: dict = {}
+    lease_owner = ""
+    lease_version = 0
+    cycle_id: str | None = None
+    pipeline_run_id: int | None = None
+    if runtime_core == "v3":
+        from sluice.dag.cycle import compute_cycle_anchor, make_run_key
+
+        now_local = now or datetime.now(timezone.utc)
+        cycle_anchor = compute_cycle_anchor(
+            task.window.anchor, task.timezone or "UTC", now_local
+        )
+        fresh_run_key = make_run_key(task.name, pipeline_name, cycle_anchor)
+        lease_owner = make_lease_owner()
+        await (
+            await writer.submit(
+                build_tx0_job(
+                    task=task,
+                    pipeline=next(p for p in task.pipelines if p.name == pipeline_name),
+                    run_key=fresh_run_key,
+                    cycle_anchor=cycle_anchor.isoformat(),
+                    trigger=trigger,
+                    started_at=now_local.isoformat(),
+                    lease_owner=lease_owner,
+                    lease_duration_seconds=lease_duration_seconds,
+                    out=tx0_out,
+                )
+            )
+        )
+        lease_version = tx0_out.get("lease_version", 0)
+        pipeline_run_id = tx0_out.get("pipeline_run_id")
+        cycle_id = tx0_out.get("cycle_id")
+        heartbeat = HeartbeatTask(
+            writer=writer,
+            run_id=tx0_out["pipeline_run_id"],
+            lease_owner=lease_owner,
+            lease_version=lease_version,
+            refresh_interval_seconds=max(lease_duration_seconds / 3, 5.0),
+            lease_duration_seconds=lease_duration_seconds,
+        )
+        heartbeat.start()
+    try:
+        return await _run_pipeline_body(
+            task,
+            pipeline_name,
+            writer=writer,
+            now=now,
+            trigger=trigger,
+            runtime_core=runtime_core,
+            lease_owner=lease_owner,
+            lease_version=lease_version,
+            cycle_id=cycle_id,
+            pipeline_run_id=pipeline_run_id,
+            enable_outbox_dispatch=enable_outbox_dispatch,
+        )
+    finally:
+        if heartbeat is not None:
+            try:
+                await heartbeat.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("heartbeat stop failed: %s", exc)
+
+
+async def _run_pipeline_body(
+    task: TaskConfig,
+    pipeline_name: str,
+    *,
+    writer: WriterThread,
+    now: datetime | None = None,
+    trigger: str = "manual",
+    runtime_core: str = "v2",
+    lease_owner: str = "",
+    lease_version: int = 0,
+    cycle_id: str | None = None,
+    pipeline_run_id: int | None = None,
+    enable_outbox_dispatch: bool = False,
+) -> RunResult:
     validate_task(task)
     pipeline = next(
         (candidate for candidate in task.pipelines if candidate.name == pipeline_name),
@@ -168,28 +250,9 @@ async def _run_pipeline_admitted(
     fresh_run_key = make_run_key(task.name, pipeline.name, cycle_anchor)
     started_at = now.isoformat()
 
-    # v3: create the run row with lease BEFORE stages run so drain can see us.
-    tx0_out: dict = {}
-    lease_owner = ""
-    lease_version = 0
-    if runtime_core == "v3":
-        lease_owner = make_lease_owner()
-        await (
-            await writer.submit(
-                build_tx0_job(
-                    task=task,
-                    pipeline=pipeline,
-                    run_key=fresh_run_key,
-                    cycle_anchor=cycle_anchor.isoformat(),
-                    trigger=trigger,
-                    started_at=started_at,
-                    lease_owner=lease_owner,
-                    lease_duration_seconds=lease_duration_seconds,
-                    out=tx0_out,
-                )
-            )
-        )
-        lease_version = tx0_out.get("lease_version", 0)
+    # tx0 has already run in the outer wrapper under v3; tx0_out values are
+    # passed in via cycle_id / pipeline_run_id / lease_owner / lease_version.
+    # v2 path leaves them as defaults and tx1 creates the run row inline.
 
     skip_ids: set[str] = set()
     rows: list[dict] = []
@@ -292,8 +355,8 @@ async def _run_pipeline_admitted(
                 items=all_items,
                 driver_result=driver_result,
                 out=tx1_out,
-                pipeline_run_id=tx0_out.get("pipeline_run_id"),
-                cycle_id=tx0_out.get("cycle_id"),
+                pipeline_run_id=pipeline_run_id,
+                cycle_id=cycle_id,
                 runtime_core=runtime_core,
             )
         )
@@ -316,7 +379,7 @@ async def _run_pipeline_admitted(
                     items_in=items_in,
                     run_level_error=str(exc),
                     out=tx2_out,
-                    cycle_id=tx0_out.get("cycle_id"),
+                    cycle_id=cycle_id,
                     lease_owner=lease_owner or None,
                     lease_version=lease_version or None,
                     runtime_core=runtime_core,
@@ -436,7 +499,7 @@ async def _run_pipeline_admitted(
                 items_in=items_in,
                 run_level_error=None,
                 out=tx2_out,
-                cycle_id=tx0_out.get("cycle_id"),
+                cycle_id=cycle_id,
                 lease_owner=lease_owner or None,
                 lease_version=lease_version or None,
                 runtime_core=runtime_core,
