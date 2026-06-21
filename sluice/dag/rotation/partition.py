@@ -29,10 +29,31 @@ async def partition_items(conn: aiosqlite.Connection, task: TaskConfig) -> Parti
     for pipeline in task.pipelines:
         safe_pipeline = safe_name(pipeline.name)
         try:
-            cur = await conn.execute(
-                f"SELECT item_id FROM pipeline_{safe_pipeline} "
-                "WHERE status IN ('success','dropped','failed')"
+            # Detect schema: v3 tables have run_id column; v2 don't.
+            col_cur = await conn.execute(
+                f"PRAGMA table_info(pipeline_{safe_pipeline})"
             )
+            columns = {row[1] for row in await col_cur.fetchall()}
+            if "run_id" in columns:
+                # v3: one row per (run_id, item_id). Take the latest run's
+                # status per item and check terminality on that.
+                cur = await conn.execute(
+                    f"""
+                    SELECT item_id FROM (
+                        SELECT item_id, status,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY item_id ORDER BY run_id DESC
+                               ) AS rn
+                        FROM pipeline_{safe_pipeline}
+                    ) WHERE rn = 1 AND status IN ('success','dropped','failed')
+                    """
+                )
+            else:
+                # v2: PK is item_id alone; one row per item.
+                cur = await conn.execute(
+                    f"SELECT item_id FROM pipeline_{safe_pipeline} "
+                    "WHERE status IN ('success','dropped','failed')"
+                )
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc):
                 raise

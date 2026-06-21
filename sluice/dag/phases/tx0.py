@@ -23,42 +23,20 @@ def build_tx0_job(
 ) -> WriteJob:
     """Create the pipeline run row with lease fields before stage execution.
 
-    Idempotent on run_key: if a row already exists with a non-expired lease
-    owned by ``lease_owner``, the same run_id is returned. If a row exists but
-    is owned by a different lease owner or has been fenced (lease_version
-    mismatch), the job raises so the caller fails closed.
+    Atomic: lease fields are written in the same INSERT as the run row, so
+    there is no TOCTOU window between INSERT and lease claim.
+
+    Returns via ``out`` dict: ``pipeline_run_id``, ``cycle_id``,
+    ``lease_version``.
+
+    Fail-closed: if the run_key already exists with a different lease_owner,
+    raises RuntimeError so the caller knows it lost the race.
     """
 
     async def job(active, seen) -> None:  # noqa: ARG001
         store = PipelinesStore(active)
-        existing_id = await store.get_run_id(run_key)
         lease_until = _lease_until(started_at, lease_duration_seconds)
-        if existing_id is not None:
-            state = await store.get_lease_state(existing_id)
-            if state is None:
-                raise RuntimeError(f"pipeline row {existing_id} vanished mid-tx0")
-            if state["lease_owner"] != lease_owner or state["status"] != "running":
-                raise RuntimeError(
-                    f"run_key {run_key!r} already held by owner={state['lease_owner']!r} "
-                    f"status={state['status']!r}; cannot attach"
-                )
-            updated = await store.set_lease(
-                run_id=existing_id,
-                lease_owner=lease_owner,
-                lease_until=lease_until,
-                heartbeat_at=started_at,
-                lease_version=state["lease_version"] or 0,
-            )
-            if not updated:
-                raise RuntimeError(
-                    f"run_key {run_key!r} lease fenced during tx0 attach; aborting"
-                )
-            out["pipeline_run_id"] = existing_id
-            out["cycle_id"] = cycle_anchor
-            out["lease_version"] = state["lease_version"] or 0
-            return
-
-        run_id = await store.upsert_running_v3(
+        run_id, actual_owner, actual_version = await store.upsert_running_v3(
             run_key=run_key,
             task=task.name,
             pipeline_name=pipeline.name,
@@ -66,32 +44,43 @@ def build_tx0_job(
             cycle_id=cycle_anchor,
             trigger=trigger,
             started_at=started_at,
+            lease_owner=lease_owner,
+            lease_until=lease_until,
+            lease_version=1,
         )
-        # Initial lease_version is 1 (0 means "no lease" / legacy).
-        await store.set_lease(
+        if actual_owner is not None and actual_owner != lease_owner:
+            raise RuntimeError(
+                f"run_key {run_key!r} already held by owner={actual_owner!r}; "
+                f"cannot attach as {lease_owner!r}"
+            )
+        # If we won the race (insert), actual_owner == lease_owner and
+        # actual_version == 1. If we reattached to our own row, the stored
+        # version is whatever we set previously. Refresh the lease with a
+        # fenced update so concurrent writers see the new until/heartbeat.
+        refreshed = await store.set_lease(
             run_id=run_id,
             lease_owner=lease_owner,
             lease_until=lease_until,
             heartbeat_at=started_at,
-            lease_version=1,
+            lease_version=max(actual_version, 1),
+            expected_lease_version=actual_version or 0,
         )
+        if not refreshed:
+            raise RuntimeError(
+                f"run_key {run_key!r} lease fenced during tx0 attach; aborting"
+            )
         out["pipeline_run_id"] = run_id
         out["cycle_id"] = cycle_anchor
-        out["lease_version"] = 1
+        out["lease_version"] = max(actual_version, 1)
 
     return WriteJob(run=job)
 
 
 def _lease_until(started_at_iso: str, duration_seconds: float) -> str:
+    from datetime import timedelta
+
     started = datetime.fromisoformat(started_at_iso)
-    lease_until = started + _seconds(duration_seconds)
-    return lease_until.isoformat()
-
-
-def _seconds(value: float) -> datetime:
-    return datetime.fromtimestamp(value, tz=timezone.utc) - datetime.fromtimestamp(
-        0, tz=timezone.utc
-    )
+    return (started + timedelta(seconds=duration_seconds)).isoformat()
 
 
 def make_lease_owner() -> str:

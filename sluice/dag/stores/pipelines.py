@@ -48,17 +48,34 @@ class PipelinesStore:
         lease_until: str,
         heartbeat_at: str,
         lease_version: int,
+        expected_lease_version: int | None = None,
     ) -> int:
-        """Set lease fields. Fenced: only updates if lease_version matches.
+        """Set lease fields.
 
-        Returns the number of rows updated. Zero means the fencing token did
-        not match (the row was already recovered or fenced by drain).
+        If ``expected_lease_version`` is provided, the update is fenced: it
+        only updates rows whose current ``lease_version`` matches the expected
+        value. Returns the number of rows updated. Zero means the fencing
+        token did not match (the row was already recovered or fenced by drain).
+
+        If ``expected_lease_version`` is None, the update is unfenced (used by
+        upgrade paths and explicit admin overrides).
         """
-        cur = await self.conn.execute(
-            "UPDATE pipelines SET lease_owner = ?, lease_until = ?, "
-            "heartbeat_at = ?, lease_version = ? WHERE id = ?",
-            (lease_owner, lease_until, heartbeat_at, lease_version, run_id),
-        )
+        if expected_lease_version is not None:
+            cur = await self.conn.execute(
+                "UPDATE pipelines SET lease_owner = ?, lease_until = ?, "
+                "heartbeat_at = ?, lease_version = ? "
+                "WHERE id = ? AND lease_version = ?",
+                (
+                    lease_owner, lease_until, heartbeat_at, lease_version,
+                    run_id, expected_lease_version,
+                ),
+            )
+        else:
+            cur = await self.conn.execute(
+                "UPDATE pipelines SET lease_owner = ?, lease_until = ?, "
+                "heartbeat_at = ?, lease_version = ? WHERE id = ?",
+                (lease_owner, lease_until, heartbeat_at, lease_version, run_id),
+            )
         return cur.rowcount or 0
 
     async def upsert_running(
@@ -105,36 +122,54 @@ class PipelinesStore:
         cycle_id: str,
         trigger: str,
         started_at: str,
-    ) -> int:
-        """Like upsert_running but also sets cycle_id. Used by tx0 under v3.
+        lease_owner: str,
+        lease_until: str,
+        lease_version: int = 1,
+    ) -> tuple[int, str, int]:
+        """Atomic create-and-lease for tx0.
 
-        Caller must ensure the pipelines table has the cycle_id column (i.e.
-        apply_v3_migrations has run); otherwise this raises OperationalError.
+        Returns ``(run_id, lease_owner, lease_version)``. The lease_owner
+        returned is the *actual* owner stored on the row, which may differ
+        from the request if the row was already held by another owner. The
+        caller MUST verify the returned owner matches the request before
+        proceeding.
+
+        Atomicity: the INSERT and lease fields are set in the same statement,
+        eliminating the read-then-write TOCTOU window. ON CONFLICT preserves
+        the existing lease_owner/version (DO NOTHING semantics on those
+        columns).
         """
-        cur = await self.conn.execute(
+        await self.conn.execute(
             """
             INSERT INTO pipelines (
               run_key, task, pipeline_name, cycle_anchor, cycle_id,
-              trigger, started_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running')
+              trigger, started_at, status,
+              lease_owner, lease_until, heartbeat_at, lease_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)
             ON CONFLICT(run_key) DO UPDATE SET
-              status = 'running',
               cycle_id = excluded.cycle_id,
+              status = 'running',
               started_at = excluded.started_at,
               finished_at = NULL,
               items_in = NULL,
               items_out = NULL,
               error_msg = NULL
             """,
-            (run_key, task, pipeline_name, cycle_anchor, cycle_id, trigger, started_at),
+            (
+                run_key, task, pipeline_name, cycle_anchor, cycle_id,
+                trigger, started_at,
+                lease_owner, lease_until, started_at, lease_version,
+            ),
         )
-        await cur.close()
         row = await (
-            await self.conn.execute("SELECT id FROM pipelines WHERE run_key = ?", (run_key,))
+            await self.conn.execute(
+                "SELECT id, lease_owner, lease_version FROM pipelines WHERE run_key = ?",
+                (run_key,),
+            )
         ).fetchone()
         if row is None:
             raise RuntimeError("pipeline upsert did not return an id")
-        return int(row[0])
+        return int(row[0]), row[1], int(row[2] or 0)
 
     async def finalize(
         self,

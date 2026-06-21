@@ -186,7 +186,10 @@ def build_tx2_job(
             )
             if rowcount == 0:
                 status = "failed"
-                error_msg = error_msg or "lease_fenced_during_finalize"
+                fence_signal = "lease_fenced_during_finalize"
+                error_msg = (
+                    f"{error_msg}; {fence_signal}" if error_msg else fence_signal
+                )
         else:
             await PipelinesStore(active).finalize(
                 pipeline_run_id,

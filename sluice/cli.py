@@ -204,6 +204,11 @@ def dag_run(
         raise typer.Exit(code=2)
 
     async def _go():
+        from sluice.dag.sluice_config import load_sluice_config
+
+        sluice_cfg = load_sluice_config(
+            (task_dir / "sluice.toml") if (task_dir / "sluice.toml").exists() else None
+        )
         lock = RotationLock(cfg.db_path)
         try:
             lock.acquire()
@@ -223,7 +228,14 @@ def dag_run(
             await writer.start()
             try:
                 now = datetime.fromisoformat(cycle) if cycle else None
-                return await dag_run_pipeline(cfg, pipeline, writer=writer, now=now)
+                return await dag_run_pipeline(
+                    cfg,
+                    pipeline,
+                    writer=writer,
+                    now=now,
+                    runtime_core=sluice_cfg.runtime.runtime_core,
+                    lease_duration_seconds=30 * 60.0,
+                )
             finally:
                 await writer.stop()
         finally:

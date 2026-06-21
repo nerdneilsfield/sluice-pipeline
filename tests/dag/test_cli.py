@@ -234,7 +234,7 @@ def test_run_command_invokes_real_runner(tmp_path: Path, monkeypatch: pytest.Mon
         assert RotationLock(task.db_path).is_held()
         Path(task.db_path).touch()
 
-    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual"):
+    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual", **kwargs):
         from sluice.dag.rotation.lock import RotationLock
         from sluice.dag.run_pipeline import RunResult
 
@@ -319,7 +319,7 @@ def test_run_command_status_exit_code(
     async def fake_ensure(task):
         return None
 
-    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual"):
+    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual", **kwargs):
         from sluice.dag.run_pipeline import RunResult
 
         return RunResult(
@@ -349,7 +349,7 @@ def test_run_command_exceptions_exit_cleanly(tmp_path: Path, monkeypatch: pytest
     async def fake_ensure(task):
         return None
 
-    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual"):
+    async def fake_run_pipeline(task, pipeline, *, writer, now=None, trigger="manual", **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(dag_run_pipeline, "ensure_dynamic_tables", fake_ensure)
