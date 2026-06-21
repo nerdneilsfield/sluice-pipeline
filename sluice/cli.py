@@ -203,6 +203,20 @@ def dag_run(
         typer.echo(f"pipeline {pipeline!r} not found in task {task!r}", err=True)
         raise typer.Exit(code=2)
 
+    # Refuse to run if rotation is in a recoverable state. This prevents
+    # silent empty-DB creation over a mid-swap task. v2 tasks without any
+    # sidecar manifest pass cleanly.
+    from sluice.dag.rotation.startup_guard import (
+        RotationRecoveryRequired,
+        assert_clean_rotation_state,
+    )
+
+    try:
+        assert_clean_rotation_state(task_dir)
+    except RotationRecoveryRequired as exc:
+        typer.echo(f"rotation recovery required: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
+
     async def _go():
         from sluice.dag.sluice_config import load_sluice_config
 
@@ -235,6 +249,7 @@ def dag_run(
                     now=now,
                     runtime_core=sluice_cfg.runtime.runtime_core,
                     lease_duration_seconds=30 * 60.0,
+                    enable_outbox_dispatch=sluice_cfg.runtime.enable_outbox_dispatch,
                 )
             finally:
                 await writer.stop()
@@ -284,6 +299,18 @@ def gc_rotate(
 
     cfg = load_task(task_dir)
     sluice_cfg = load_sluice_config(sluice_config_path)
+
+    # Refuse rotation if a prior rotation is mid-recovery.
+    from sluice.dag.rotation.startup_guard import (
+        RotationRecoveryRequired,
+        assert_clean_rotation_state,
+    )
+
+    try:
+        assert_clean_rotation_state(task_dir)
+    except RotationRecoveryRequired as exc:
+        typer.echo(f"rotation recovery required: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
 
     if dry_run:
 

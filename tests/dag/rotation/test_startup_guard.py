@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from sluice.dag.rotation.manifest import RotationPhase, append_phase, clear_manifest, mark_failed
+from sluice.dag.rotation.manifest import (
+    RotationPhase,
+    append_phase,
+    clear_manifest,
+    mark_failed,
+)
 from sluice.dag.rotation.startup_guard import (
     RotationRecoveryRequired,
     assert_clean_rotation_state,
@@ -37,3 +42,22 @@ def test_cleared_manifest_passes(tmp_path: Path):
     append_phase(tmp_path, RotationPhase.DONE)
     clear_manifest(tmp_path)
     assert_clean_rotation_state(tmp_path)
+
+
+def test_all_incomplete_phases_block(tmp_path: Path):
+    """Every non-DONE phase must block startup (regression for the matrix)."""
+    for phase in RotationPhase:
+        if phase == RotationPhase.DONE:
+            continue
+        clear_manifest(tmp_path)
+        append_phase(tmp_path, phase)
+        with pytest.raises(RotationRecoveryRequired):
+            assert_clean_rotation_state(tmp_path)
+
+
+def test_failed_marker_takes_priority_over_manifest(tmp_path: Path):
+    """A .failed marker blocks even if the manifest says DONE."""
+    append_phase(tmp_path, RotationPhase.DONE)
+    mark_failed(tmp_path, reason="late_failure")
+    with pytest.raises(RotationRecoveryRequired, match="failed marker"):
+        assert_clean_rotation_state(tmp_path)
