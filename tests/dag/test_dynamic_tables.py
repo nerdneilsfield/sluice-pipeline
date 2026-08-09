@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from sluice.core.errors import UpgradeError
 from sluice.dag import db
 from sluice.dag.dynamic_tables import (
     ensure_pipeline_sink_pending_table,
@@ -13,7 +14,6 @@ from sluice.dag.dynamic_tables import (
     migrate_task_dynamic_tables,
     upgrade_task_dynamic_tables,
 )
-from sluice.core.errors import UpgradeError
 
 
 @dataclass(frozen=True)

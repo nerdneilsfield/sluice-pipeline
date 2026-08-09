@@ -5,7 +5,7 @@ import hashlib
 import json
 import secrets
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,7 +16,6 @@ from sluice.dag import db
 from sluice.dag.dynamic_tables import upgrade_task_dynamic_tables
 from sluice.dag.loader import load_task
 from sluice.dag.runtime_lock import RuntimeLock
-
 
 _MARKER_FILENAME = "runtime-core.json"
 _PHASE_MANIFEST_FILENAME = "upgrade-phase.json"

@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import aiosqlite
 
 from sluice.dag.db import open_active_db
-from sluice.dag.rotation.admission import (
-    RotationGateClosed,
-    build_admission_job,
-)
-
 
 _LOCK_FENCE_VERSION_BUMP = 1
 

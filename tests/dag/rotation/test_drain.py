@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -9,7 +9,6 @@ from sluice.dag import db
 from sluice.dag.config import (
     DeploymentsDef,
     PipelineDef,
-    SinkDef,
     SourceDef,
     StageDef,
     TaskConfig,
@@ -20,12 +19,10 @@ from sluice.dag.dynamic_tables import (
     upgrade_task_dynamic_tables,
 )
 from sluice.dag.rotation.drain import (
-    count_in_flight,
     drain_running_pipelines,
     recover_expired_leases,
 )
 from sluice.dag.stores.pipelines import PipelinesStore
-from sluice.dag.writer import WriterThread
 
 
 def _task(tmp_path: Path) -> TaskConfig:

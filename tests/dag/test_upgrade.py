@@ -5,19 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from sluice.core.errors import UpgradeError
 from sluice.dag import db
-from sluice.dag.dynamic_tables import (
-    ensure_pipeline_table,
-    migrate_task_dynamic_tables,
-)
 from sluice.dag.runtime_lock import (
     RuntimeLock,
     RuntimeLockHeldError,
 )
 from sluice.dag.upgrade import (
-    UpgradeService,
     UpgradePhase,
+    UpgradeService,
     read_runtime_marker,
 )
 

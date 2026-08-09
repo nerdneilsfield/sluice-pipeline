@@ -17,6 +17,7 @@ from sluice.dag.eligibility import (
     select_entry_carryover,
 )
 from sluice.dag.emission import SinkEmitter
+from sluice.dag.heartbeat import HeartbeatTask
 from sluice.dag.item import Item
 from sluice.dag.phases.resume import load_resume_done
 from sluice.dag.phases.run_key_resolve import resolve_run_key
@@ -25,7 +26,6 @@ from sluice.dag.phases.skip_compute import compute_skip_ids
 from sluice.dag.phases.tx0 import build_tx0_job, make_lease_owner
 from sluice.dag.phases.tx1 import build_tx1_job
 from sluice.dag.phases.tx2 import build_tx2_job
-from sluice.dag.heartbeat import HeartbeatTask
 from sluice.dag.rotation.admission import (
     RotationGateClosed,
     build_admission_job,

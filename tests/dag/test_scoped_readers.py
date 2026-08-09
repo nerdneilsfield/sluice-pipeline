@@ -8,7 +8,6 @@ from sluice.dag import db
 from sluice.dag.config import (
     DeploymentsDef,
     PipelineDef,
-    SinkDef,
     SourceDef,
     StageDef,
     TaskConfig,
@@ -19,7 +18,6 @@ from sluice.dag.dynamic_tables import (
     upgrade_task_dynamic_tables,
 )
 from sluice.dag.eligibility import (
-    select_eligible_items,
     select_entry_carryover,
 )
 from sluice.dag.rotation.partition import partition_items

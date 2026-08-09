@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from sluice.dag.config import PipelineDef, TaskConfig
