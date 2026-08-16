@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sluice"
+version = "4.0.0"
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6.0,<7"]
+
+[project.optional-dependencies]
+ui = ["Flask>=3.0,<4"]
+prefect = ["prefect>=3.0,<4"]
+test = ["pytest>=8.0,<9"]
+
+[project.scripts]
+sluice = "sluice.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
