@@ -638,13 +638,12 @@ def _rebuild_members_tx(
     desired: Sequence[str],
 ) -> None:
     node = _node(app, pipeline_name, node_name)
-    # Terminal Delivery nodes are ``each``-like consumers even though they do
-    # not carry a Stage or batch policy: a newer Item generation for the same
-    # logical identity is a distinct send candidate.  Stage batch nodes retain
-    # the explicit include_updates switch.
+    # Terminal Delivery nodes and each Stages accept distinct Item generations.
+    # Only batch Stages gate newer generations behind include_updates.
     include_updates = bool(
         node.stage is None
-        or (node.batch is not None and node.batch.include_updates)
+        or node.batch is None
+        or node.batch.include_updates
     )
     rows = app.conn.execute(
         "SELECT * FROM node_members WHERE pipeline_name=? AND node_name=? AND binding_digest=?",
@@ -652,6 +651,7 @@ def _rebuild_members_tx(
     ).fetchall()
     by_id: dict[str, sqlite3.Row] = {str(row["item_id"]): row for row in rows}
     desired_set = set(desired)
+    desired_positions = {item_id: ordinal for ordinal, item_id in enumerate(desired)}
     for ordinal, item_id in enumerate(desired):
         item = app.conn.execute(
             "SELECT producer_kind,producer_name,logical_id FROM items WHERE id=?",
@@ -689,6 +689,18 @@ def _rebuild_members_tx(
         pending = next((row for row in candidates if row["state"] == "pending"), None)
         if pending is not None:
             old_id = str(pending["item_id"])
+            # For a batch without include_updates, retain a completed old
+            # member but replace a pending old member with the later desired
+            # generation.  On the next reconcile the pending row is the later
+            # item, so earlier desired generations must be skipped rather than
+            # replacing it back and toggling forever.
+            pending_position = desired_positions.get(old_id)
+            if (
+                not include_updates
+                and pending_position is not None
+                and pending_position > ordinal
+            ):
+                continue
             generation = int(pending["generation"]) + 1
             app.conn.execute(
                 "UPDATE node_members SET item_id=?,generation=?,ordinal=?,producer_kind=?,"
@@ -941,35 +953,35 @@ def _stage_requests_for_node(app: App, pipeline_name: str, node_name: str, at: d
     requests: list[_StageRequest] = []
     if node.batch is not None:
         batch_id = state["current_frozen_batch_id"]
-        if batch_id is None:
-            return requests
-        batch_state = app.conn.execute("SELECT state FROM batches WHERE id=?", (batch_id,)).fetchone()
-        if batch_state is None or batch_state[0] != "frozen":
-            return requests
-        rows = app.conn.execute(
-            "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal", (batch_id,)
-        ).fetchall()
-        item_ids = tuple(str(row[0]) for row in rows)
-        if not item_ids:
-            return requests
-        requests.append(
-            _StageRequest(
-                stage_name=str(node.stage),
-                envelope=StageEnvelope(item_ids),
-                owner=(pipeline_name, node_name),
-                generation=None,
-                batch_id=int(batch_id),
-                policy=node.policy,
-                binding_digest=binding,
-            )
-        )
-        return requests
+        if batch_id is not None:
+            batch_state = app.conn.execute("SELECT state FROM batches WHERE id=?", (batch_id,)).fetchone()
+            if batch_state is not None and batch_state[0] == "frozen":
+                rows = app.conn.execute(
+                    "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal", (batch_id,)
+                ).fetchall()
+                item_ids = tuple(str(row[0]) for row in rows)
+                if item_ids:
+                    requests.append(
+                        _StageRequest(
+                            stage_name=str(node.stage),
+                            envelope=StageEnvelope(item_ids),
+                            owner=(pipeline_name, node_name),
+                            generation=None,
+                            batch_id=int(batch_id),
+                            policy=node.policy,
+                            binding_digest=binding,
+                        )
+                    )
 
-    rows = app.conn.execute(
+    pending_rows = app.conn.execute(
         "SELECT item_id,generation,lookup_key,state FROM node_members WHERE pipeline_name=? "
         "AND node_name=? AND binding_digest=? AND state='pending' ORDER BY ordinal,item_id",
         (pipeline_name, node_name, binding),
     ).fetchall()
+    if node.batch is None:
+        rows = pending_rows
+    else:
+        rows = ()
     for row in rows:
         requests.append(
             _StageRequest(
@@ -980,6 +992,83 @@ def _stage_requests_for_node(app: App, pipeline_name: str, node_name: str, at: d
                 batch_id=None,
                 policy=node.policy,
                 binding_digest=binding,
+            )
+        )
+
+    # A successful shared Stage refresh advances the global result sequence,
+    # but active consumers may already be terminal against the prior result.
+    # Re-admit only those lagging members through the ordinary cache path.  A
+    # current-result join and sequence comparison make historical rebuild
+    # scope exclusions (which record the observed sequence) idempotent.
+    lagging = app.conn.execute(
+        "SELECT nm.item_id,nm.generation,nm.lookup_key,nm.ordinal,sr.sequence "
+        "FROM node_members nm "
+        "JOIN stage_result_current src ON src.stage_name=? AND src.lookup_key=nm.lookup_key "
+        "JOIN stage_results sr ON sr.id=src.result_id "
+        "WHERE nm.pipeline_name=? AND nm.node_name=? AND nm.binding_digest=? "
+        "AND nm.state='terminal' "
+        "AND (nm.consumed_sequence IS NULL OR nm.consumed_sequence < sr.sequence) "
+        "ORDER BY nm.ordinal,nm.item_id",
+        (str(node.stage), pipeline_name, node_name, binding),
+    ).fetchall()
+    if node.batch is None:
+        for row in lagging:
+            requests.append(
+                _StageRequest(
+                    stage_name=str(node.stage),
+                    envelope=StageEnvelope((str(row["item_id"]),)),
+                    owner=(pipeline_name, node_name),
+                    generation=int(row["generation"]),
+                    batch_id=None,
+                    policy=node.policy,
+                    binding_digest=binding,
+                )
+            )
+        return requests
+
+    # Batch members have one shared immutable envelope.  Recover that exact
+    # envelope from this node's last terminal Execution instead of issuing a
+    # per-item request (which would change a batch cache key).  The old batch
+    # ID is intentionally not used as a current-freeze guard: a successful
+    # batch clears that pointer, while its terminal members remain active and
+    # eligible for shared-result healing.
+    seen_lookup_keys: set[str] = set()
+    for row in lagging:
+        lookup_key = row["lookup_key"]
+        if not isinstance(lookup_key, str) or lookup_key in seen_lookup_keys:
+            continue
+        seen_lookup_keys.add(lookup_key)
+        execution = app.conn.execute(
+            "SELECT id FROM executions WHERE kind='stage' AND pipeline_name=? "
+            "AND node_name=? AND binding_digest=? AND stage_name=? AND lookup_key=? "
+            "AND result_id IS NOT NULL AND state IN ('succeeded','cached','dropped') "
+            "ORDER BY id DESC LIMIT 1",
+            (pipeline_name, node_name, binding, str(node.stage), lookup_key),
+        ).fetchone()
+        if execution is None:
+            continue
+        item_rows = app.conn.execute(
+            "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='items' ORDER BY ordinal",
+            (execution[0],),
+        ).fetchall()
+        item_ids = tuple(str(item[0]) for item in item_rows)
+        if not item_ids:
+            continue
+        history_rows = app.conn.execute(
+            "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='history' ORDER BY ordinal",
+            (execution[0],),
+        ).fetchall()
+        history_ids = tuple(str(item[0]) for item in history_rows)
+        requests.append(
+            _StageRequest(
+                stage_name=str(node.stage),
+                envelope=StageEnvelope(item_ids, history_ids),
+                owner=(pipeline_name, node_name),
+                generation=None,
+                batch_id=None,
+                policy=node.policy,
+                binding_digest=binding,
+                history_persisted=True,
             )
         )
     return requests

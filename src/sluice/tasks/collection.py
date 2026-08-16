@@ -197,12 +197,13 @@ def _prior_decision(candidate: Item, prior: Item | None, config: Mapping[str, An
             if not present:
                 raise ExecutionError("dedup change field must exist on candidate Item")
         return True
-    # A byte-for-byte payload and metadata match is an unchanged Item.  A
-    # metadata-only change intentionally bypasses the payload change rule.
-    if candidate.payload == prior.payload and candidate.metadata == prior.metadata:
-        return False
-    if candidate.payload == prior.payload:
+    # Metadata changes are independently material, so they intentionally
+    # bypass the payload change-rate threshold (including when both payload
+    # and metadata changed).  Only a payload-only change is rate-gated.
+    if candidate.metadata != prior.metadata:
         return True
+    if candidate.payload == prior.payload:
+        return False
     if config.get("change") is None:
         return True
     return _change_rate(candidate, prior, config) >= float(config["change"]["min_rate"])

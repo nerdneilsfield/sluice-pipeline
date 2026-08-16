@@ -420,6 +420,33 @@ def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
         sink = app.sinks.get(node.deliver.use)
         if sink is None:
             raise ExecutionError(f"resolved Sink is unavailable: {node.deliver.use}")
+        # Recovery/timeout may have replaced this attempt while the payload,
+        # binding, and sink were being resolved.  Do not invoke an external
+        # Sink unless this worker still owns the running row and token.  The
+        # check is deliberately outside a long transaction: the external
+        # call retains its documented duplicate window, while stale completion
+        # and failure updates remain guarded by their own token predicates.
+        # Re-read after all local preparation so recovery/timeout transitions
+        # that happen in the meantime are observed by the ownership check.
+        current = app.conn.execute(
+            "SELECT * FROM deliveries WHERE delivery_key=?", (attempt.delivery_key,)
+        ).fetchone()
+        if current is None:
+            return
+        current_token = current["attempt_token"]
+        if (
+            current["state"] != "running"
+            or current_token is None
+            or int(current_token) != attempt.attempt_token
+        ):
+            _log_attempt(
+                "delivery_stale_send",
+                current,
+                attempt_token=attempt.attempt_token,
+                external_id=None,
+                state="stale",
+            )
+            return
         result = sink.send(raw_config, payload, attempt.delivery_key)
         if result is not None and not isinstance(result, str):
             raise ExecutionError("Sink must return a string or null")

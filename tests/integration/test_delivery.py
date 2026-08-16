@@ -5,9 +5,15 @@ import pytest
 
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult
-from sluice.delivery import deliver, retry_delivery
+from sluice.delivery import (
+    _claim_delivery,
+    _ensure_delivery_row_for_item,
+    _send_attempt,
+    deliver,
+    retry_delivery,
+)
 from sluice.errors import ExecutionError
-from sluice.reconcile import recover_startup, tick
+from sluice.reconcile import reconcile_node, recover_startup, tick
 from sluice.source_runtime import collect_source
 
 
@@ -158,6 +164,47 @@ def test_delivery_binding_digest_and_attempt_token_reject_stale_completion(tmp_p
         "SELECT state,external_id FROM deliveries WHERE delivery_key=?", (key,)
     ).fetchone()
     assert (state, external_id) == ("succeeded", "new")
+
+
+def test_stale_delivery_attempt_is_not_sent_or_allowed_to_mutate_current_row(tmp_path):
+    calls = []
+
+    def email(config, payload, key):
+        calls.append(key)
+        return "stale"
+
+    app, item_id = delivery_app(
+        tmp_path,
+        {
+            "sluice.sinks.email": email,
+            "sluice.sinks.telegram": lambda config, payload, key: "ok",
+        },
+    )
+    reconcile_node(app, "p", "email", instant(0))
+    key = _ensure_delivery_row_for_item(app, "p", "email", item_id, instant(0))
+    stale = _claim_delivery(app, key, instant(0))
+    assert stale is not None
+    recover_startup(app, instant(1))
+    current = _claim_delivery(app, key, instant(1))
+    assert current is not None
+    assert current.attempt_token != stale.attempt_token
+    before = tuple(
+        app.conn.execute(
+            "SELECT state,attempt_token,error,external_id FROM deliveries WHERE delivery_key=?",
+            (key,),
+        ).fetchone()
+    )
+
+    _send_attempt(app, stale, instant(2))
+
+    after = tuple(
+        app.conn.execute(
+            "SELECT state,attempt_token,error,external_id FROM deliveries WHERE delivery_key=?",
+            (key,),
+        ).fetchone()
+    )
+    assert calls == []
+    assert after == before
 
 
 def test_delivery_config_change_creates_a_distinct_local_success_key(tmp_path):

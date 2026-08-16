@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from threading import Event, Lock, Thread
+import time
 
 import pytest
 
@@ -8,7 +9,12 @@ from sluice.contracts import SourceRecord, SourceResult, StageEnvelope
 from sluice.errors import ExecutionError
 from sluice.reconcile import reconcile, reconcile_node, tick
 from sluice.source_runtime import collect_source
-from sluice.stage_runtime import execute_stage
+from sluice.stage_runtime import (
+    _execute_claimed_stage,
+    execute_stage,
+    rebuild_stage,
+    resolve_dedup_history_ids,
+)
 
 
 def sink_callable(config, payload, delivery_key):
@@ -31,8 +37,30 @@ def reconcile_source_collect(config, checkpoint):
     return SourceResult((SourceRecord("item-c", {"title": "C"}),), "two-2")
 
 
+def same_identity_source(config, checkpoint):
+    if checkpoint is None:
+        return SourceResult((SourceRecord("same", {"title": "old"}),), "v1")
+    return SourceResult((SourceRecord("same", {"title": "new"}),), "v2")
+
+
+def downstream_source(config, checkpoint):
+    return SourceResult((SourceRecord("downstream", {"content": "message"}),), "done")
+
+
 def one_item_source(config, checkpoint):
     return SourceResult((SourceRecord("only", {"title": "Only"}),), "done")
+
+
+def shared_dedup_source(config, checkpoint):
+    if checkpoint is None:
+        return SourceResult(
+            (SourceRecord("first", {"title": "same", "body": "old"}),),
+            "first-done",
+        )
+    return SourceResult(
+        (SourceRecord("second", {"title": "same", "body": "new"}),),
+        "second-done",
+    )
 
 
 def test_count_freeze_keeps_exact_order_and_post_freeze_arrival_pending(tmp_path):
@@ -68,6 +96,273 @@ pipelines:
     ).fetchall()
     assert [value[0] for value in frozen] == ["item-a", "item-b"]
     assert [value[0] for value in pending] == ["item-c"]
+
+
+def test_reconcile_keeps_latest_pending_generation_stable_when_delta_repeats(tmp_path):
+    definition = tmp_path / "generations.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: tests.integration.test_shared_materialization.same_identity_source, with: {}}}
+stages: {documents: {input: batch, tasks: [{use: sluice.tasks.filter, with: {all: [{field: title, op: exists}]}}]}}
+pipelines:
+  p:
+    nodes:
+      documents: {stage: documents, from: source.feed, batch: {max_wait: 1h}}
+      email: {from: documents, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    collect_source(app, "feed", instant(0))
+    reconcile_node(app, "p", "documents", instant(0))
+    old_id, old_generation = app.conn.execute(
+        "SELECT item_id,generation FROM node_members "
+        "WHERE pipeline_name='p' AND node_name='documents' AND state='pending'"
+    ).fetchone()
+    collect_source(app, "feed", instant(1))
+    reconcile_node(app, "p", "documents", instant(1))
+    latest = tuple(
+        app.conn.execute(
+            "SELECT item_id,generation,state FROM node_members "
+            "WHERE pipeline_name='p' AND node_name='documents' AND state!='stale'"
+        ).fetchone()
+    )
+    assert latest == (
+        app.conn.execute(
+            "SELECT id FROM items WHERE producer_name='feed' AND logical_id='same' "
+            "AND payload_json=?",
+            ('{"title":"new"}',),
+        ).fetchone()[0],
+        old_generation + 1,
+        "pending",
+    )
+
+    reconcile_node(app, "p", "documents", instant(2))
+    repeated = tuple(
+        app.conn.execute(
+            "SELECT item_id,generation,state FROM node_members "
+            "WHERE pipeline_name='p' AND node_name='documents' AND state!='stale'"
+        ).fetchone()
+    )
+    assert repeated == latest
+    assert old_id != latest[0]
+
+
+def test_batch_update_preserves_completed_visible_generation(tmp_path):
+    definition = tmp_path / "completed-generation.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: tests.integration.test_shared_materialization.same_identity_source, with: {}}}
+stages: {documents: {input: batch, tasks: [{use: sluice.tasks.filter, with: {all: [{field: title, op: exists}]}}]}}
+pipelines:
+  p:
+    nodes:
+      documents: {stage: documents, from: source.feed, batch: {count: 1}}
+      email: {from: documents, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    collect_source(app, "feed", instant(0))
+    reconcile_node(app, "p", "documents", instant(0))
+    batch_id = app.conn.execute(
+        "SELECT current_frozen_batch_id FROM node_state "
+        "WHERE pipeline_name='p' AND node_name='documents'"
+    ).fetchone()[0]
+    old_id = app.conn.execute(
+        "SELECT item_id FROM batch_items WHERE batch_id=?", (batch_id,)
+    ).fetchone()[0]
+    execute_stage(
+        app,
+        "documents",
+        StageEnvelope((old_id,)),
+        pipeline_name="p",
+        node_name="documents",
+        generation=1,
+        batch_id=batch_id,
+        at=instant(0),
+    )
+    old_member = tuple(
+        app.conn.execute(
+            "SELECT item_id,state,visible_result_id FROM node_members "
+            "WHERE pipeline_name='p' AND node_name='documents' AND item_id=?",
+            (old_id,),
+        ).fetchone()
+    )
+    assert old_member[1] == "terminal"
+    assert old_member[2] is not None
+
+    collect_source(app, "feed", instant(1))
+    reconcile_node(app, "p", "documents", instant(1))
+
+    assert tuple(
+        app.conn.execute(
+            "SELECT item_id,state,visible_result_id FROM node_members "
+            "WHERE pipeline_name='p' AND node_name='documents' AND item_id=?",
+            (old_id,),
+        ).fetchone()
+    ) == old_member
+    publication_id = app.conn.execute(
+        "SELECT current_publication_id FROM node_state "
+        "WHERE pipeline_name='p' AND node_name='documents'"
+    ).fetchone()[0]
+    assert [
+        row[0]
+        for row in app.conn.execute(
+            "SELECT item_id FROM publication_members WHERE publication_id=?",
+            (publication_id,),
+        )
+    ] == [old_id]
+    assert app.conn.execute(
+        "SELECT COUNT(*) FROM node_members WHERE pipeline_name='p' AND node_name='documents' "
+        "AND state!='stale' AND item_id!=?",
+        (old_id,),
+    ).fetchone()[0] == 0
+
+
+def test_each_stage_admits_new_source_generation_after_prior_terminal(tmp_path):
+    definition = tmp_path / "each-generations.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: tests.integration.test_shared_materialization.same_identity_source, with: {}}}
+stages: {documents: {input: each, tasks: [{use: sluice.tasks.to_markdown}]}}
+pipelines:
+  p:
+    nodes:
+      documents: {stage: documents, from: source.feed}
+      email: {from: documents, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    collect_source(app, "feed", instant(0))
+    reconcile_node(app, "p", "documents", instant(0))
+    old_id, old_generation = app.conn.execute(
+        "SELECT item_id,generation FROM node_members "
+        "WHERE pipeline_name='p' AND node_name='documents'"
+    ).fetchone()
+    execute_stage(
+        app,
+        "documents",
+        StageEnvelope((old_id,)),
+        pipeline_name="p",
+        node_name="documents",
+        generation=old_generation,
+        batch_id=None,
+        at=instant(0),
+    )
+    assert app.conn.execute(
+        "SELECT state FROM node_members WHERE item_id=?", (old_id,)
+    ).fetchone()[0] == "terminal"
+
+    collect_source(app, "feed", instant(1))
+    reconcile_node(app, "p", "documents", instant(1))
+    members = [
+        tuple(row)
+        for row in app.conn.execute(
+            "SELECT item_id,generation,state FROM node_members "
+            "WHERE pipeline_name='p' AND node_name='documents' AND state!='stale' "
+            "ORDER BY generation"
+        )
+    ]
+    assert len(members) == 2
+    assert members[0] == (old_id, old_generation, "terminal")
+    assert members[1][1:] == (old_generation + 1, "pending")
+    assert members[1][0] != old_id
+
+
+def test_targeted_reconcile_drains_downstream_stages_and_delivery(tmp_path):
+    definition = tmp_path / "downstream.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: tests.integration.test_shared_materialization.downstream_source, with: {}}}
+stages:
+  first: {input: each, tasks: [{use: sluice.tasks.to_markdown}]}
+  second: {input: each, tasks: [{use: sluice.tasks.render_email}]}
+pipelines:
+  p:
+    nodes:
+      first: {stage: first, from: source.feed}
+      second: {stage: second, from: first}
+      email: {from: second, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    collect_source(app, "feed", instant(0))
+
+    reconcile(app, "p", "first", instant(0))
+
+    assert [
+        row[0]
+        for row in app.conn.execute(
+            "SELECT state FROM executions WHERE kind='stage' "
+            "AND pipeline_name='p' ORDER BY id"
+        )
+    ] == ["succeeded", "succeeded"]
+    assert app.conn.execute(
+        "SELECT COUNT(*) FROM deliveries WHERE pipeline_name='p' AND node_name='email' "
+        "AND state='succeeded'"
+    ).fetchone()[0] == 1
+
+
+def test_ordinary_batch_drop_is_a_succeeded_empty_materialization(tmp_path):
+    definition = tmp_path / "drop.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: tests.integration.test_shared_materialization.source_collect, with: {}}}
+stages:
+  discard: {input: batch, tasks: [{use: sluice.tasks.filter, with: {all: [{field: missing, op: exists}]}}]}
+pipelines:
+  p:
+    nodes:
+      discard: {stage: discard, from: source.feed, batch: {count: 1}}
+      email: {from: discard, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    collect_source(app, "feed", instant(0))
+    reconcile_node(app, "p", "discard", instant(0))
+    batch_id = app.conn.execute(
+        "SELECT current_frozen_batch_id FROM node_state "
+        "WHERE pipeline_name='p' AND node_name='discard'"
+    ).fetchone()[0]
+    item_ids = tuple(
+        row[0]
+        for row in app.conn.execute(
+            "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
+            (batch_id,),
+        )
+    )
+    execution_id = execute_stage(
+        app,
+        "discard",
+        StageEnvelope(item_ids),
+        pipeline_name="p",
+        node_name="discard",
+        generation=1,
+        batch_id=batch_id,
+        at=instant(0),
+    )
+    assert app.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (execution_id,)
+    ).fetchone()[0] == "succeeded"
+    assert app.conn.execute(
+        "SELECT COUNT(*) FROM stage_result_items sri "
+        "JOIN stage_results sr ON sr.id=sri.result_id WHERE sr.producer_execution_id=?",
+        (execution_id,),
+    ).fetchone()[0] == 0
 
 
 @pytest.mark.parametrize(
@@ -178,6 +473,24 @@ class BarrierHttp:
             if not self.release[url].wait(timeout=5):
                 raise RuntimeError("test barrier was not released")
         return f"<html><body><article>{url}</article></body></html>"
+
+
+class VersionedHttp:
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, url):
+        self.calls += 1
+        return f"<html><body><article>{url}-version-{self.calls}</article></body></html>"
+
+
+class VersionedLLM:
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, model, prompt, input_payload):
+        self.calls += 1
+        return {"title": "same", "body": f"version-{self.calls}"}
 
 
 class FailingBarrierHttp:
@@ -417,6 +730,342 @@ def test_execute_stage_waiter_returns_its_cached_terminal_attempt(tmp_path):
     waiter.join(timeout=5)
     assert not owner.is_alive() and not waiter.is_alive()
     assert results["waiter"] != results["owner"]
+    assert app.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (results["waiter"],)
+    ).fetchone()[0] == "cached"
+
+
+def test_forced_rebuild_heals_all_shared_terminal_consumers_without_rerunning_tasks(tmp_path):
+    http = VersionedHttp()
+    app = shared_app(tmp_path, http)
+    reconcile_node(app, "p1", "prepare", instant(0))
+    reconcile_node(app, "p2", "prepare", instant(0))
+    item_id, generation = app.conn.execute(
+        "SELECT item_id,generation FROM node_members "
+        "WHERE pipeline_name='p1' AND node_name='prepare'"
+    ).fetchone()
+
+    owner_id = execute_stage(
+        app,
+        "prepare",
+        StageEnvelope((item_id,)),
+        pipeline_name="p1",
+        node_name="prepare",
+        generation=generation,
+        batch_id=None,
+        at=instant(0),
+    )
+    waiter_id = execute_stage(
+        app,
+        "prepare",
+        StageEnvelope((item_id,)),
+        pipeline_name="p2",
+        node_name="prepare",
+        generation=generation,
+        batch_id=None,
+        at=instant(0),
+    )
+    assert http.calls == 1
+    old = [
+        tuple(row)
+        for row in app.conn.execute(
+            "SELECT consumed_sequence,visible_result_id FROM node_members "
+            "WHERE node_name='prepare' ORDER BY pipeline_name"
+        )
+    ]
+    assert old[0] == old[1]
+
+    rebuilt = rebuild_stage(app, owner_id, instant(1))
+    assert rebuilt.status == "succeeded"
+    assert rebuilt.execution_id is not None
+    assert http.calls == 2
+
+    current = app.conn.execute(
+        "SELECT sr.id,sr.sequence FROM stage_result_current src "
+        "JOIN stage_results sr ON sr.id=src.result_id "
+        "WHERE src.stage_name='prepare'"
+    ).fetchone()
+    members = [
+        tuple(row)
+        for row in app.conn.execute(
+            "SELECT consumed_sequence,visible_result_id FROM node_members "
+            "WHERE node_name='prepare' ORDER BY pipeline_name"
+        )
+    ]
+    assert members == [(current[1], current[0]), (current[1], current[0])]
+    assert app.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (waiter_id,)
+    ).fetchone()[0] == "cached"
+
+
+def test_batch_healing_preserves_empty_dedup_history_when_live_history_changes(tmp_path):
+    llm = VersionedLLM()
+    definition = tmp_path / "dedup-heal.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: tests.integration.test_shared_materialization.shared_dedup_source, with: {}}}
+stages:
+  summary:
+    input: batch
+    tasks:
+      - {use: sluice.tasks.dedup, with: {keys: [title]}}
+      - use: sluice.tasks.llm_summary
+        with: {model: test, prompt: prompt.md}
+pipelines:
+  p1:
+    nodes:
+      summary: {stage: summary, from: source.feed, batch: {count: 1}}
+      email: {from: summary, schedule: 1h, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+  p2:
+    nodes:
+      summary: {stage: summary, from: source.feed, batch: {count: 1}}
+      email: {from: summary, schedule: 1h, deliver: {use: tests.integration.test_shared_materialization.sink_callable, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompt.md").write_text("Return a JSON summary.", encoding="utf-8")
+    app = open_app(definition, tmp_path / "state.db", llm_client=llm)
+
+    def frozen_batch(pipeline_name):
+        batch_id = app.conn.execute(
+            "SELECT current_frozen_batch_id FROM node_state "
+            "WHERE pipeline_name=? AND node_name='summary'",
+            (pipeline_name,),
+        ).fetchone()[0]
+        item_id, generation = app.conn.execute(
+            "SELECT item_id,generation FROM node_members "
+            "WHERE pipeline_name=? AND node_name='summary' AND state='frozen'",
+            (pipeline_name,),
+        ).fetchone()
+        return int(batch_id), (str(item_id),), int(generation)
+
+    collect_source(app, "feed", instant(0))
+    reconcile_node(app, "p1", "summary", instant(0))
+    reconcile_node(app, "p2", "summary", instant(0))
+    first_batch_1, first_items, first_generation = frozen_batch("p1")
+    first_batch_2, first_items_2, _ = frozen_batch("p2")
+    assert first_items_2 == first_items
+
+    first_owner = execute_stage(
+        app,
+        "summary",
+        StageEnvelope(first_items),
+        pipeline_name="p1",
+        node_name="summary",
+        generation=first_generation,
+        batch_id=first_batch_1,
+        at=instant(0),
+    )
+    execute_stage(
+        app,
+        "summary",
+        StageEnvelope(first_items_2),
+        pipeline_name="p2",
+        node_name="summary",
+        generation=first_generation,
+        batch_id=first_batch_2,
+        at=instant(0),
+    )
+    first_lookup, first_output = app.conn.execute(
+        "SELECT e.lookup_key, sri.item_id FROM executions e "
+        "JOIN stage_results sr ON sr.id=e.result_id "
+        "JOIN stage_result_items sri ON sri.result_id=sr.id "
+        "WHERE e.id=? ORDER BY sri.ordinal",
+        (first_owner,),
+    ).fetchone()
+    first_result = app.conn.execute(
+        "SELECT result_id FROM executions WHERE id=?", (first_owner,)
+    ).fetchone()[0]
+    assert app.conn.execute(
+        "SELECT COUNT(*) FROM execution_inputs WHERE execution_id=? AND slot='history'",
+        (first_owner,),
+    ).fetchone()[0] == 0
+    assert app.conn.execute(
+        "SELECT history_persisted FROM executions WHERE id=?", (first_owner,)
+    ).fetchone()[0] == 1
+
+    collect_source(app, "feed", instant(-1))
+    reconcile_node(app, "p1", "summary", instant(1))
+    reconcile_node(app, "p2", "summary", instant(1))
+    second_batch_1, second_items, second_generation = frozen_batch("p1")
+    second_batch_2, second_items_2, _ = frozen_batch("p2")
+    assert second_items_2 != first_items
+    second_owner = execute_stage(
+        app,
+        "summary",
+        StageEnvelope(second_items),
+        pipeline_name="p1",
+        node_name="summary",
+        generation=second_generation,
+        batch_id=second_batch_1,
+        at=instant(1),
+    )
+    execute_stage(
+        app,
+        "summary",
+        StageEnvelope(second_items_2),
+        pipeline_name="p2",
+        node_name="summary",
+        generation=second_generation,
+        batch_id=second_batch_2,
+        at=instant(1),
+    )
+    assert llm.calls == 2
+    second_result = app.conn.execute(
+        "SELECT result_id FROM executions WHERE id=?", (second_owner,)
+    ).fetchone()[0]
+    assert resolve_dedup_history_ids(
+        app, app.definition.stages["summary"], first_items
+    ) == tuple(
+        row[0]
+        for row in app.conn.execute(
+            "SELECT item_id FROM stage_result_items WHERE result_id=? ORDER BY ordinal",
+            (second_result,),
+        )
+    )
+
+    rebuilt = rebuild_stage(app, first_owner, instant(2))
+    assert rebuilt.status == "succeeded"
+    assert rebuilt.execution_id is not None
+    assert llm.calls == 3
+    rebuilt_result, rebuilt_lookup = app.conn.execute(
+        "SELECT result_id,lookup_key FROM executions WHERE id=?",
+        (rebuilt.execution_id,),
+    ).fetchone()
+    assert rebuilt_lookup == first_lookup
+    rebuilt_output = app.conn.execute(
+        "SELECT sri.item_id FROM stage_result_items sri WHERE sri.result_id=?",
+        (rebuilt_result,),
+    ).fetchone()[0]
+    assert rebuilt_output != first_output
+
+    healed = [
+        tuple(row)
+        for row in app.conn.execute(
+            "SELECT pipeline_name,state,lookup_key,result_id FROM executions "
+            "WHERE kind='stage' AND id>? ORDER BY id",
+            (rebuilt.execution_id,),
+        )
+    ]
+    assert healed == [("p2", "cached", first_lookup, rebuilt_result)]
+    assert llm.calls == 3
+    healed_execution = app.conn.execute(
+        "SELECT id FROM executions WHERE pipeline_name='p2' AND id>? ORDER BY id DESC LIMIT 1",
+        (rebuilt.execution_id,),
+    ).fetchone()[0]
+    assert app.conn.execute(
+        "SELECT COUNT(*) FROM execution_inputs WHERE execution_id=? AND slot='history'",
+        (healed_execution,),
+    ).fetchone()[0] == 0
+    assert app.conn.execute(
+        "SELECT history_persisted FROM executions WHERE id=?", (healed_execution,)
+    ).fetchone()[0] == 1
+    rebuilt_sequence = app.conn.execute(
+        "SELECT sequence FROM stage_results WHERE id=?", (rebuilt_result,)
+    ).fetchone()[0]
+    second_result = app.conn.execute(
+        "SELECT result_id FROM executions WHERE id=?", (second_owner,)
+    ).fetchone()[0]
+    for pipeline_name in ("p1", "p2"):
+        first_member = app.conn.execute(
+            "SELECT consumed_sequence,visible_result_id,state FROM node_members "
+            "WHERE pipeline_name=? AND node_name='summary' AND item_id=?",
+            (pipeline_name, first_items[0]),
+        ).fetchone()
+        second_member = app.conn.execute(
+            "SELECT consumed_sequence,visible_result_id,state FROM node_members "
+            "WHERE pipeline_name=? AND node_name='summary' AND item_id=?",
+            (pipeline_name, second_items[0]),
+        ).fetchone()
+        expected_result = first_result if pipeline_name == "p1" else rebuilt_result
+        assert tuple(first_member) == (rebuilt_sequence, expected_result, "terminal")
+        assert tuple(second_member) == (2, second_result, "terminal")
+
+
+def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(tmp_path):
+    url = "https://example.test/0"
+    http = BarrierHttp((url,))
+    app = shared_app(tmp_path, http)
+    reconcile_node(app, "p1", "prepare", instant(0))
+    item_id, generation = app.conn.execute(
+        "SELECT item_id,generation FROM node_members WHERE pipeline_name='p1' AND node_name='prepare'"
+    ).fetchone()
+    results: dict[str, int] = {}
+
+    def owner_call():
+        results["owner"] = execute_stage(
+            app,
+            "prepare",
+            StageEnvelope((item_id,)),
+            pipeline_name="p1",
+            node_name="prepare",
+            generation=generation,
+            batch_id=None,
+            at=instant(0),
+        )
+
+    def waiter_call():
+        results["waiter"] = execute_stage(
+            app,
+            "prepare",
+            StageEnvelope((item_id,)),
+            pipeline_name="p1",
+            node_name="prepare",
+            generation=generation,
+            batch_id=None,
+            at=instant(0),
+        )
+
+    owner = Thread(target=owner_call)
+    owner.start()
+    assert http.started[url].wait(timeout=5)
+    owner_id = app.conn.execute(
+        "SELECT id FROM executions WHERE pipeline_name='p1' AND node_name='prepare' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()[0]
+    waiter = Thread(target=waiter_call)
+    waiter.start()
+    assert waiter.is_alive()
+    for _ in range(1000):
+        with app.conn.transaction_lock:
+            count = app.conn.execute(
+                "SELECT COUNT(*) FROM materialization_waiters WHERE force=0"
+            ).fetchone()[0]
+        if count == 1:
+            break
+        time.sleep(0.001)
+    with app.conn.transaction_lock:
+        assert app.conn.execute(
+            "SELECT COUNT(*) FROM materialization_waiters WHERE force=0"
+        ).fetchone()[0] == 1
+
+    rebuild = rebuild_stage(app, owner_id, instant(1))
+    assert rebuild.execution_id is None
+    assert rebuild.status == "queued"
+    waiters = [
+        tuple(row)
+        for row in app.conn.execute(
+            "SELECT force,rebuild_target_id FROM materialization_waiters "
+            "ORDER BY force DESC,waiting_sequence"
+        )
+    ]
+    assert waiters == [(1, owner_id), (0, None)]
+
+    http.release[url].set()
+    owner.join(timeout=5)
+    assert not owner.is_alive()
+    forced_id = app.conn.execute(
+        "SELECT id FROM executions WHERE rebuild_target_id=? ORDER BY id DESC LIMIT 1",
+        (owner_id,),
+    ).fetchone()[0]
+    _execute_claimed_stage(app, forced_id, instant(2))
+    waiter.join(timeout=5)
+    assert not waiter.is_alive()
+    assert app.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (forced_id,)
+    ).fetchone()[0] == "succeeded"
     assert app.conn.execute(
         "SELECT state FROM executions WHERE id=?", (results["waiter"],)
     ).fetchone()[0] == "cached"

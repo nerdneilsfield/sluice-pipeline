@@ -52,6 +52,13 @@ def test_dedup_change_and_metadata_boundaries():
     assert collection.dedup(
         {"keys": ["url"]}, BatchInput((metadata_changed,), (prior,))
     ) == (FORWARD(metadata_changed),)
+    payload_and_metadata_changed = item(
+        "both", {"url": "u", "content": "abce"}, {"tag": "new"}
+    )
+    assert collection.dedup(
+        {"keys": ["url"], "change": {"field": "content", "min_rate": 0.26}},
+        BatchInput((payload_and_metadata_changed,), (prior,)),
+    ) == (FORWARD(payload_and_metadata_changed),)
 
 
 def test_filter_sort_and_limit_boundaries():

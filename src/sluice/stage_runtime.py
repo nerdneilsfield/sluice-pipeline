@@ -107,13 +107,14 @@ def validate_task_outputs(
     *,
     current_items: Sequence[Item],
     history_items: Sequence[Item],
+    current_values: Sequence[object] | None = None,
 ) -> tuple[FORWARD | NEW, ...]:
     """Validate and normalize one Task result at a Stage boundary.
 
     ``DROP`` markers are decisions rather than values and therefore disappear
     from the normalized output.  An empty normalized tuple is the explicit
-    short-circuit signal for a batch chain (and the dropped result for an
-    ``each`` chain).
+    short-circuit signal for a Stage chain; runtime policy decides whether an
+    empty materialization is a normal success or an exhausted invalid drop.
     """
 
     if input_mode not in {"each", "batch"}:
@@ -126,7 +127,20 @@ def validate_task_outputs(
         history_items, (str, bytes, bytearray)
     ):
         raise ExecutionError("history_items must be an ordered sequence")
-    current = _items_by_id(current_items, "current_items")
+    if current_values is None:
+        current = _items_by_id(current_items, "current_items")
+    else:
+        if not isinstance(current_values, Sequence) or isinstance(
+            current_values, (str, bytes, bytearray)
+        ):
+            raise ExecutionError("current_values must be an ordered sequence")
+        # Later Tasks see the transient values emitted by the previous Task.
+        # NEW values are intentionally not Items, so only Item values can be
+        # forwarded at this boundary.
+        current = _items_by_id(
+            tuple(value for value in current_values if isinstance(value, Item)),
+            "current_values",
+        )
     history = _items_by_id(history_items, "history_items")
 
     if input_mode == "each":
@@ -220,9 +234,10 @@ def run_stage_tasks(
                 result,
                 current_items=current_items,
                 history_items=history_items,
+                current_values=(value,),
             )
             if not markers:
-                return StageOutcome(outputs=(), status="dropped")
+                return StageOutcome(outputs=(), status="succeeded")
             marker = markers[0]
             value = marker.item if isinstance(marker, FORWARD) else marker.value
         # ``markers`` is non-empty here and only contains FORWARD/NEW.
@@ -244,9 +259,10 @@ def run_stage_tasks(
             result,
             current_items=current_items,
             history_items=history_items if index == 0 and _is_initial_dedup(stage, task) else (),
+            current_values=values,
         )
         if not markers:
-            return StageOutcome(outputs=(), status="dropped")
+            return StageOutcome(outputs=(), status="succeeded")
         values = tuple(
             marker.item if isinstance(marker, FORWARD) else marker.value
             for marker in markers
@@ -271,6 +287,7 @@ class _StageRequest:
     force: bool = False
     retained_stage: StageDef | None = None
     rebuild_target_id: int | None = None
+    history_persisted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -520,8 +537,9 @@ def _insert_stage_execution_tx(
     cursor = app.conn.execute(
         "INSERT INTO executions "
         "(kind,pipeline_name,node_name,stage_name,state,binding_digest,config_json,lookup_key,"
-        "admitted_generation,claim_ordinal,batch_id,policy_json,retry_count,retry_parent_id,result_id,"
-        "finished_at,rebuild_target_id) VALUES ('stage',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "admitted_generation,claim_ordinal,batch_id,history_persisted,policy_json,retry_count,"
+        "retry_parent_id,result_id,finished_at,rebuild_target_id) "
+        "VALUES ('stage',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             pipeline_name,
             node_name,
@@ -533,6 +551,7 @@ def _insert_stage_execution_tx(
             request.generation,
             claim_ordinal,
             request.batch_id,
+            int(request.history_persisted),
             _policy_json(request.policy),
             retry_count,
             retry_parent_id,
@@ -817,6 +836,7 @@ def _promote_waiters_tx(app: "App", stage_name: str, lookup_key: str, result_id:
             force=bool(waiter["force"]),
             retained_stage=retained_stage,
             rebuild_target_id=waiter["rebuild_target_id"],
+            history_persisted=bool(waiter["history_persisted"]),
         )
         if not request.force and result_id is not None:
             execution_id = _insert_stage_execution_tx(
@@ -876,7 +896,7 @@ def _request_materialization(app: "App", request: _StageRequest, at: datetime) -
     # lookup.  Manual retries may provide only the frozen Item IDs; recover
     # the original dedup history from the first attempt rather than selecting
     # a new upstream history at retry time.
-    batch_history_persisted = False
+    batch_history_persisted = request.history_persisted
     if request.batch_id is not None:
         batch_rows = app.conn.execute(
             "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
@@ -912,7 +932,22 @@ def _request_materialization(app: "App", request: _StageRequest, at: datetime) -
                     force=request.force,
                     retained_stage=request.retained_stage,
                     rebuild_target_id=request.rebuild_target_id,
+                    history_persisted=request.history_persisted,
                 )
+    if batch_history_persisted and not request.history_persisted:
+        request = _StageRequest(
+            stage_name=request.stage_name,
+            envelope=request.envelope,
+            owner=request.owner,
+            generation=request.generation,
+            batch_id=request.batch_id,
+            policy=request.policy,
+            binding_digest=request.binding_digest,
+            force=request.force,
+            retained_stage=request.retained_stage,
+            rebuild_target_id=request.rebuild_target_id,
+            history_persisted=True,
+        )
     # Fresh normal requests resolve dedup history exactly once before the key
     # is computed.  Retries/cache/rebuild carry the persisted envelope.
     history = request.envelope.history
@@ -936,6 +971,7 @@ def _request_materialization(app: "App", request: _StageRequest, at: datetime) -
             force=request.force,
             retained_stage=request.retained_stage,
             rebuild_target_id=request.rebuild_target_id,
+            history_persisted=True,
         )
     items = _load_items(app, request.envelope.items)
     history_items = _load_items(app, history)
@@ -976,14 +1012,24 @@ def _request_materialization(app: "App", request: _StageRequest, at: datetime) -
             if owner_state is not None and owner_state[0] in {"queued", "running"}:
                 existing = app.conn.execute(
                     "SELECT 1 FROM materialization_waiters WHERE stage_name=? AND lookup_key=? "
-                    "AND pipeline_name IS ? AND node_name IS ? AND envelope_json=?",
-                    (stage.name, lookup_key, request.owner[0] if request.owner else None, request.owner[1] if request.owner else None, _envelope_json(request.envelope)),
+                        "AND pipeline_name IS ? AND node_name IS ? AND envelope_json=? "
+                    "AND force=? AND rebuild_target_id IS ? AND history_persisted=?",
+                    (
+                        stage.name,
+                        lookup_key,
+                        request.owner[0] if request.owner else None,
+                        request.owner[1] if request.owner else None,
+                        _envelope_json(request.envelope),
+                        int(request.force),
+                        request.rebuild_target_id,
+                        int(request.history_persisted),
+                    ),
                 ).fetchone()
                 if existing is None:
                     sequence = int(claim["next_waiting_sequence"])
                     app.conn.execute(
-                        "INSERT INTO materialization_waiters(stage_name,lookup_key,claim_id,waiting_sequence,pipeline_name,node_name,force,generation,batch_id,envelope_json,policy_json,config_json,binding_digest,rebuild_target_id) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "INSERT INTO materialization_waiters(stage_name,lookup_key,claim_id,waiting_sequence,pipeline_name,node_name,force,history_persisted,generation,batch_id,envelope_json,policy_json,config_json,binding_digest,rebuild_target_id) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (
                             stage.name,
                             lookup_key,
@@ -992,6 +1038,7 @@ def _request_materialization(app: "App", request: _StageRequest, at: datetime) -
                             request.owner[0] if request.owner else None,
                             request.owner[1] if request.owner else None,
                             int(request.force),
+                            int(request.history_persisted),
                             request.generation,
                             request.batch_id,
                             _envelope_json(request.envelope),
@@ -1151,6 +1198,7 @@ def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: da
             batch_id=row["batch_id"],
             policy=_decode_policy(str(row["policy_json"])),
             binding_digest=str(row["binding_digest"]),
+            history_persisted=bool(row["history_persisted"]),
             rebuild_target_id=row["rebuild_target_id"],
         )
         _attach_result_tx(app, request, result_id, at_text, execution_id=execution_id)
@@ -1239,6 +1287,7 @@ def _fail_execution(
                 batch_id=row["batch_id"],
                 policy=policy,
                 binding_digest=str(row["binding_digest"]),
+                history_persisted=bool(row["history_persisted"]),
                 rebuild_target_id=row["rebuild_target_id"],
             )
             stage = _decode_stage_snapshot(str(row["config_json"]))
@@ -1311,6 +1360,7 @@ def _fail_execution(
                 batch_id=row["batch_id"],
                 policy=policy,
                 binding_digest=str(row["binding_digest"]),
+                history_persisted=bool(row["history_persisted"]),
                 rebuild_target_id=row["rebuild_target_id"],
             )
             _attach_result_tx(app, request, result_id, at_text, execution_id=execution_id)
@@ -1597,6 +1647,7 @@ def rebuild_stage(app: "App", execution_id: int, at: datetime) -> RebuildResult:
         force=True,
         retained_stage=retained_stage,
         rebuild_target_id=int(execution_id),
+        history_persisted=bool(target["history_persisted"]),
     )
     outcome = _request_materialization(app, request, at)
     if outcome.waiting:

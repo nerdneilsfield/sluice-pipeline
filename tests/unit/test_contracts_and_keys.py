@@ -27,7 +27,7 @@ from sluice.contracts import (
 )
 from sluice.errors import ExecutionError
 from sluice.source_runtime import _log_fields
-from sluice.stage_runtime import validate_task_outputs
+from sluice.stage_runtime import run_stage_tasks, validate_task_outputs
 
 
 current = Item(
@@ -60,6 +60,15 @@ stage = StageDef(
 )
 
 
+class ResultTask:
+    def __init__(self, input_mode, result):
+        self.input_mode = input_mode
+        self.result = result
+
+    def run(self, config, input):
+        return self.result
+
+
 def test_stage_output_markers_cardinality_and_empty_batch():
     for bad in (None, object(), FORWARD(foreign)):
         with pytest.raises(ExecutionError):
@@ -81,6 +90,28 @@ def test_stage_output_markers_cardinality_and_empty_batch():
         "batch", (NEW([]),), current_items=(current,), history_items=()
     )
     assert len(aggregate) == 1 and aggregate[0].value == []
+
+
+@pytest.mark.parametrize("input_mode", ["each", "batch"])
+def test_task_chain_cannot_forward_an_item_dropped_by_an_intermediate_new(input_mode):
+    chain = StageDef(
+        name="chain",
+        input_mode=input_mode,
+        tasks=(TaskDef("first", {}), TaskDef("second", {})),
+        output_schema=None,
+        cache_version=1,
+        canonical_config_json='{"tasks":["first","second"]}',
+    )
+    first_result = NEW("replacement") if input_mode == "each" else (NEW("replacement"),)
+    tasks = (
+        ResultTask(input_mode, first_result),
+        ResultTask(
+            input_mode,
+            FORWARD(current) if input_mode == "each" else (FORWARD(current),),
+        ),
+    )
+    with pytest.raises(ExecutionError, match="current Stage Item"):
+        run_stage_tasks(chain, (current,), (), tasks)
 
 
 def test_stage_key_changes_with_item_value():

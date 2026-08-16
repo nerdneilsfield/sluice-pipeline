@@ -19,4 +19,3 @@ __all__ = [
     "extract_content",
     "to_markdown",
 ]
-

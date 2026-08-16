@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS executions(
   state TEXT NOT NULL CHECK(state IN ('queued','running','succeeded','failed','cached','dropped')),
   binding_digest TEXT NOT NULL, config_json TEXT NOT NULL,
   lookup_key TEXT, admitted_generation INTEGER, claim_ordinal INTEGER, batch_id INTEGER,
+  history_persisted INTEGER NOT NULL DEFAULT 0,
   expected_checkpoint_json TEXT, policy_json TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0,
   retry_parent_id INTEGER, result_id INTEGER, error TEXT, started_at TEXT, finished_at TEXT,
   rebuild_target_id INTEGER, target_scope_excluded INTEGER NOT NULL DEFAULT 0,
@@ -201,6 +202,7 @@ CREATE TABLE IF NOT EXISTS materialization_claims(
 CREATE TABLE IF NOT EXISTS materialization_waiters(
   stage_name TEXT NOT NULL, lookup_key TEXT NOT NULL, claim_id INTEGER NOT NULL,
   waiting_sequence INTEGER NOT NULL, pipeline_name TEXT, node_name TEXT, force INTEGER NOT NULL,
+  history_persisted INTEGER NOT NULL DEFAULT 0,
   generation INTEGER, batch_id INTEGER, envelope_json TEXT NOT NULL, policy_json TEXT NOT NULL,
   config_json TEXT NOT NULL, binding_digest TEXT,
   rebuild_target_id INTEGER,
@@ -228,3 +230,21 @@ def init_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys=ON")
     connection.executescript(_SCHEMA)
     connection.executescript(_RECONCILE_SCHEMA)
+    waiter_columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(materialization_waiters)")
+    }
+    if "history_persisted" not in waiter_columns:
+        connection.execute(
+            "ALTER TABLE materialization_waiters ADD COLUMN "
+            "history_persisted INTEGER NOT NULL DEFAULT 0"
+        )
+    execution_columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(executions)")
+    }
+    if "history_persisted" not in execution_columns:
+        connection.execute(
+            "ALTER TABLE executions ADD COLUMN "
+            "history_persisted INTEGER NOT NULL DEFAULT 0"
+        )
