@@ -210,6 +210,17 @@ CREATE INDEX IF NOT EXISTS materialization_owner ON materialization_claims(stage
 CREATE INDEX IF NOT EXISTS materialization_waiting ON materialization_waiters(stage_name,lookup_key,force,waiting_sequence);
 CREATE INDEX IF NOT EXISTS stage_result_lookup ON stage_results(stage_name,lookup_key,sequence);
 CREATE INDEX IF NOT EXISTS stage_result_producer ON stage_results(producer_execution_id);
+
+CREATE TABLE IF NOT EXISTS deliveries(
+  delivery_key TEXT PRIMARY KEY, pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL,
+  rendered_item_id TEXT NOT NULL, binding_digest TEXT NOT NULL, config_json TEXT NOT NULL,
+  policy_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('queued','running','succeeded','failed')),
+  retry_count INTEGER NOT NULL DEFAULT 0, attempt_token INTEGER, error TEXT, external_id TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS deliveries_node_state ON deliveries(pipeline_name,node_name,state);
+CREATE INDEX IF NOT EXISTS deliveries_retry ON deliveries(state,retry_count,updated_at);
 """
 
 

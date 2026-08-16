@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from collections.abc import Mapping
@@ -10,7 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Callable
 
-from sluice.config import load_definition
+from sluice.config import decode_stage_snapshot, load_definition
 from sluice.contracts import (
     Definition,
     JSONValue,
@@ -19,11 +20,12 @@ from sluice.contracts import (
     TaskContract,
 )
 from sluice.db import init_schema, open_database
-from sluice.errors import DefinitionError
+from sluice.errors import DefinitionError, ExecutionError
 from sluice.resolution import (
     BoundaryAdapters,
     freeze_adapters,
     resolve_sink,
+    resolve_retained_tasks,
     resolve_source,
     resolve_task,
 )
@@ -75,6 +77,7 @@ def open_app(
     sink_cache: dict[str, SinkContract] = {}
     resolved_sources: dict[str, SourceContract] = {}
 
+    conn: sqlite3.Connection | None = None
     try:
         for name, source in definition.sources.items():
             if source.use not in source_cache:
@@ -105,15 +108,33 @@ def open_app(
         if not database.is_absolute():
             database = base_dir / database
         conn = open_database(database)
-        try:
-            init_schema(conn)
-        except BaseException:
-            conn.close()
-            raise
+        init_schema(conn)
+
+        # Retained Stage executions outlive the currently authored YAML.  Load
+        # and verify every distinct snapshot before returning the immutable App
+        # so no callable is imported during a later rebuild.
+        retained_configs: set[str] = set()
+        rows = conn.execute(
+            "SELECT DISTINCT config_json FROM executions WHERE kind='stage'"
+        ).fetchall()
+        retained_configs.update(str(row[0]) for row in rows if row[0] is not None)
+        rows = conn.execute(
+            "SELECT DISTINCT config_json FROM materialization_waiters"
+        ).fetchall()
+        retained_configs.update(str(row[0]) for row in rows if row[0] is not None)
+        for config_json in sorted(retained_configs):
+            try:
+                snapshot = json.loads(config_json)
+                stage = decode_stage_snapshot(snapshot)
+            except (ExecutionError, TypeError, ValueError, json.JSONDecodeError) as error:
+                raise DefinitionError("invalid retained Stage snapshot") from error
+            resolve_retained_tasks(stage, adapters, task_cache)
     except BaseException:
-        # A connection is only created after all resolution above.  Keep this
-        # guard for future resolver/database changes without leaking a lock.
+        if conn is not None:
+            conn.close()
         raise
+
+    assert conn is not None
 
     app = App(
         definition=definition,

@@ -14,7 +14,7 @@ import json
 import logging
 import sqlite3
 import time
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, Literal
 
 from .contracts import (
     BatchInput,
@@ -40,10 +40,10 @@ from .canonical import (
     materialized_item_id,
     stage_lookup_key,
 )
-from .config import freeze_json, verify_stage_files
+from .config import decode_stage_snapshot, freeze_json, verify_stage_files
 from .db import write_transaction
 from .logging import log_event
-from .errors import ExecutionError
+from .errors import ExecutionError, InvalidStructuredOutput
 
 if TYPE_CHECKING:
     from .app import App
@@ -282,6 +282,13 @@ class _RequestOutcome:
     request: _StageRequest | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RebuildResult:
+    execution_id: int | None
+    status: Literal["queued", "running", "succeeded", "failed"]
+    forced: bool
+
+
 _STAGE_LOGGER = logging.getLogger("sluice.stage_runtime")
 
 
@@ -323,40 +330,7 @@ def _decode_stage_snapshot(value: str | Mapping[str, object]) -> StageDef:
         raise ExecutionError("persisted Stage configuration is invalid JSON") from error
     if not isinstance(raw, Mapping):
         raise ExecutionError("persisted Stage configuration must be an object")
-    required = {"name", "input", "cache_version", "tasks", "output_schema"}
-    if set(raw) != required or raw.get("input") not in {"each", "batch"}:
-        raise ExecutionError("invalid persisted Stage configuration")
-    tasks_raw = raw.get("tasks")
-    if not isinstance(tasks_raw, list):
-        raise ExecutionError("invalid persisted Task configuration")
-    tasks: list[TaskDef] = []
-    for encoded in tasks_raw:
-        if not isinstance(encoded, Mapping) or set(encoded) != {"use", "with"}:
-            raise ExecutionError("invalid persisted Task configuration")
-        config = encoded.get("with")
-        use = encoded.get("use")
-        if not isinstance(use, str) or not isinstance(config, Mapping):
-            raise ExecutionError("invalid persisted Task configuration")
-        tasks.append(TaskDef(use=use, with_config=freeze_json(dict(config))))
-    output = raw.get("output_schema")
-    output_schema = None if output is None else freeze_json(output)
-    try:
-        cache_version = int(raw["cache_version"])
-    except (TypeError, ValueError) as error:
-        raise ExecutionError("invalid persisted Stage cache version") from error
-    stage = StageDef(
-        name=str(raw["name"]),
-        input_mode=str(raw["input"]),
-        tasks=tuple(tasks),
-        output_schema=output_schema,  # type: ignore[arg-type]
-        cache_version=cache_version,
-        canonical_config_json=canonical_json(raw),
-    )
-    try:
-        verify_stage_files(stage)
-    except Exception as error:
-        raise ExecutionError("retained Stage file metadata is invalid") from error
-    return stage
+    return decode_stage_snapshot(raw)  # type: ignore[arg-type]
 
 
 def _load_items(app: "App", ids: Sequence[str]) -> tuple[Item, ...]:
@@ -396,6 +370,78 @@ def _items_for_execution(app: "App", execution_id: int, slot: str) -> tuple[Item
             (execution_id, slot),
         ).fetchall()
     return tuple(load_item(row) for row in rows)
+
+
+def verify_execution_envelope(app: "App", execution_id: int) -> StageEnvelope:
+    """Validate and return the immutable input envelope of a Stage Execution.
+
+    Rebuilds are intentionally anchored to this row and its retained Stage
+    snapshot.  No current YAML definition or upstream publication is
+    consulted while validating the target.
+    """
+
+    if isinstance(execution_id, bool) or not isinstance(execution_id, int):
+        raise ExecutionError("execution_id must be an integer")
+    with app.conn.transaction_lock:
+        target = app.conn.execute(
+            "SELECT * FROM executions WHERE id=? AND kind='stage'", (execution_id,)
+        ).fetchone()
+        if target is None:
+            raise ExecutionError(f"Stage Execution is missing: {execution_id}")
+        try:
+            raw_snapshot = json.loads(str(target["config_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ExecutionError("persisted Stage configuration is invalid JSON") from error
+        if not isinstance(raw_snapshot, Mapping):
+            raise ExecutionError("persisted Stage configuration must be an object")
+        stage = decode_stage_snapshot(raw_snapshot)  # type: ignore[arg-type]
+        if stage.name != str(target["stage_name"]):
+            raise ExecutionError("Stage snapshot name does not match Execution")
+        rows = app.conn.execute(
+            "SELECT slot,ordinal,item_id FROM execution_inputs WHERE execution_id=? "
+            "ORDER BY slot,ordinal",
+            (execution_id,),
+        ).fetchall()
+        by_slot: dict[str, list[tuple[int, str]]] = {"items": [], "history": []}
+        for row in rows:
+            slot = str(row["slot"])
+            if slot not in by_slot:
+                raise ExecutionError("Stage Execution envelope has an invalid slot")
+            ordinal = row["ordinal"]
+            if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 0:
+                raise ExecutionError("Stage Execution envelope has an invalid ordinal")
+            by_slot[slot].append((ordinal, str(row["item_id"])))
+        if not by_slot["items"]:
+            raise ExecutionError("Stage Execution envelope is missing Items")
+        for slot, values in by_slot.items():
+            ordinals = [ordinal for ordinal, _item_id in values]
+            if ordinals != list(range(len(ordinals))):
+                raise ExecutionError("Stage Execution envelope ordinals are inconsistent")
+            item_ids = [item_id for _ordinal, item_id in values]
+            if len(set(item_ids)) != len(item_ids):
+                raise ExecutionError("Stage Execution envelope contains duplicate Items")
+            for item_id in item_ids:
+                item = app.conn.execute("SELECT 1 FROM items WHERE id=?", (item_id,)).fetchone()
+                if item is None:
+                    raise ExecutionError(f"Stage envelope Item is missing: {item_id}")
+        item_ids = tuple(item_id for _ordinal, item_id in by_slot["items"])
+        history_ids = tuple(item_id for _ordinal, item_id in by_slot["history"])
+        items = tuple(
+            load_item(app.conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
+            for item_id in item_ids
+        )
+        history = tuple(
+            load_item(app.conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone())
+            for item_id in history_ids
+        )
+        try:
+            expected_key = stage_lookup_key(stage, items, history)
+        except Exception as error:
+            raise ExecutionError("Stage Execution envelope is inconsistent") from error
+        recorded_key = target["lookup_key"]
+        if not isinstance(recorded_key, str) or recorded_key != expected_key:
+            raise ExecutionError("Stage Execution lookup key does not match retained envelope")
+    return StageEnvelope(item_ids, history_ids)
 
 
 def resolve_dedup_history_ids(
@@ -542,7 +588,12 @@ def _member_scope_current_tx(app: "App", request: _StageRequest) -> bool:
             "AND binding_digest=? AND item_id=?",
             (pipeline_name, node_name, request.binding_digest, item_id),
         ).fetchone()
-        if row is None or row["state"] not in {"pending", "claimed", "frozen"}:
+        if row is None or row["state"] not in {
+            "pending",
+            "claimed",
+            "frozen",
+            "terminal",
+        }:
             return False
         if request.generation is not None and int(row["generation"]) != request.generation:
             return False
@@ -662,22 +713,57 @@ def _publish_node_snapshot_tx(app: "App", pipeline_name: str, node_name: str, bi
     )
 
 
-def _attach_result_tx(app: "App", request: _StageRequest, result_id: int, at_text: str) -> None:
+def _attach_result_tx(
+    app: "App",
+    request: _StageRequest,
+    result_id: int,
+    at_text: str,
+    *,
+    execution_id: int | None = None,
+) -> None:
     if request.owner is None:
         return
     pipeline_name, node_name = request.owner
-    if not _member_scope_current_tx(app, request):
-        return
     sequence = app.conn.execute(
         "SELECT sequence,lookup_key FROM stage_results WHERE id=?", (result_id,)
     ).fetchone()
     sequence_value = None if sequence is None else int(sequence["sequence"])
     lookup_value = None if sequence is None else str(sequence["lookup_key"])
+    if not _member_scope_current_tx(app, request):
+        if request.rebuild_target_id is not None:
+            if execution_id is not None:
+                app.conn.execute(
+                    "UPDATE executions SET target_scope_excluded=1 WHERE id=? AND kind='stage'",
+                    (execution_id,),
+                )
+            # The target's historical sequence has been observed by this
+            # node, but its output must not replace the active local result.
+            # Keeping visible_result_id untouched preserves the current
+            # snapshot while preventing repeated healing of the same row.
+            if sequence_value is not None:
+                ids = tuple(request.envelope.items)
+                if ids:
+                    placeholders = ",".join("?" for _ in ids)
+                    params: list[object] = [sequence_value, pipeline_name, node_name, request.binding_digest]
+                    params.extend(ids)
+                    generation_clause = ""
+                    if request.generation is not None:
+                        generation_clause = " AND generation=?"
+                        params.append(request.generation)
+                    app.conn.execute(
+                        "UPDATE node_members SET consumed_sequence=? WHERE pipeline_name=? "
+                        "AND node_name=? AND binding_digest=? AND item_id IN ("
+                        + placeholders
+                        + ")"
+                        + generation_clause,
+                        tuple(params),
+                    )
+        return
     for item_id in request.envelope.items:
         app.conn.execute(
             "UPDATE node_members SET state='terminal',consumed_sequence=?,visible_result_id=?,lookup_key=? "
             "WHERE pipeline_name=? AND node_name=? AND binding_digest=? AND item_id=? "
-            "AND state IN ('pending','claimed','frozen')",
+            "AND state IN ('pending','claimed','frozen','terminal')",
             (
                 sequence_value,
                 result_id,
@@ -689,7 +775,10 @@ def _attach_result_tx(app: "App", request: _StageRequest, result_id: int, at_tex
             ),
         )
     if request.batch_id is not None:
-        app.conn.execute("UPDATE batches SET state='succeeded' WHERE id=? AND state='frozen'", (request.batch_id,))
+        app.conn.execute(
+            "UPDATE batches SET state='succeeded' WHERE id=? AND state IN ('frozen','failed')",
+            (request.batch_id,),
+        )
         app.conn.execute(
             "UPDATE node_state SET current_frozen_batch_id=NULL WHERE pipeline_name=? AND node_name=? "
             "AND binding_digest=? AND current_frozen_batch_id=?",
@@ -716,6 +805,7 @@ def _promote_waiters_tx(app: "App", stage_name: str, lookup_key: str, result_id:
         envelope_raw = json.loads(str(waiter["envelope_json"]))
         envelope = StageEnvelope(tuple(envelope_raw.get("items", ())), tuple(envelope_raw.get("history", ())))
         binding = waiter["binding_digest"]
+        retained_stage = _decode_stage_snapshot(str(waiter["config_json"]))
         request = _StageRequest(
             stage_name=stage_name,
             envelope=envelope,
@@ -725,6 +815,7 @@ def _promote_waiters_tx(app: "App", stage_name: str, lookup_key: str, result_id:
             policy=_decode_policy(str(waiter["policy_json"])),
             binding_digest=str(binding or ""),
             force=bool(waiter["force"]),
+            retained_stage=retained_stage,
             rebuild_target_id=waiter["rebuild_target_id"],
         )
         if not request.force and result_id is not None:
@@ -752,11 +843,10 @@ def _promote_waiters_tx(app: "App", stage_name: str, lookup_key: str, result_id:
                 (stage_name, lookup_key, waiter["waiting_sequence"]),
             )
             continue
-        stage = _decode_stage_snapshot(str(waiter["config_json"]))
         execution_id = _insert_stage_execution_tx(
             app,
             request,
-            stage,
+            retained_stage,
             lookup_key,
             envelope,
             "queued",
@@ -782,12 +872,54 @@ def _request_materialization(app: "App", request: _StageRequest, at: datetime) -
     stage = _stage_for_request(app, request)
     if stage.name != request.stage_name:
         raise ExecutionError("Stage request name does not match Stage definition")
+    # A batch ID is an immutable admission envelope, not merely a hint for
+    # lookup.  Manual retries may provide only the frozen Item IDs; recover
+    # the original dedup history from the first attempt rather than selecting
+    # a new upstream history at retry time.
+    batch_history_persisted = False
+    if request.batch_id is not None:
+        batch_rows = app.conn.execute(
+            "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
+            (request.batch_id,),
+        ).fetchall()
+        frozen_items = tuple(str(row[0]) for row in batch_rows)
+        if not frozen_items:
+            raise ExecutionError("Stage batch envelope is missing")
+        if tuple(request.envelope.items) != frozen_items:
+            raise ExecutionError("Stage retry must use the exact frozen batch Items")
+        first_attempt = app.conn.execute(
+            "SELECT id FROM executions WHERE kind='stage' AND batch_id=? ORDER BY id LIMIT 1",
+            (request.batch_id,),
+        ).fetchone()
+        if first_attempt is not None:
+            batch_history_persisted = True
+            history_rows = app.conn.execute(
+                "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='history' ORDER BY ordinal",
+                (first_attempt[0],),
+            ).fetchall()
+            frozen_history = tuple(str(row[0]) for row in history_rows)
+            if request.envelope.history and tuple(request.envelope.history) != frozen_history:
+                raise ExecutionError("Stage retry must use the original frozen history")
+            if not request.envelope.history and frozen_history:
+                request = _StageRequest(
+                    stage_name=request.stage_name,
+                    envelope=StageEnvelope(request.envelope.items, frozen_history),
+                    owner=request.owner,
+                    generation=request.generation,
+                    batch_id=request.batch_id,
+                    policy=request.policy,
+                    binding_digest=request.binding_digest,
+                    force=request.force,
+                    retained_stage=request.retained_stage,
+                    rebuild_target_id=request.rebuild_target_id,
+                )
     # Fresh normal requests resolve dedup history exactly once before the key
     # is computed.  Retries/cache/rebuild carry the persisted envelope.
     history = request.envelope.history
     if (
         not request.force
         and not history
+        and not batch_history_persisted
         and stage.input_mode == "batch"
         and stage.tasks
         and stage.tasks[0].use.endswith(".dedup")
@@ -910,6 +1042,7 @@ def _start_claimed_execution(app: "App", execution_id: int, at: datetime) -> boo
 
 def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: datetime) -> bool:
     at_text = _ts(at)
+    reconcile_consumers: list[tuple[str, str]] = []
     with write_transaction(app.conn):
         row = app.conn.execute(
             "SELECT * FROM executions WHERE id=? AND kind='stage' AND state='running'",
@@ -978,6 +1111,17 @@ def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: da
                 ),
             )
             outputs.append(output)
+        previous = app.conn.execute(
+            "SELECT result_id FROM stage_result_current WHERE stage_name=? AND lookup_key=?",
+            (stage.name, row["lookup_key"]),
+        ).fetchone()
+        previous_ids = (
+            []
+            if previous is None
+            else [item_id for item_id, _sequence in _current_result_items_tx(app, int(previous[0]))]
+        )
+        output_ids = [output.id for output in outputs]
+        output_changed = previous_ids != output_ids
         sequence = int(
             app.conn.execute("SELECT COALESCE(MAX(sequence),0) FROM stage_results WHERE stage_name=?", (stage.name,)).fetchone()[0]
         ) + 1
@@ -1009,7 +1153,7 @@ def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: da
             binding_digest=str(row["binding_digest"]),
             rebuild_target_id=row["rebuild_target_id"],
         )
-        _attach_result_tx(app, request, result_id, at_text)
+        _attach_result_tx(app, request, result_id, at_text, execution_id=execution_id)
         app.conn.execute(
             "UPDATE materialization_claims SET owner_execution_id=NULL WHERE stage_name=? AND lookup_key=? AND owner_execution_id=?",
             (stage.name, row["lookup_key"], execution_id),
@@ -1027,15 +1171,42 @@ def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: da
             result_id=result_id,
             state=outcome.status,
         )
+        if row["rebuild_target_id"] is not None and output_changed:
+            for pipeline_name, pipeline in app.definition.pipelines.items():
+                for node_name, node in pipeline.nodes.items():
+                    if node.stage == stage.name:
+                        reconcile_consumers.append((pipeline_name, node_name))
+    if reconcile_consumers:
+        # A forced result is shared cache state.  Let each active Stage node
+        # re-admit it through the normal targeted drain, while preserving the
+        # guarded target scope handled by _attach_result_tx above.
+        from .reconcile import reconcile
+
+        for pipeline_name, node_name in reconcile_consumers:
+            try:
+                reconcile(app, pipeline_name, node_name, at)
+            except ExecutionError:
+                _STAGE_LOGGER.exception(
+                    "forced_result_reconcile_failed",
+                    extra={"pipeline": pipeline_name, "node": node_name},
+                )
     return True
 
 
-def _fail_execution(app: "App", execution_id: int, error: BaseException, at: datetime) -> int | None:
+def _fail_execution(
+    app: "App",
+    execution_id: int,
+    error: BaseException,
+    at: datetime,
+    *,
+    drop_invalid: bool = False,
+) -> int | None:
     """Guard a queued/running attempt and transfer its stable claim."""
 
     message = str(error) or error.__class__.__name__
     at_text = _ts(at)
     retry_id: int | None = None
+    result_id: int | None = None
     with write_transaction(app.conn):
         row = app.conn.execute(
             "SELECT * FROM executions WHERE id=? AND kind='stage' AND state IN ('queued','running')",
@@ -1043,14 +1214,19 @@ def _fail_execution(app: "App", execution_id: int, error: BaseException, at: dat
         ).fetchone()
         if row is None:
             return None
+        policy = _decode_policy(str(row["policy_json"]))
+        exhausted_invalid = bool(
+            drop_invalid and isinstance(error, InvalidStructuredOutput)
+            and int(row["retry_count"]) >= policy.retries
+        )
+        terminal_state = "dropped" if exhausted_invalid else "failed"
         guard = app.conn.execute(
-            "UPDATE executions SET state='failed',error=?,finished_at=? WHERE id=? AND kind='stage' "
+            "UPDATE executions SET state=?,error=?,finished_at=? WHERE id=? AND kind='stage' "
             "AND state IN ('queued','running')",
-            (message, at_text, execution_id),
+            (terminal_state, message, at_text, execution_id),
         )
         if guard.rowcount != 1:
             return None
-        policy = _decode_policy(str(row["policy_json"]))
         if int(row["retry_count"]) < policy.retries:
             request = _StageRequest(
                 stage_name=str(row["stage_name"]),
@@ -1083,6 +1259,69 @@ def _fail_execution(app: "App", execution_id: int, error: BaseException, at: dat
                 "UPDATE materialization_claims SET owner_execution_id=? WHERE stage_name=? AND lookup_key=?",
                 (retry_id, row["stage_name"], row["lookup_key"]),
             )
+        elif exhausted_invalid:
+            # An exhausted per-item invalid:drop attempt is a terminal empty
+            # materialization.  It must occupy the same reusable cache slot as
+            # a successful result so later reconciliation cannot call the LLM
+            # again for this exact input.
+            stage = _decode_stage_snapshot(str(row["config_json"]))
+            sequence = int(
+                app.conn.execute(
+                    "SELECT COALESCE(MAX(sequence),0) FROM stage_results WHERE stage_name=?",
+                    (row["stage_name"],),
+                ).fetchone()[0]
+            ) + 1
+            result = app.conn.execute(
+                "INSERT INTO stage_results(stage_name,lookup_key,sequence,created_at,producer_execution_id) "
+                "VALUES (?,?,?,?,?)",
+                (row["stage_name"], row["lookup_key"], sequence, at_text, execution_id),
+            )
+            result_id = int(result.lastrowid)
+            app.conn.execute(
+                "INSERT INTO stage_result_current(stage_name,lookup_key,result_id) VALUES (?,?,?) "
+                "ON CONFLICT(stage_name,lookup_key) DO UPDATE SET result_id=excluded.result_id",
+                (row["stage_name"], row["lookup_key"], result_id),
+            )
+            app.conn.execute(
+                "UPDATE executions SET result_id=? WHERE id=?",
+                (result_id, execution_id),
+            )
+            request = _StageRequest(
+                stage_name=stage.name,
+                envelope=StageEnvelope(
+                    tuple(
+                        str(r[0])
+                        for r in app.conn.execute(
+                            "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='items' ORDER BY ordinal",
+                            (execution_id,),
+                        )
+                    ),
+                    tuple(
+                        str(r[0])
+                        for r in app.conn.execute(
+                            "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='history' ORDER BY ordinal",
+                            (execution_id,),
+                        )
+                    ),
+                ),
+                owner=None
+                if row["pipeline_name"] is None or row["node_name"] is None
+                else (str(row["pipeline_name"]), str(row["node_name"])),
+                generation=row["admitted_generation"],
+                batch_id=row["batch_id"],
+                policy=policy,
+                binding_digest=str(row["binding_digest"]),
+                rebuild_target_id=row["rebuild_target_id"],
+            )
+            _attach_result_tx(app, request, result_id, at_text, execution_id=execution_id)
+            app.conn.execute(
+                "UPDATE materialization_claims SET owner_execution_id=NULL WHERE stage_name=? "
+                "AND lookup_key=? AND owner_execution_id=?",
+                (row["stage_name"], row["lookup_key"], execution_id),
+            )
+            _promote_waiters_tx(
+                app, str(row["stage_name"]), str(row["lookup_key"]), result_id, at_text
+            )
         else:
             app.conn.execute(
                 "UPDATE materialization_claims SET owner_execution_id=NULL WHERE stage_name=? AND lookup_key=? AND owner_execution_id=?",
@@ -1090,14 +1329,9 @@ def _fail_execution(app: "App", execution_id: int, error: BaseException, at: dat
             )
             if row["batch_id"] is not None:
                 app.conn.execute("UPDATE batches SET state='failed' WHERE id=? AND state='frozen'", (row["batch_id"],))
-                # Preserve the failed frozen envelope, but prevent this same
-                # attempt from being requested repeatedly by admission.
-                app.conn.execute(
-                    "UPDATE node_members SET state='terminal' WHERE pipeline_name=? AND node_name=? "
-                    "AND binding_digest=? AND item_id IN (SELECT item_id FROM batch_items WHERE batch_id=?) "
-                    "AND state IN ('claimed','frozen')",
-                    (row["pipeline_name"], row["node_name"], row["binding_digest"], row["batch_id"]),
-                )
+                # Keep the member rows frozen.  The durable failed batch is
+                # intentionally still the node's current envelope so a later
+                # explicit retry/rebuild can attach its result and clear it.
             else:
                 app.conn.execute(
                     "UPDATE node_members SET state='terminal' WHERE pipeline_name=? AND node_name=? "
@@ -1115,8 +1349,8 @@ def _fail_execution(app: "App", execution_id: int, error: BaseException, at: dat
             execution_id=execution_id,
             claim_id=None,
             item_ids=[str(r[0]) for r in app.conn.execute("SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='items' ORDER BY ordinal", (execution_id,))],
-            result_id=None,
-            state="failed",
+            result_id=result_id,
+            state=terminal_state,
             retry_execution_id=retry_id,
         )
     return retry_id
@@ -1138,6 +1372,24 @@ def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
         outcome = run_stage_tasks(stage, items, history, tasks)
         if not _finalize_stage(app, execution_id, outcome, at):
             return execution_id
+        return execution_id
+    except InvalidStructuredOutput as error:
+        retry_id = _fail_execution(
+            app,
+            execution_id,
+            error,
+            at,
+            drop_invalid=(
+                stage.input_mode == "each"
+                and any(
+                    task.use == "sluice.tasks.llm_extract"
+                    and task.with_config.get("invalid") == "drop"
+                    for task in stage.tasks
+                )
+            ),
+        )
+        if retry_id is not None:
+            return _execute_claimed_stage(app, retry_id, at)
         return execution_id
     except BaseException as error:
         retry_id = _fail_execution(app, execution_id, error, at)
@@ -1291,11 +1543,94 @@ def execute_stage(
     return int(outcome.execution_id)
 
 
+def rebuild_stage(app: "App", execution_id: int, at: datetime) -> RebuildResult:
+    """Force a Stage materialization from one exact retained Execution.
+
+    The target's canonical Stage snapshot, binding, policy, and input
+    envelope are copied into a private request.  A currently running owner
+    receives a durable forced waiter; otherwise the forced owner executes
+    synchronously and this action reports its terminal state.
+    """
+
+    from .app import App as AppType
+
+    if not isinstance(app, AppType):
+        raise ExecutionError("rebuild_stage requires an App")
+    envelope = verify_execution_envelope(app, execution_id)
+    with app.conn.transaction_lock:
+        target = app.conn.execute(
+            "SELECT * FROM executions WHERE id=? AND kind='stage'", (execution_id,)
+        ).fetchone()
+    if target is None:
+        # The verifier already guards this branch; keep a stable public error
+        # if a connection implementation changes between the reads.
+        raise ExecutionError(f"Stage Execution is missing: {execution_id}")
+    try:
+        raw_snapshot = json.loads(str(target["config_json"]))
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ExecutionError("persisted Stage configuration is invalid JSON") from error
+    if not isinstance(raw_snapshot, Mapping):
+        raise ExecutionError("persisted Stage configuration must be an object")
+    retained_stage = decode_stage_snapshot(raw_snapshot)  # type: ignore[arg-type]
+    if retained_stage.name != str(target["stage_name"]):
+        raise ExecutionError("Stage snapshot name does not match Execution")
+    pipeline_name = target["pipeline_name"]
+    node_name = target["node_name"]
+    owner = (
+        None
+        if pipeline_name is None or node_name is None
+        else (str(pipeline_name), str(node_name))
+    )
+    binding_digest = target["binding_digest"]
+    if not isinstance(binding_digest, str) or not binding_digest:
+        raise ExecutionError("Stage Execution binding is invalid")
+    generation = target["admitted_generation"]
+    batch_id = target["batch_id"]
+    request = _StageRequest(
+        stage_name=retained_stage.name,
+        envelope=envelope,
+        owner=owner,
+        generation=None if generation is None else int(generation),
+        batch_id=None if batch_id is None else int(batch_id),
+        policy=_decode_policy(str(target["policy_json"])),
+        binding_digest=binding_digest,
+        force=True,
+        retained_stage=retained_stage,
+        rebuild_target_id=int(execution_id),
+    )
+    outcome = _request_materialization(app, request, at)
+    if outcome.waiting:
+        return RebuildResult(execution_id=None, status="queued", forced=True)
+    if outcome.execution_id is None:
+        raise ExecutionError("Stage rebuild did not produce an Execution")
+    result_id = int(outcome.execution_id)
+    if outcome.owner:
+        result_id = _execute_claimed_stage(app, result_id, at)
+    row = app.conn.execute(
+        "SELECT state FROM executions WHERE id=? AND kind='stage'", (result_id,)
+    ).fetchone()
+    if row is None:
+        raise ExecutionError("Stage rebuild Execution disappeared")
+    state = str(row[0])
+    if state in {"succeeded", "cached"}:
+        status: Literal["queued", "running", "succeeded", "failed"] = "succeeded"
+    elif state == "running":
+        status = "running"
+    elif state in {"queued"}:
+        status = "queued"
+    else:
+        status = "failed"
+    return RebuildResult(execution_id=result_id, status=status, forced=True)
+
+
 __all__ = [
     "run_stage_tasks",
     "validate_task_outputs",
     "resolve_dedup_history_ids",
     "execute_stage",
+    "RebuildResult",
+    "rebuild_stage",
+    "verify_execution_envelope",
     "_StageRequest",
     "_RequestOutcome",
     "_request_materialization",

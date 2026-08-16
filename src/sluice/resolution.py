@@ -18,6 +18,7 @@ from sluice.contracts import (
     JSONValue,
     LLMClient,
     SinkContract,
+    StageDef,
     SourceContract,
     SourceResult,
     TaskContract,
@@ -46,8 +47,15 @@ BUILTIN_TASK_BINDERS: dict[str, str] = {
     "sluice.tasks.fetch_webpage": "sluice.tasks.content.fetch_webpage",
     "sluice.tasks.extract_content": "sluice.tasks.content.extract_content",
     "sluice.tasks.to_markdown": "sluice.tasks.content.to_markdown",
+    "sluice.tasks.render_email": "sluice.tasks.content.render_email",
+    "sluice.tasks.render_telegram": "sluice.tasks.content.render_telegram",
+    "sluice.tasks.llm_extract": "sluice.tasks.llm.bind_extract",
+    "sluice.tasks.llm_summary": "sluice.tasks.llm.bind_summary",
 }
-BUILTIN_SINK_BINDERS: dict[str, str] = {}
+BUILTIN_SINK_BINDERS: dict[str, str] = {
+    "sluice.sinks.email": "sluice.sinks.email.bind",
+    "sluice.sinks.telegram": "sluice.sinks.telegram.bind",
+}
 
 
 def _fresh_json(value: object) -> object:
@@ -153,6 +161,8 @@ def bind_builtin_sink(
     try:
         binder = _bound_builtin(BUILTIN_SINK_BINDERS[path], path)
         client = sink_clients[path]
+        if not callable(client):
+            raise DefinitionError(f"startup Sink client for {path} is not callable")
         value = binder(client)
     except (KeyError, TypeError, AttributeError) as error:
         raise DefinitionError(f"cannot bind built-in Sink {path}") from error
@@ -209,6 +219,32 @@ def resolve_task(
     if task.input_mode != expected_mode:
         raise DefinitionError(f"{path} declares {task.input_mode}, expected {expected_mode}")
     return task
+
+
+def resolve_retained_tasks(
+    stage: StageDef,
+    adapters: BoundaryAdapters,
+    cache: dict[str, TaskContract] | None = None,
+) -> dict[str, TaskContract]:
+    """Resolve every Task path in one retained Stage snapshot.
+
+    This shares the same startup adapter boundary and cache as current YAML
+    stages.  It is called before an ``App`` is returned so execution never
+    imports a retained callable in the middle of a run.
+    """
+
+    if not isinstance(stage, StageDef):
+        raise DefinitionError("retained Stage must be a StageDef")
+    resolved = {} if cache is None else cache
+    for task in stage.tasks:
+        existing = resolved.get(task.use)
+        if existing is None:
+            resolved[task.use] = resolve_task(task.use, stage.input_mode, adapters)
+        elif existing.input_mode != stage.input_mode:
+            raise DefinitionError(
+                f"{task.use} declares {existing.input_mode}, expected {stage.input_mode}"
+            )
+    return resolved
 
 
 def resolve_sink(path: str, adapters: BoundaryAdapters) -> SinkContract:

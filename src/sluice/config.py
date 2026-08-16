@@ -34,7 +34,7 @@ from sluice.contracts import (
     StageDef,
     TaskDef,
 )
-from sluice.errors import DefinitionError, GraphError
+from sluice.errors import DefinitionError, ExecutionError, GraphError
 
 
 # This map is intentionally a literal.  It is a validation aid only; it is
@@ -709,19 +709,96 @@ def verify_stage_files(stage: StageDef) -> None:
         snapshot = json.loads(stage.canonical_config_json)
     except (TypeError, ValueError, json.JSONDecodeError) as error:
         raise DefinitionError("invalid canonical Stage configuration") from error
-    for task in snapshot.get("tasks", []):
+    if not isinstance(snapshot, Mapping) or not isinstance(snapshot.get("tasks"), list):
+        raise DefinitionError("invalid canonical Stage configuration")
+    for task in snapshot["tasks"]:
+        if not isinstance(task, Mapping):
+            raise DefinitionError("invalid canonical Task configuration")
         config = task.get("with", {})
         if not isinstance(config, Mapping):
-            continue
+            raise DefinitionError("invalid canonical Task configuration")
         for key in _FILE_CONFIG_KEYS:
             value = config.get(key)
             digest_key = f"{key}_digest"
-            if not isinstance(value, str) or not isinstance(config.get(digest_key), str):
+            recorded_digest = config.get(digest_key)
+            if value is None and recorded_digest is None:
                 continue
+            if not isinstance(value, str) or not isinstance(recorded_digest, str):
+                raise DefinitionError("invalid retained Stage file metadata")
             file_path = Path(value)
             try:
                 current_digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
             except OSError as error:
                 raise DefinitionError(f"stage file changed or is missing: {file_path}") from error
-            if current_digest != config[digest_key]:
+            if current_digest != recorded_digest:
                 raise DefinitionError(f"stage file changed or is missing: {file_path}")
+
+
+def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
+    """Decode and verify one immutable Stage configuration retained in SQLite.
+
+    Execution snapshots carry file digests alongside the user-facing Task
+    configuration.  The digest fields are retained in the canonical snapshot
+    for verification but are stripped from the config passed to a Task.
+    """
+
+    if not isinstance(value, Mapping):
+        raise ExecutionError("invalid retained Stage configuration")
+    required = {"name", "input", "cache_version", "tasks", "output_schema"}
+    if set(value) != required or value.get("input") not in {"each", "batch"}:
+        raise ExecutionError("invalid retained Stage configuration")
+    name = value.get("name")
+    cache_version = value.get("cache_version")
+    encoded_tasks = value.get("tasks")
+    if not isinstance(name, str) or not name:
+        raise ExecutionError("invalid retained Stage configuration")
+    if isinstance(cache_version, bool) or not isinstance(cache_version, int) or cache_version < 1:
+        raise ExecutionError("invalid retained Stage cache version")
+    if not isinstance(encoded_tasks, list) or not encoded_tasks:
+        raise ExecutionError("invalid retained Task configuration")
+
+    tasks: list[TaskDef] = []
+    for encoded in encoded_tasks:
+        if not isinstance(encoded, Mapping) or set(encoded) != {"use", "with"}:
+            raise ExecutionError("invalid retained Task configuration")
+        use = encoded.get("use")
+        config = encoded.get("with")
+        if not isinstance(use, str) or not use or not isinstance(config, Mapping):
+            raise ExecutionError("invalid retained Task configuration")
+        runtime_config = dict(config)
+        for file_key in _FILE_CONFIG_KEYS:
+            runtime_config.pop(f"{file_key}_digest", None)
+        try:
+            frozen_config = freeze_json(runtime_config)
+        except DefinitionError as error:
+            raise ExecutionError("invalid retained Task configuration") from error
+        tasks.append(TaskDef(use=use, with_config=frozen_config))
+
+    output = value.get("output_schema")
+    if output is None:
+        output_schema = None
+    else:
+        try:
+            frozen_output = freeze_json(output)
+        except DefinitionError as error:
+            raise ExecutionError("invalid retained Stage output schema") from error
+        if not isinstance(frozen_output, Mapping):
+            raise ExecutionError("invalid retained Stage output schema")
+        output_schema = frozen_output
+    try:
+        canonical = canonical_json(value)
+    except (TypeError, ValueError) as error:
+        raise ExecutionError("invalid retained Stage configuration") from error
+    stage = StageDef(
+        name=name,
+        input_mode=value["input"],  # type: ignore[arg-type]
+        tasks=tuple(tasks),
+        output_schema=output_schema,
+        cache_version=cache_version,
+        canonical_config_json=canonical,
+    )
+    try:
+        verify_stage_files(stage)
+    except (DefinitionError, KeyError, TypeError, ValueError) as error:
+        raise ExecutionError("retained Stage file metadata is invalid") from error
+    return stage

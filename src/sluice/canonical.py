@@ -154,6 +154,44 @@ def node_binding_digest(
     )
 
 
+def delivery_binding_digest(
+    pipeline_name: DeliveryDef | str,
+    node_name: str | None = None,
+    delivery: DeliveryDef | None = None,
+) -> str:
+    """Return the result-affecting identity of one Sink binding.
+
+    Delivery rows intentionally use a narrower identity than the enclosing
+    node binding: changing an edge or execution policy must not make an
+    already-rendered Item look like a different external send.  The declared
+    Sink path and its complete ``deliver.with`` mapping are the only values
+    captured here; the fully-qualified owner is added by the local delivery
+    key constructor.
+    """
+
+    # Accept the compact ``delivery_binding_digest(DeliveryDef)`` form and a
+    # compatibility ``(pipeline, node, DeliveryDef)`` form.  Owner identity
+    # belongs to ``_delivery_key``; this digest is intentionally only the Sink
+    # path plus the canonical configuration passed to ``send``.
+    if isinstance(pipeline_name, DeliveryDef) and delivery is None:
+        binding = pipeline_name
+    else:
+        if not isinstance(pipeline_name, str) or not pipeline_name:
+            raise ExecutionError("pipeline_name must be a non-empty string")
+        if not isinstance(node_name, str) or not node_name:
+            raise ExecutionError("node_name must be a non-empty string")
+        binding = delivery
+    if not isinstance(binding, DeliveryDef):
+        raise ExecutionError("delivery must be a DeliveryDef")
+    return digest(
+        {
+            "kind": "delivery_binding",
+            "use": binding.use,
+            "with": binding.with_config,
+        }
+    )
+
+
 def content_hash(payload: Any) -> str:
     return digest(payload)
 

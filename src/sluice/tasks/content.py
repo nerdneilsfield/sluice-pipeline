@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from ..contracts import NEW, HTTPClient, Item
+from ..canonical import canonical_json
 from ..errors import ExecutionError
 from .collection import field_value
 
@@ -203,6 +204,51 @@ def _to_markdown(config: Mapping[str, Any], input: object) -> object:
     return NEW(_markdown(value))
 
 
+def _render_payload(config: Mapping[str, Any], input: object) -> str:
+    """Render an Item into deterministic channel text.
+
+    Renderers deliberately have no clock, network, or process-global state.
+    A configured ``template`` may use ordinary ``str.format`` placeholders
+    against a mapping payload; without one, scalar payloads are rendered as
+    text and structured payloads as canonical JSON.  The output is always a
+    JSON-compatible string so it can be cached by the normal Stage runtime.
+    """
+
+    if not isinstance(input, Item):
+        raise ExecutionError("channel renderer input must be an Item")
+    payload = input.payload
+    template = config.get("template")
+    if template is not None:
+        if not isinstance(template, str):
+            raise ExecutionError("renderer.template must be a string")
+        if isinstance(payload, Mapping):
+            class _Values(dict[str, object]):
+                def __missing__(self, key: str) -> object:
+                    return ""
+
+            try:
+                return template.format_map(_Values(payload))
+            except (KeyError, IndexError, ValueError) as error:
+                raise ExecutionError("renderer.template is invalid") from error
+        try:
+            return template.format(payload)
+        except (IndexError, KeyError, ValueError) as error:
+            raise ExecutionError("renderer.template is invalid") from error
+    if isinstance(payload, str):
+        return payload
+    if payload is None or isinstance(payload, (bool, int, float)):
+        return str(payload)
+    return canonical_json(payload)
+
+
+def _render_email(config: Mapping[str, Any], input: object) -> object:
+    return NEW(_render_payload(config, input))
+
+
+def _render_telegram(config: Mapping[str, Any], input: object) -> object:
+    return NEW(_render_payload(config, input))
+
+
 @dataclass(frozen=True, slots=True)
 class _FunctionTask:
     input_mode: str
@@ -220,3 +266,5 @@ class _FunctionTask:
 fetch_webpage = _FetchTask()
 extract_content = _FunctionTask("each", _extract_content)
 to_markdown = _FunctionTask("each", _to_markdown)
+render_email = _FunctionTask("each", _render_email)
+render_telegram = _FunctionTask("each", _render_telegram)

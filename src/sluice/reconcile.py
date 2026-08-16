@@ -638,7 +638,14 @@ def _rebuild_members_tx(
     desired: Sequence[str],
 ) -> None:
     node = _node(app, pipeline_name, node_name)
-    include_updates = bool(node.batch is not None and node.batch.include_updates)
+    # Terminal Delivery nodes are ``each``-like consumers even though they do
+    # not carry a Stage or batch policy: a newer Item generation for the same
+    # logical identity is a distinct send candidate.  Stage batch nodes retain
+    # the explicit include_updates switch.
+    include_updates = bool(
+        node.stage is None
+        or (node.batch is not None and node.batch.include_updates)
+    )
     rows = app.conn.execute(
         "SELECT * FROM node_members WHERE pipeline_name=? AND node_name=? AND binding_digest=?",
         (pipeline_name, node_name, binding),
@@ -1183,6 +1190,9 @@ def _drain(
     for _iteration in range(32):
         changed = False
         changed = _timeout_executions(app, at, allowed_nodes) or changed
+        from .delivery import _timeout_deliveries
+
+        changed = _timeout_deliveries(app, at, allowed_nodes) or changed
         if global_scan:
             changed = _run_due_sources(app, at) or changed
         ordered: list[tuple[str, str]] = []
@@ -1197,6 +1207,9 @@ def _drain(
             if _request_node_work(app, pipeline_name, node_name, at):
                 changed = True
         changed = _start_queued_stage_owners(app, at, allowed_nodes) or changed
+        from .delivery import _dispatch_deliveries
+
+        changed = _dispatch_deliveries(app, at, allowed_nodes) or changed
         if not changed:
             break
 
@@ -1217,12 +1230,14 @@ def recover_startup(app: App, at: datetime) -> None:
         "SELECT id,kind FROM executions WHERE state='running' ORDER BY id"
     ).fetchall()
     from .stage_runtime import _fail_execution
+    from .delivery import _recover_deliveries
 
     for row in rows:
         if row["kind"] == "source":
             _recover_source_execution(app, int(row["id"]), at)
         else:
             _fail_execution(app, int(row["id"]), ExecutionError("startup recovery"), at)
+    _recover_deliveries(app, at)
 
 
 def reconcile_node(
