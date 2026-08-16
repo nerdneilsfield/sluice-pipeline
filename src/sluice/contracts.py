@@ -125,6 +125,35 @@ EachTaskResult: TypeAlias = TaskMarker
 BatchTaskResult: TypeAlias = tuple[TaskMarker, ...]
 
 
+@dataclass(frozen=True)
+class BatchInput:
+    """Explicit input passed to the first Task in a batch Stage.
+
+    ``history`` is a reserved, read-only side input for an initial ``dedup``
+    Task.  It is kept separate from ``items`` so a Stage cannot accidentally
+    publish or count a prior Item as a current candidate.
+    """
+
+    items: tuple[Item, ...]
+    history: tuple[Item, ...] = ()
+
+
+@dataclass(frozen=True)
+class StageEnvelope:
+    """The exact ordered Item references used as a Stage input."""
+
+    items: tuple[str, ...]
+    history: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class StageOutcome:
+    """Pure Task-chain result before durable Stage materialization."""
+
+    outputs: tuple[FORWARD | NEW, ...]
+    status: Literal["succeeded", "dropped"]
+
+
 class SourceContract(Protocol):
     def collect(
         self, config: Mapping[str, JSONValue], checkpoint: JSONValue

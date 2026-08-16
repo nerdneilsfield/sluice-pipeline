@@ -111,6 +111,109 @@ CREATE INDEX IF NOT EXISTS source_expected_checkpoint
 """
 
 
+# These tables are deliberately appended after the shared Item/Execution and
+# Publication substrate.  StageResult rows are the first consumers that carry
+# a foreign key to Executions, and node state points at immutable Publications;
+# creating them in this order keeps a fresh database FK-safe without a
+# migration layer.
+_RECONCILE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS stage_results(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, stage_name TEXT NOT NULL, lookup_key TEXT NOT NULL,
+  sequence INTEGER NOT NULL, created_at TEXT NOT NULL, producer_execution_id INTEGER NOT NULL,
+  UNIQUE(stage_name, sequence), FOREIGN KEY(producer_execution_id) REFERENCES executions(id)
+);
+CREATE TABLE IF NOT EXISTS stage_result_items(
+  result_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, item_id TEXT NOT NULL,
+  PRIMARY KEY(result_id, ordinal), FOREIGN KEY(result_id) REFERENCES stage_results(id),
+  FOREIGN KEY(item_id) REFERENCES items(id)
+);
+CREATE TABLE IF NOT EXISTS stage_result_current(
+  stage_name TEXT NOT NULL, lookup_key TEXT NOT NULL, result_id INTEGER NOT NULL,
+  PRIMARY KEY(stage_name, lookup_key), UNIQUE(result_id),
+  FOREIGN KEY(result_id) REFERENCES stage_results(id)
+);
+CREATE TABLE IF NOT EXISTS node_state(
+  pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL, binding_digest TEXT NOT NULL,
+  next_due_at TEXT, first_pending_at TEXT, current_frozen_batch_id INTEGER,
+  current_publication_id INTEGER NOT NULL,
+  schedule_json TEXT NOT NULL, batch_policy_json TEXT,
+  PRIMARY KEY(pipeline_name, node_name, binding_digest),
+  FOREIGN KEY(current_publication_id) REFERENCES publications(id)
+);
+CREATE TABLE IF NOT EXISTS node_current_bindings(
+  pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL, binding_digest TEXT NOT NULL,
+  PRIMARY KEY(pipeline_name,node_name),
+  FOREIGN KEY(pipeline_name,node_name,binding_digest) REFERENCES node_state(pipeline_name,node_name,binding_digest)
+);
+CREATE TABLE IF NOT EXISTS node_edge_state(
+  pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL, binding_digest TEXT NOT NULL,
+  edge_index INTEGER NOT NULL, producer_key TEXT NOT NULL, producer_binding_digest TEXT NOT NULL,
+  last_revision INTEGER NOT NULL DEFAULT 0, applied_digest TEXT,
+  PRIMARY KEY(pipeline_name,node_name,binding_digest,edge_index),
+  FOREIGN KEY(pipeline_name,node_name,binding_digest) REFERENCES node_state(pipeline_name,node_name,binding_digest)
+);
+CREATE TABLE IF NOT EXISTS node_edge_members(
+  pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL, binding_digest TEXT NOT NULL,
+  edge_index INTEGER NOT NULL, item_id TEXT NOT NULL, upstream_ordinal INTEGER NOT NULL,
+  active INTEGER NOT NULL CHECK(active IN (0,1)),
+  PRIMARY KEY(pipeline_name,node_name,binding_digest,edge_index,item_id),
+  FOREIGN KEY(item_id) REFERENCES items(id)
+);
+CREATE TABLE IF NOT EXISTS node_members(
+  pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL, binding_digest TEXT NOT NULL,
+  item_id TEXT NOT NULL, producer_kind TEXT NOT NULL, producer_name TEXT NOT NULL,
+  logical_id TEXT NOT NULL, generation INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','claimed','frozen','terminal','stale')),
+  lookup_key TEXT, consumed_sequence INTEGER, visible_result_id INTEGER,
+  PRIMARY KEY(pipeline_name, node_name, binding_digest, item_id),
+  FOREIGN KEY(item_id) REFERENCES items(id),
+  FOREIGN KEY(visible_result_id) REFERENCES stage_results(id)
+);
+CREATE TABLE IF NOT EXISTS batches(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, pipeline_name TEXT NOT NULL, node_name TEXT NOT NULL,
+  binding_digest TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('frozen','succeeded','failed')),
+  frozen_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS batch_items(
+  batch_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, item_id TEXT NOT NULL,
+  PRIMARY KEY(batch_id, ordinal), FOREIGN KEY(batch_id) REFERENCES batches(id),
+  FOREIGN KEY(item_id) REFERENCES items(id)
+);
+CREATE INDEX IF NOT EXISTS node_pending
+  ON node_members(pipeline_name, node_name, binding_digest, state, ordinal);
+CREATE UNIQUE INDEX IF NOT EXISTS node_one_pending_identity
+  ON node_members(pipeline_name,node_name,binding_digest,producer_kind,producer_name,logical_id)
+  WHERE state='pending';
+CREATE INDEX IF NOT EXISTS node_visible
+  ON node_members(pipeline_name, node_name, binding_digest, visible_result_id);
+CREATE INDEX IF NOT EXISTS node_edge_active
+  ON node_edge_members(pipeline_name,node_name,binding_digest,edge_index,active,upstream_ordinal);
+CREATE INDEX IF NOT EXISTS batch_current
+  ON node_state(pipeline_name, node_name, current_frozen_batch_id);
+CREATE INDEX IF NOT EXISTS node_current_binding
+  ON node_current_bindings(pipeline_name,node_name,binding_digest);
+
+CREATE TABLE IF NOT EXISTS materialization_claims(
+  stage_name TEXT NOT NULL, lookup_key TEXT NOT NULL, claim_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_execution_id INTEGER, next_waiting_sequence INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(stage_name, lookup_key), FOREIGN KEY(owner_execution_id) REFERENCES executions(id)
+);
+CREATE TABLE IF NOT EXISTS materialization_waiters(
+  stage_name TEXT NOT NULL, lookup_key TEXT NOT NULL, claim_id INTEGER NOT NULL,
+  waiting_sequence INTEGER NOT NULL, pipeline_name TEXT, node_name TEXT, force INTEGER NOT NULL,
+  generation INTEGER, batch_id INTEGER, envelope_json TEXT NOT NULL, policy_json TEXT NOT NULL,
+  config_json TEXT NOT NULL, binding_digest TEXT,
+  rebuild_target_id INTEGER,
+  PRIMARY KEY(stage_name, lookup_key, waiting_sequence), FOREIGN KEY(claim_id) REFERENCES materialization_claims(claim_id)
+);
+CREATE INDEX IF NOT EXISTS materialization_owner ON materialization_claims(stage_name,lookup_key,owner_execution_id);
+CREATE INDEX IF NOT EXISTS materialization_waiting ON materialization_waiters(stage_name,lookup_key,force,waiting_sequence);
+CREATE INDEX IF NOT EXISTS stage_result_lookup ON stage_results(stage_name,lookup_key,sequence);
+CREATE INDEX IF NOT EXISTS stage_result_producer ON stage_results(producer_execution_id);
+"""
+
+
 def init_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys=ON")
     connection.executescript(_SCHEMA)
+    connection.executescript(_RECONCILE_SCHEMA)

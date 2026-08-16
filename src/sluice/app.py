@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable
@@ -114,10 +115,16 @@ def open_app(
         # guard for future resolver/database changes without leaking a lock.
         raise
 
-    return App(
+    app = App(
         definition=definition,
         conn=conn,
         sources=MappingProxyType(resolved_sources),
         tasks=MappingProxyType(task_cache),
         sinks=MappingProxyType(sink_cache),
     )
+    # Recovery is a process-start transition, not a periodic tick callback.
+    # Import lazily to avoid the app/reconcile module cycle during assembly.
+    from sluice.reconcile import recover_startup
+
+    recover_startup(app, datetime.now(timezone.utc))
+    return app

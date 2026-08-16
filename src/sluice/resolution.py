@@ -38,7 +38,15 @@ BUILTIN_SOURCE_BINDERS: dict[str, str] = {
     "sluice.sources.rss": "sluice.sources.rss.bind",
     "sluice.sources.webpage": "sluice.sources.webpage.bind",
 }
-BUILTIN_TASK_BINDERS: dict[str, str] = {}
+BUILTIN_TASK_BINDERS: dict[str, str] = {
+    "sluice.tasks.dedup": "sluice.tasks.collection.dedup",
+    "sluice.tasks.filter": "sluice.tasks.collection.filter",
+    "sluice.tasks.sort": "sluice.tasks.collection.sort",
+    "sluice.tasks.limit": "sluice.tasks.collection.limit",
+    "sluice.tasks.fetch_webpage": "sluice.tasks.content.fetch_webpage",
+    "sluice.tasks.extract_content": "sluice.tasks.content.extract_content",
+    "sluice.tasks.to_markdown": "sluice.tasks.content.to_markdown",
+}
 BUILTIN_SINK_BINDERS: dict[str, str] = {}
 
 
@@ -122,7 +130,17 @@ def bind_builtin_source(path: str, http_client: HTTPClient | None) -> SourceCont
 def bind_builtin_task(path: str, adapters: BoundaryAdapters) -> TaskContract:
     try:
         binder = _bound_builtin(BUILTIN_TASK_BINDERS[path], path)
-        value = binder(adapters)
+        # Collection/content built-ins are immutable Task objects.  The HTTP
+        # fetch Task additionally exposes ``bind`` so the startup adapter is
+        # captured once; ordinary local callable binders retain the historical
+        # binder(adapters) shape.
+        if callable(getattr(binder, "run", None)) and getattr(
+            binder, "input_mode", None
+        ) in {"each", "batch"}:
+            bind = getattr(binder, "bind", None)
+            value = bind(adapters) if callable(bind) else binder
+        else:
+            value = binder(adapters)
     except (KeyError, TypeError, AttributeError) as error:
         raise DefinitionError(f"cannot bind built-in Task {path}") from error
     return value  # normalized by resolve_task below

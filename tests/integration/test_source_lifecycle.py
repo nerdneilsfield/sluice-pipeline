@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 import json
 import logging
+from threading import Event, Thread
 from types import MappingProxyType
 
 import pytest
@@ -252,3 +253,88 @@ def test_source_supersession_log_uses_superseded_binding_digest(tmp_path, caplog
     assert events
     assert events[-1]["execution_id"] == old_execution_id
     assert events[-1]["binding_digest"] == old_binding
+
+
+def source_recovery_instant(seconds: int) -> datetime:
+    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+
+
+class BlockingSource:
+    def __init__(self):
+        self.started = Event()
+        self.release = Event()
+
+    def collect(self, config, checkpoint):
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("test barrier was not released")
+        return SourceResult((SourceRecord("late", {"title": "Late"}),), "done")
+
+
+blocking_source = BlockingSource()
+
+
+def test_startup_recovery_transfers_source_claim_and_rejects_late_finalize(tmp_path):
+    definition = tmp_path / "source-recovery.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources: {feed: {use: test_source_lifecycle.blocking_source, retries: 1, with: {}}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    worker = Thread(target=collect_source, args=(app, "feed", source_recovery_instant(0)))
+    worker.start()
+    assert blocking_source.started.wait(timeout=5)
+    old_id = app.conn.execute(
+        "SELECT id FROM executions WHERE kind='source' AND state='running'"
+    ).fetchone()[0]
+    from sluice.reconcile import recover_startup
+    recover_startup(app, source_recovery_instant(1))
+    blocking_source.release.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert app.conn.execute("SELECT state FROM executions WHERE id=?", (old_id,)).fetchone()[0] == "failed"
+    assert app.conn.execute("SELECT COUNT(*) FROM publications").fetchone()[0] == 0
+    assert app.conn.execute(
+        "SELECT COUNT(*) FROM executions WHERE retry_parent_id=? AND state='queued'", (old_id,)
+    ).fetchone()[0] == 1
+
+
+def test_queued_retry_from_old_source_binding_is_superseded_before_new_callable(tmp_path):
+    definition = tmp_path / "source-switch.yml"
+    database = tmp_path / "state.db"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources:
+  feed: {use: tests.integration.test_source_lifecycle.raising_collect, retries: 1, with: {}}
+""",
+        encoding="utf-8",
+    )
+    old = open_app(definition, database)
+    with pytest.raises(ExecutionError):
+        collect_source(old, "feed", source_recovery_instant(0))
+    retry_id = old.conn.execute(
+        "SELECT id FROM executions WHERE state='queued' ORDER BY id DESC LIMIT 1"
+    ).fetchone()[0]
+    old.conn.close()
+
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources:
+  feed: {use: tests.integration.test_source_lifecycle.source_collect, with: {}}
+""",
+        encoding="utf-8",
+    )
+    changed = open_app(definition, database)
+    source_runtime._execute_queued_source(changed, retry_id, source_recovery_instant(1))
+    assert changed.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (retry_id,)
+    ).fetchone()[0] == "failed"
+    assert changed.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
