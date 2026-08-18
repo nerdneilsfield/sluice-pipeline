@@ -1,1 +1,7 @@
 .superpowers/
+.sdd/
+.pytest_cache/
+.serena/
+.ruff_cache/
+
+
