@@ -68,6 +68,67 @@ class _FetchTask:
         return self.run(config, input)
 
 
+_BLOCK_TAGS = {
+    "p",
+    "div",
+    "section",
+    "article",
+    "li",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "br",
+    "blockquote",
+    "code",
+    "ol",
+    "pre",
+    "table",
+    "tbody",
+    "td",
+    "th",
+    "tr",
+    "ul",
+    "nav",
+    "header",
+    "footer",
+    "aside",
+}
+_IGNORED_TAGS = {"canvas", "script", "style", "noscript", "svg", "template"}
+_BOILERPLATE_TAGS = {"nav", "header", "footer", "aside", "form", "dialog"}
+_CANDIDATE_TAGS = {"body", "main", "article", "section", "div"}
+_POSITIVE_HINTS = {"article", "content", "entry", "post", "main", "primary", "body"}
+_NEGATIVE_HINTS = {
+    "advert",
+    "breadcrumb",
+    "comment",
+    "cookie",
+    "footer",
+    "header",
+    "login",
+    "menu",
+    "modal",
+    "nav",
+    "newsletter",
+    "popup",
+    "related",
+    "share",
+    "sidebar",
+    "social",
+    "subscribe",
+}
+
+
+def _normalized_text(parts: list[str]) -> str:
+    lines = [
+        re.sub(r"[ \t]+", " ", line).strip()
+        for line in "".join(parts).split("\n")
+    ]
+    return "\n".join(line for line in lines if line).strip()
+
+
 class _TextParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -75,13 +136,17 @@ class _TextParser(HTMLParser):
         self._ignored = 0
 
     def handle_starttag(self, tag: str, attrs):
-        if tag.lower() in {"script", "style", "noscript", "template"}:
+        normalized = tag.lower()
+        if normalized in _IGNORED_TAGS:
             self._ignored += 1
+        elif normalized in _BLOCK_TAGS:
+            self.parts.append("\n")
 
     def handle_endtag(self, tag: str):
-        if tag.lower() in {"script", "style", "noscript", "template"} and self._ignored:
+        normalized = tag.lower()
+        if normalized in _IGNORED_TAGS and self._ignored:
             self._ignored -= 1
-        elif tag.lower() in {"p", "div", "section", "article", "li", "h1", "h2", "h3", "h4", "h5", "h6", "br"}:
+        elif normalized in _BLOCK_TAGS:
             self.parts.append("\n")
 
     def handle_data(self, data: str):
@@ -99,15 +164,158 @@ def _plain_text(html: str) -> str:
         parser.close()
     except (TypeError, ValueError) as error:
         raise ExecutionError("invalid HTML content") from error
-    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in "".join(parser.parts).split("\n")]
-    return "\n".join(line for line in lines if line).strip()
+    return _normalized_text(parser.parts)
+
+
+@dataclass
+class _ContentCandidate:
+    tag: str
+    hint: str
+    parts: list[str]
+    link_chars: int = 0
+    paragraphs: int = 0
+
+    @property
+    def text(self) -> str:
+        return _normalized_text(self.parts)
+
+    def score(self) -> float:
+        text = self.text
+        if not text:
+            return float("-inf")
+        if any(word in self.hint for word in _NEGATIVE_HINTS):
+            return -1.0
+        length = len(text)
+        link_ratio = self.link_chars / max(length, 1)
+        punctuation = sum(char in ".!?;:" for char in text)
+        tag_bonus = {"article": 10000, "main": 8000, "section": 1000, "div": 300}.get(
+            self.tag, 0
+        )
+        hint_bonus = 1500 if any(word in self.hint for word in _POSITIVE_HINTS) else 0
+        return (
+            length
+            + min(self.paragraphs, 20) * 80
+            + min(punctuation, 100) * 2
+            + tag_bonus
+            + hint_bonus
+            - int(link_ratio * length * 2)
+        )
+
+
+class _ArticleParser(HTMLParser):
+    """Collect candidate content blocks without a DOM dependency.
+
+    This follows the useful part of the legacy trafilatura fetcher contract:
+    boilerplate is excluded, article-like containers win over the whole page,
+    and the caller can still fall back to visible text when no candidate is
+    strong enough.  It deliberately does not persist parser state.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.candidates: list[_ContentCandidate] = []
+        self._active: list[_ContentCandidate] = []
+        self._ignored = 0
+        self._link_depth = 0
+
+    @staticmethod
+    def _hint(attrs) -> str:
+        values = {
+            str(value or "").lower()
+            for key, value in attrs
+            if key.lower() in {"id", "class", "role"}
+        }
+        return " ".join(values)
+
+    @staticmethod
+    def _newline(candidate: _ContentCandidate) -> None:
+        if candidate.parts and not candidate.parts[-1].endswith("\n"):
+            candidate.parts.append("\n")
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        normalized = tag.lower()
+        if self._ignored:
+            if normalized in _IGNORED_TAGS or normalized in _BOILERPLATE_TAGS:
+                self._ignored += 1
+            return
+        if normalized in _IGNORED_TAGS or normalized in _BOILERPLATE_TAGS:
+            self._ignored = 1
+            return
+        if normalized in _BLOCK_TAGS:
+            for candidate in self._active:
+                self._newline(candidate)
+                if normalized in {"p", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+                    candidate.paragraphs += 1
+        if normalized == "a":
+            self._link_depth += 1
+        if normalized in _CANDIDATE_TAGS:
+            self._active.append(_ContentCandidate(normalized, self._hint(attrs), []))
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if self._ignored:
+            if normalized in _IGNORED_TAGS or normalized in _BOILERPLATE_TAGS:
+                self._ignored -= 1
+            return
+        if normalized == "a" and self._link_depth:
+            self._link_depth -= 1
+        if normalized in _BLOCK_TAGS:
+            for candidate in self._active:
+                self._newline(candidate)
+        if normalized in _CANDIDATE_TAGS:
+            for index in range(len(self._active) - 1, -1, -1):
+                candidate = self._active[index]
+                if candidate.tag == normalized:
+                    self.candidates.append(self._active.pop(index))
+                    break
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored:
+            return
+        text = re.sub(r"\s+", " ", data)
+        if not text.strip():
+            return
+        for candidate in self._active:
+            candidate.parts.append(text)
+            if self._link_depth:
+                candidate.link_chars += len(text)
+
+    def close(self) -> None:
+        super().close()
+        while self._active:
+            self.candidates.append(self._active.pop())
+
+
+def _article_text(html: str) -> str:
+    parser = _ArticleParser()
+    try:
+        parser.feed(html)
+        parser.close()
+    except (TypeError, ValueError) as error:
+        raise ExecutionError("invalid HTML content") from error
+    candidates = [candidate for candidate in parser.candidates if candidate.text]
+    if not candidates:
+        return _plain_text(html)
+    best = max(candidates, key=lambda candidate: candidate.score())
+    if best.score() <= 0:
+        return _plain_text(html)
+    return best.text
 
 
 def _extract_content(config: Mapping[str, Any], input: object) -> object:
-    """Extract visible, normalized text from an HTML value."""
+    """Extract article-like visible text from HTML, with a plain fallback.
 
-    del config
-    return NEW(_plain_text(_input_text(input)))
+    ``mode: plain`` preserves the older all-visible-text behavior.  The
+    default ``article`` mode is the v4 equivalent of the legacy master
+    fetcher's main-content extraction, while keeping HTTP and extraction as
+    separate deterministic Tasks.
+    """
+
+    mode = config.get("mode", "article")
+    if not isinstance(mode, str) or mode not in {"article", "plain"}:
+        raise ExecutionError("extract_content.mode must be article or plain")
+    value = _input_text(input)
+    return NEW(_plain_text(value) if mode == "plain" else _article_text(value))
 
 
 class _MarkdownParser(HTMLParser):
