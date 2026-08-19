@@ -13,6 +13,7 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
+import re
 from types import MappingProxyType
 from typing import (
     Any,
@@ -116,6 +117,17 @@ def _validate_non_empty(value: str, field_name: str) -> str:
     return value
 
 
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _validate_safe_identifier(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not _SAFE_IDENTIFIER.fullmatch(value):
+        raise ValueError(
+            f"{field_name} must be an ASCII identifier of at most 128 characters"
+        )
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class QualityPolicy:
     """Quality thresholds applied to a candidate representation.
@@ -195,11 +207,11 @@ class ProviderBinding:
     actions: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
-        _validate_non_empty(self.name, "provider name")
+        _validate_safe_identifier(self.name, "provider name")
         provider_type = self.provider_type or self.type
         if provider_type is None:
             raise ValueError("provider type must be provided")
-        _validate_non_empty(provider_type, "provider type")
+        _validate_safe_identifier(provider_type, "provider type")
         object.__setattr__(self, "type", provider_type)
         object.__setattr__(self, "provider_type", provider_type)
         object.__setattr__(self, "options", _freeze_mapping(self.options))
@@ -222,7 +234,11 @@ class ProviderBinding:
             or self.max_body_bytes > 10_485_760
         ):
             raise ValueError("max_body_bytes must be between 1 and 10485760")
-        if isinstance(self.concurrency, bool) or self.concurrency <= 0:
+        if (
+            isinstance(self.concurrency, bool)
+            or not isinstance(self.concurrency, int)
+            or self.concurrency <= 0
+        ):
             raise ValueError("concurrency must be a positive integer")
         if self.timeout is not None and self.timeout <= timedelta(0):
             raise ValueError("timeout must be positive")
@@ -269,11 +285,11 @@ class ExtractorBinding:
     extractor_type: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_non_empty(self.name, "extractor name")
+        _validate_safe_identifier(self.name, "extractor name")
         extractor_type = self.extractor_type or self.type
         if extractor_type is None:
             raise ValueError("extractor type must be provided")
-        _validate_non_empty(extractor_type, "extractor type")
+        _validate_safe_identifier(extractor_type, "extractor type")
         object.__setattr__(self, "type", extractor_type)
         object.__setattr__(self, "extractor_type", extractor_type)
         object.__setattr__(self, "options", _freeze_mapping(self.options))
@@ -289,33 +305,38 @@ class WebBinding:
 
     version: int = 1
     direct_provider: ProviderBinding | None = None
-    fetch_chain: tuple[ProviderBinding, ...] | Any | None = None
-    extract_chain: tuple[ExtractorBinding, ...] | Any | None = None
+    fetch_chain: tuple[ProviderBinding, ...] | None = None
+    extract_chain: tuple[ExtractorBinding, ...] | None = None
     quality: QualityPolicy = field(default_factory=QualityPolicy)
     output: WebOutput = "artifact"
     fetch_chain_name: str | None = None
     extract_chain_name: str | None = None
 
     def __post_init__(self) -> None:
-        if isinstance(self.version, bool) or self.version <= 0:
+        if (
+            isinstance(self.version, bool)
+            or not isinstance(self.version, int)
+            or self.version <= 0
+        ):
             raise ValueError("web binding version must be a positive integer")
+        if self.direct_provider is not None and not isinstance(
+            self.direct_provider, ProviderBinding
+        ):
+            raise TypeError("direct_provider must be a ProviderBinding or null")
         if self.output not in WEB_OUTPUTS:
             raise ValueError(f"unsupported web output: {self.output!r}")
         if not isinstance(self.quality, QualityPolicy):
             raise TypeError("quality must be a QualityPolicy")
         if self.fetch_chain_name is not None:
-            _validate_non_empty(self.fetch_chain_name, "fetch chain name")
+            _validate_safe_identifier(self.fetch_chain_name, "fetch chain name")
         if self.extract_chain_name is not None:
-            _validate_non_empty(self.extract_chain_name, "extract chain name")
+            _validate_safe_identifier(self.extract_chain_name, "extract chain name")
 
-        # Chains are tuples in the runtime representation.  Accepting lists or
-        # a canonical ``{"name": ..., "providers": [...]}`` mapping here is
-        # useful for snapshot decoders while still freezing the final value.
         fetch_chain, fetch_name = _normalise_chain(
-            self.fetch_chain, "providers", self.fetch_chain_name
+            self.fetch_chain, ProviderBinding, self.fetch_chain_name, "provider"
         )
         extract_chain, extract_name = _normalise_chain(
-            self.extract_chain, "extractors", self.extract_chain_name
+            self.extract_chain, ExtractorBinding, self.extract_chain_name, "extractor"
         )
         object.__setattr__(self, "fetch_chain", fetch_chain)
         object.__setattr__(self, "extract_chain", extract_chain)
@@ -334,128 +355,24 @@ class WebBinding:
         chain = self.extract_chain
         return () if chain is None else tuple(chain)
 
-    def semantic_projection(self) -> Mapping[str, FrozenJSON]:
-        """Return a deterministic, secret-safe binding projection.
-
-        Configuration expansion owns the exact canonical projection in later
-        tasks.  This baseline projection is intentionally structural and
-        preserves provider/extractor order and authored names.
-        """
-
-        def provider_projection(provider: ProviderBinding) -> Mapping[str, Any]:
-            return {
-                "name": provider.name,
-                "type": provider.type,
-                "options": dict(provider.options),
-                "base_url": provider.base_url,
-                "timeout": _duration_seconds(provider.timeout),
-                "connect_timeout": _duration_seconds(provider.connect_timeout),
-                "transport_retries": provider.transport_retries,
-                "max_body_bytes": provider.max_body_bytes,
-                "concurrency": provider.concurrency,
-                "cooldown": _duration_seconds(provider.cooldown),
-                "capabilities": sorted(provider.capabilities),
-                "service_headers": dict(provider.service_headers),
-                "target_headers": dict(provider.target_headers),
-                "cookies": dict(provider.cookies),
-                "proxy": provider.proxy,
-                "target_policy": (
-                    dict(provider.target_policy)
-                    if isinstance(provider.target_policy, Mapping)
-                    else provider.target_policy
-                ),
-                "timeout_seconds": provider.timeout_seconds,
-                "only_main_content": provider.only_main_content,
-                "wait_for_selector": provider.wait_for_selector,
-                "wait_for": provider.wait_for,
-                "mobile": provider.mobile,
-                "actions": list(provider.actions),
-            }
-
-        def extractor_projection(extractor: ExtractorBinding) -> Mapping[str, Any]:
-            return {
-                "name": extractor.name,
-                "type": extractor.type,
-                "options": dict(extractor.options),
-            }
-
-        projection: dict[str, Any] = {
-            "version": self.version,
-            "direct_provider": (
-                None
-                if self.direct_provider is None
-                else provider_projection(self.direct_provider)
-            ),
-            "fetch_chain": (
-                None
-                if self.fetch_chain is None
-                else {
-                    "name": self.fetch_chain_name,
-                    "providers": [provider_projection(p) for p in self.fetch_chain],
-                }
-            ),
-            "extract_chain": (
-                None
-                if self.extract_chain is None
-                else {
-                    "name": self.extract_chain_name,
-                    "extractors": [
-                        extractor_projection(e) for e in self.extract_chain
-                    ],
-                }
-            ),
-            "quality": {
-                "min_chars": self.quality.min_chars,
-                "min_words": self.quality.min_words,
-                "max_link_ratio": self.quality.max_link_ratio,
-                "reject_challenges": self.quality.reject_challenges,
-                "max_body_bytes": self.quality.max_body_bytes,
-            },
-            "output": self.output,
-        }
-        return _freeze_mapping(projection)
-
-    def runtime_digest(self) -> Mapping[str, FrozenJSON]:
-        """Return the runtime projection used by provider catalogs.
-
-        Runtime-only values (clients, semaphores, and resolved secret values)
-        are deliberately not representable in this contract.  A later catalog
-        may extend this projection in memory without serialising credentials.
-        """
-
-        return self.semantic_projection()
-
 
 def _normalise_chain(
     value: Any,
-    member_key: str,
+    member_type: type,
     name: str | None,
+    member_label: str,
 ) -> tuple[Any, str | None]:
     if value is None:
         return None, name
-    chain_name = name
-    members = value
-    if isinstance(value, Mapping):
-        if chain_name is None:
-            candidate = value.get("name")
-            if candidate is not None:
-                chain_name = str(candidate)
-        members = value.get(member_key, ())
-    elif hasattr(value, member_key):
-        if chain_name is None:
-            candidate = getattr(value, "name", None)
-            if candidate is not None:
-                chain_name = str(candidate)
-        members = getattr(value, member_key)
     try:
-        members_tuple = tuple(members)
+        members_tuple = tuple(value)
     except TypeError as exc:
-        raise TypeError(f"{member_key} must be an ordered collection") from exc
-    return members_tuple, chain_name
-
-
-def _duration_seconds(value: timedelta | None) -> float | None:
-    return None if value is None else value.total_seconds()
+        raise TypeError(f"{member_label} chain must be an ordered collection") from exc
+    if any(not isinstance(member, member_type) for member in members_tuple):
+        raise TypeError(
+            f"{member_label} chain members must be {member_type.__name__} values"
+        )
+    return members_tuple, name
 
 
 @dataclass(frozen=True, slots=True)
@@ -592,9 +509,13 @@ class WebAttemptFailure:
     detail_code: str | None = None
 
     def __post_init__(self) -> None:
-        _validate_non_empty(self.provider_instance, "provider instance")
-        _validate_non_empty(self.provider_type, "provider type")
-        if isinstance(self.attempt_ordinal, bool) or self.attempt_ordinal <= 0:
+        _validate_safe_identifier(self.provider_instance, "provider instance")
+        _validate_safe_identifier(self.provider_type, "provider type")
+        if (
+            isinstance(self.attempt_ordinal, bool)
+            or not isinstance(self.attempt_ordinal, int)
+            or self.attempt_ordinal <= 0
+        ):
             raise ValueError("attempt_ordinal must be a positive integer")
         if self.reason not in STABLE_FAILURE_REASONS:
             raise ValueError(f"unsupported web failure reason: {self.reason!r}")
@@ -606,13 +527,13 @@ class WebAttemptFailure:
         if self.status_kind not in (None, "service", "target"):
             raise ValueError("status_kind must be service, target, or null")
         if self.elapsed_ms is not None and (
-            isinstance(self.elapsed_ms, bool) or self.elapsed_ms < 0
+            isinstance(self.elapsed_ms, bool)
+            or not isinstance(self.elapsed_ms, int)
+            or self.elapsed_ms < 0
         ):
             raise ValueError("elapsed_ms must be non-negative or null")
         if self.detail_code is not None:
-            _validate_non_empty(self.detail_code, "detail_code")
-            if len(self.detail_code) > 128:
-                raise ValueError("detail_code is too long")
+            _validate_safe_identifier(self.detail_code, "detail_code")
 
     @property
     def attempt(self) -> int:
@@ -627,20 +548,23 @@ class FetchChainExhausted(ExecutionError):
 
     attempts: tuple[WebAttemptFailure, ...]
 
+    def __new__(
+        cls,
+        attempts: tuple[WebAttemptFailure, ...] | list[WebAttemptFailure],
+    ) -> "FetchChainExhausted":
+        # Bypass BaseException's default ``__new__`` argument capture.  The
+        # only retained payload is the validated attempts tuple below.
+        return BaseException.__new__(cls)
+
     def __init__(self, attempts: tuple[WebAttemptFailure, ...] | list[WebAttemptFailure]):
         safe_attempts = tuple(attempts)
         if not all(isinstance(attempt, WebAttemptFailure) for attempt in safe_attempts):
             raise TypeError("attempts must contain WebAttemptFailure values")
         object.__setattr__(self, "attempts", safe_attempts)
-        summary = "; ".join(
-            f"{attempt.attempt_ordinal}:{attempt.provider_instance}:"
-            f"{attempt.reason}"
-            for attempt in safe_attempts
-        )
-        # Exception.args is the normal Python display channel.  It contains a
-        # bounded, canonical summary only; no vendor exception/cause text is
-        # accepted or retained by this constructor.
-        ExecutionError.__init__(self, f"fetch chain exhausted: {summary[:2048]}")
+        # BaseException.__new__ receives the constructor arguments before our
+        # dataclass initializer runs.  Reset that implicit tuple without ever
+        # constructing or passing a human-readable cause/message.
+        ExecutionError.__init__(self)
 
 
 @dataclass(frozen=True, slots=True)
