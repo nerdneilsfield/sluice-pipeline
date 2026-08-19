@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import MappingProxyType
-from typing import Any, Final, Literal, Mapping, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Mapping, Protocol, TypeAlias
+
+if TYPE_CHECKING:
+    from .web.contracts import WebBinding
 
 
 JSONValue: TypeAlias = (
@@ -214,12 +217,24 @@ class SourceDef:
     schedule: timedelta | None
     with_config: Mapping[str, FrozenJSON]
     policy: ExecutionPolicy
+    web_binding: WebBinding | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "with_config", freeze_item_json(self.with_config))
+        if self.web_binding is not None and not isinstance(self.web_binding, WebBinding):
+            raise TypeError("web_binding must be a WebBinding or null")
 
 
 @dataclass(frozen=True, slots=True)
 class TaskDef:
     use: str
     with_config: Mapping[str, FrozenJSON]
+    web_binding: WebBinding | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "with_config", freeze_item_json(self.with_config))
+        if self.web_binding is not None and not isinstance(self.web_binding, WebBinding):
+            raise TypeError("web_binding must be a WebBinding or null")
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,3 +277,10 @@ class Definition:
     sources: Mapping[str, SourceDef]
     stages: Mapping[str, StageDef]
     pipelines: Mapping[str, PipelineDef]
+
+
+# ``web.contracts`` deliberately has no eager dependency on this module so it
+# can be imported on its own.  Importing the type here after the core contract
+# definitions are complete keeps ``typing.get_type_hints`` useful without
+# introducing an import cycle during module initialisation.
+from .web.contracts import WebBinding  # noqa: E402  (intentional late import)

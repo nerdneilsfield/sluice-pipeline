@@ -12,3 +12,7 @@ class DefinitionError(ValueError):
 
 class GraphError(DefinitionError):
     """The Pipeline node graph is malformed or contains an invalid edge."""
+
+
+class WebSafetyError(ExecutionError):
+    """A web request or provider response violated a safety invariant."""

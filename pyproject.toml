@@ -6,9 +6,22 @@ build-backend = "setuptools.build_meta"
 name = "sluice"
 version = "4.0.0"
 requires-python = ">=3.12"
-dependencies = ["PyYAML>=6.0,<7"]
+dependencies = [
+  "PyYAML>=6.0,<7",
+  "httpx>=0.27,<1",
+  "beautifulsoup4>=4.12,<5",
+  "defusedxml>=0.7,<1",
+  "markdown-it-py>=4.2,<5",
+  "html-to-markdown>=3.10,<4",
+]
 
 [project.optional-dependencies]
+web = [
+  "curl_cffi>=0.16,<1",
+  "trafilatura>=2,<3",
+  "newspaper4k>=0.9,<1",
+  "resiliparse>=0.16,<1",
+]
 ui = ["Flask>=3.0,<4"]
 prefect = ["prefect>=3.0,<4"]
 test = ["pytest>=8.0,<9"]
