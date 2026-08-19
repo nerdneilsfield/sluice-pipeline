@@ -861,7 +861,7 @@ def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
             mobile=value.get("mobile", False),
             actions=actions,
         )
-    except (TypeError, ValueError) as error:
+    except (DefinitionError, TypeError, ValueError) as error:
         raise ExecutionError(f"invalid retained {label}") from error
 
 
@@ -878,7 +878,7 @@ def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
             type=extractor_type,
             options=_mapping(value.get("options"), f"{label}.options"),
         )
-    except (TypeError, ValueError) as error:
+    except (DefinitionError, TypeError, ValueError) as error:
         raise ExecutionError(f"invalid retained {label}") from error
 
 
