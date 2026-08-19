@@ -79,6 +79,48 @@ _NODE_KEYS = {
 _BATCH_KEYS = {"count", "max_wait", "on_schedule", "include_updates"}
 _DELIVERY_KEYS = {"use", "with"}
 _FILE_CONFIG_KEYS = ("prompt", "schema", "output_schema")
+_WEB_BINDING_KEYS = {
+    "version",
+    "direct_provider",
+    "fetch_chain",
+    "extract_chain",
+    "quality",
+    "output",
+}
+_WEB_PROVIDER_KEYS = {
+    "name",
+    "type",
+    "options",
+    "base_url",
+    "timeout",
+    "connect_timeout",
+    "transport_retries",
+    "max_body_bytes",
+    "concurrency",
+    "cooldown",
+    "capabilities",
+    "service_headers",
+    "target_headers",
+    "cookies",
+    "proxy",
+    "target_policy",
+    "timeout_seconds",
+    "only_main_content",
+    "wait_for_selector",
+    "wait_for",
+    "mobile",
+    "actions",
+}
+_WEB_EXTRACTOR_KEYS = {"name", "type", "options"}
+_WEB_QUALITY_KEYS = {
+    "min_chars",
+    "min_words",
+    "max_link_ratio",
+    "reject_challenges",
+    "max_body_bytes",
+}
+_WEB_FETCH_CHAIN_KEYS = {"name", "providers"}
+_WEB_EXTRACT_CHAIN_KEYS = {"name", "extractors"}
 
 
 def _reject_duplicate_yaml_keys(text: str) -> None:
@@ -795,6 +837,36 @@ def verify_stage_files(stage: StageDef) -> None:
                 raise DefinitionError(f"stage file changed or is missing: {file_path}")
 
 
+def _snapshot_projection_mapping(
+    value: object,
+    label: str,
+    required_keys: set[str] | frozenset[str],
+    *,
+    optional_keys: set[str] | frozenset[str] = frozenset(),
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ExecutionError(f"invalid retained {label}")
+    keys = set(value)
+    allowed = set(required_keys) | set(optional_keys)
+    if keys != set(required_keys) and keys != allowed:
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
+def _snapshot_mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise ExecutionError(f"invalid retained {label}")
+    if any(not isinstance(key, str) for key in value):
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
+def _snapshot_optional_string(value: object, label: str) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
 def _snapshot_duration(value: object, label: str, *, allow_zero: bool = False) -> timedelta | None:
     """Decode a canonical WebBinding duration expressed in seconds."""
 
@@ -821,44 +893,72 @@ def _snapshot_sequence(value: object, label: str) -> tuple[object, ...]:
 
 
 def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
-    if not isinstance(value, Mapping):
-        raise ExecutionError(f"invalid retained {label}")
-    name = value.get("name")
-    provider_type = value.get("type", value.get("provider_type"))
+    value = _snapshot_projection_mapping(value, label, _WEB_PROVIDER_KEYS)
+    name = value["name"]
+    provider_type = value["type"]
     if not isinstance(name, str) or not name or not isinstance(provider_type, str) or not provider_type:
         raise ExecutionError(f"invalid retained {label}")
-    capabilities = _snapshot_sequence(value.get("capabilities", ()), f"{label}.capabilities")
+    capabilities = _snapshot_sequence(value["capabilities"], f"{label}.capabilities")
     if any(not isinstance(capability, str) for capability in capabilities):
         raise ExecutionError(f"invalid retained {label}.capabilities")
-    actions = _snapshot_sequence(value.get("actions", ()), f"{label}.actions")
+    actions = _snapshot_sequence(value["actions"], f"{label}.actions")
+    timeout = _snapshot_duration(value["timeout"], f"{label}.timeout")
+    connect_timeout = _snapshot_duration(
+        value["connect_timeout"], f"{label}.connect_timeout"
+    )
+    cooldown = _snapshot_duration(
+        value["cooldown"], f"{label}.cooldown", allow_zero=True
+    )
+    if cooldown is None:
+        raise ExecutionError(f"invalid retained {label}.cooldown")
+    timeout_seconds = value["timeout_seconds"]
+    if timeout_seconds is not None:
+        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+            raise ExecutionError(f"invalid retained {label}.timeout_seconds")
+        try:
+            finite_timeout = math.isfinite(timeout_seconds)
+        except OverflowError:
+            finite_timeout = False
+        if (
+            not finite_timeout
+            or timeout_seconds <= 0
+        ):
+            raise ExecutionError(f"invalid retained {label}.timeout_seconds")
+    base_url = _snapshot_optional_string(value["base_url"], f"{label}.base_url")
+    proxy = _snapshot_optional_string(value["proxy"], f"{label}.proxy")
+    wait_for_selector = _snapshot_optional_string(
+        value["wait_for_selector"], f"{label}.wait_for_selector"
+    )
+    target_policy = value["target_policy"]
+    if target_policy is not None:
+        target_policy = _snapshot_mapping(target_policy, f"{label}.target_policy")
     try:
         return ProviderBinding(
             name=name,
             type=provider_type,
-            options=_mapping(value.get("options"), f"{label}.options"),
-            base_url=value.get("base_url"),
-            timeout=_snapshot_duration(value.get("timeout"), f"{label}.timeout"),
-            connect_timeout=_snapshot_duration(
-                value.get("connect_timeout"), f"{label}.connect_timeout"
-            ),
-            transport_retries=value.get("transport_retries", 0),
-            max_body_bytes=value.get("max_body_bytes", 10_485_760),
-            concurrency=value.get("concurrency", 8),
-            cooldown=_snapshot_duration(
-                value.get("cooldown", 60), f"{label}.cooldown", allow_zero=True
-            )
-            or timedelta(0),
+            options=_snapshot_mapping(value["options"], f"{label}.options"),
+            base_url=base_url,
+            timeout=timeout,
+            connect_timeout=connect_timeout,
+            transport_retries=value["transport_retries"],
+            max_body_bytes=value["max_body_bytes"],
+            concurrency=value["concurrency"],
+            cooldown=cooldown,
             capabilities=frozenset(capabilities),
-            service_headers=_mapping(value.get("service_headers"), f"{label}.service_headers"),
-            target_headers=_mapping(value.get("target_headers"), f"{label}.target_headers"),
-            cookies=_mapping(value.get("cookies"), f"{label}.cookies"),
-            proxy=value.get("proxy"),
-            target_policy=value.get("target_policy"),
-            timeout_seconds=value.get("timeout_seconds"),
-            only_main_content=value.get("only_main_content", False),
-            wait_for_selector=value.get("wait_for_selector"),
-            wait_for=value.get("wait_for"),
-            mobile=value.get("mobile", False),
+            service_headers=_snapshot_mapping(
+                value["service_headers"], f"{label}.service_headers"
+            ),
+            target_headers=_snapshot_mapping(
+                value["target_headers"], f"{label}.target_headers"
+            ),
+            cookies=_snapshot_mapping(value["cookies"], f"{label}.cookies"),
+            proxy=proxy,
+            target_policy=target_policy,
+            timeout_seconds=timeout_seconds,
+            only_main_content=value["only_main_content"],
+            wait_for_selector=wait_for_selector,
+            wait_for=value["wait_for"],
+            mobile=value["mobile"],
             actions=actions,
         )
     except (DefinitionError, TypeError, ValueError) as error:
@@ -866,17 +966,16 @@ def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
 
 
 def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
-    if not isinstance(value, Mapping):
-        raise ExecutionError(f"invalid retained {label}")
-    name = value.get("name")
-    extractor_type = value.get("type", value.get("extractor_type"))
+    value = _snapshot_projection_mapping(value, label, _WEB_EXTRACTOR_KEYS)
+    name = value["name"]
+    extractor_type = value["type"]
     if not isinstance(name, str) or not name or not isinstance(extractor_type, str) or not extractor_type:
         raise ExecutionError(f"invalid retained {label}")
     try:
         return ExtractorBinding(
             name=name,
             type=extractor_type,
-            options=_mapping(value.get("options"), f"{label}.options"),
+            options=_snapshot_mapping(value["options"], f"{label}.options"),
         )
     except (DefinitionError, TypeError, ValueError) as error:
         raise ExecutionError(f"invalid retained {label}") from error
@@ -885,70 +984,91 @@ def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
 def _decode_snapshot_web_binding(value: object) -> WebBinding:
     """Reconstruct a typed binding from its persisted semantic projection."""
 
-    if not isinstance(value, Mapping):
-        raise ExecutionError("invalid retained Task web binding")
-    direct_value = value.get("direct_provider")
+    value = _snapshot_projection_mapping(
+        value,
+        "Task web binding",
+        _WEB_BINDING_KEYS,
+        optional_keys={"web_cache_version"},
+    )
+    direct_value = value["direct_provider"]
     direct_provider = (
         None
         if direct_value is None
         else _decode_snapshot_provider(direct_value, "Task web binding.direct_provider")
     )
 
-    fetch_value = value.get("fetch_chain")
+    fetch_value = value["fetch_chain"]
     if fetch_value is None:
         fetch_chain = None
         fetch_chain_name = None
-    elif isinstance(fetch_value, Mapping):
-        fetch_chain_name = fetch_value.get("name")
+    else:
+        fetch_value = _snapshot_projection_mapping(
+            fetch_value, "Task web binding.fetch_chain", _WEB_FETCH_CHAIN_KEYS
+        )
+        fetch_chain_name = fetch_value["name"]
         fetch_chain = tuple(
             _decode_snapshot_provider(provider, f"Task web binding.fetch_chain.providers[{index}]")
             for index, provider in enumerate(
-                _snapshot_sequence(fetch_value.get("providers", ()), "Task web binding.fetch_chain.providers")
+                _snapshot_sequence(
+                    fetch_value["providers"],
+                    "Task web binding.fetch_chain.providers",
+                )
             )
         )
-    else:
-        raise ExecutionError("invalid retained Task web binding.fetch_chain")
 
-    extract_value = value.get("extract_chain")
+    extract_value = value["extract_chain"]
     if extract_value is None:
         extract_chain = None
         extract_chain_name = None
-    elif isinstance(extract_value, Mapping):
-        extract_chain_name = extract_value.get("name")
+    else:
+        extract_value = _snapshot_projection_mapping(
+            extract_value, "Task web binding.extract_chain", _WEB_EXTRACT_CHAIN_KEYS
+        )
+        extract_chain_name = extract_value["name"]
         extract_chain = tuple(
             _decode_snapshot_extractor(extractor, f"Task web binding.extract_chain.extractors[{index}]")
             for index, extractor in enumerate(
                 _snapshot_sequence(
-                    extract_value.get("extractors", ()),
+                    extract_value["extractors"],
                     "Task web binding.extract_chain.extractors",
                 )
             )
         )
-    else:
-        raise ExecutionError("invalid retained Task web binding.extract_chain")
 
-    quality_value = value.get("quality", {})
-    if not isinstance(quality_value, Mapping):
-        raise ExecutionError("invalid retained Task web binding.quality")
+    quality_value = _snapshot_projection_mapping(
+        value["quality"], "Task web binding.quality", _WEB_QUALITY_KEYS
+    )
+    if quality_value["reject_challenges"] is not True:
+        raise ExecutionError("invalid retained Task web binding.quality.reject_challenges")
+    cache_version = value.get("web_cache_version")
+    if cache_version is not None and (
+        isinstance(cache_version, bool)
+        or not isinstance(cache_version, int)
+        or cache_version <= 0
+    ):
+        raise ExecutionError("invalid retained Task web binding.web_cache_version")
     try:
         quality = QualityPolicy(
-            min_chars=quality_value.get("min_chars", 500),
-            min_words=quality_value.get("min_words"),
-            max_link_ratio=quality_value.get("max_link_ratio"),
-            reject_challenges=quality_value.get("reject_challenges", True),
-            max_body_bytes=quality_value.get("max_body_bytes", 10_485_760),
+            min_chars=quality_value["min_chars"],
+            min_words=quality_value["min_words"],
+            max_link_ratio=quality_value["max_link_ratio"],
+            reject_challenges=quality_value["reject_challenges"],
+            max_body_bytes=quality_value["max_body_bytes"],
         )
-        return WebBinding(
-            version=value.get("version", 1),
+        binding = WebBinding(
+            version=value["version"],
             direct_provider=direct_provider,
             fetch_chain=fetch_chain,
             extract_chain=extract_chain,
             quality=quality,
-            output=value.get("output", "artifact"),
+            output=value["output"],
             fetch_chain_name=fetch_chain_name,
             extract_chain_name=extract_chain_name,
-            web_cache_version=value.get("web_cache_version"),
+            web_cache_version=cache_version,
         )
+        if canonical_json(binding.semantic_projection()) != canonical_json(value):
+            raise ExecutionError("invalid retained Task web binding")
+        return binding
     except (TypeError, ValueError) as error:
         raise ExecutionError("invalid retained Task web binding") from error
 
