@@ -153,6 +153,46 @@ web:
         load_definition(path)
 
 
+@pytest.mark.parametrize("field", ["base_url", "proxy"])
+def test_malformed_provider_urls_raise_definition_error(tmp_path, field):
+    if field == "base_url":
+        provider = "      type: crawl4ai\n      base_url: 'http://['"
+    else:
+        provider = "      type: startup_http\n      trusted: true\n      proxy: 'http://['"
+    path = _write(
+        tmp_path,
+        f"""version: 1
+web:
+  providers:
+    invalid:
+{provider}
+""",
+    )
+    with pytest.raises(DefinitionError, match=field):
+        load_definition(path)
+
+
+def test_webpage_list_selector_rejects_structurally_invalid_css(tmp_path):
+    path = _write(
+        tmp_path,
+        """version: 1
+web:
+  providers:
+    direct: {type: startup_http, trusted: true}
+  fetch_chains: {chain: {providers: [direct]}}
+sources:
+  page:
+    use: sluice.sources.webpage
+    with:
+      url: https://example.test/page
+      fetch_chain: chain
+      list_selector: 'article['
+""",
+    )
+    with pytest.raises(DefinitionError, match="list_selector"):
+        load_definition(path)
+
+
 @pytest.mark.parametrize(
     ("provider_fields", "field"),
     [
@@ -206,3 +246,32 @@ stages:
     )
     snapshot = json.loads(definition.stages["pass"].canonical_config_json)
     assert snapshot["tasks"] == [{"use": "custom.task", "with": {"value": 1}, "web_binding": None}]
+
+
+def test_stage_canonical_config_keeps_env_reference_without_secret(monkeypatch, tmp_path):
+    monkeypatch.setenv("TEST_KEY", "actual-secret")
+    definition = load_definition(
+        _write(
+            tmp_path,
+            """version: 1
+web:
+  providers:
+    hosted:
+      type: firecrawl
+      api_key: env:TEST_KEY
+  fetch_chains: {robust: {providers: [hosted]}}
+  extractors: {identity: {type: identity}}
+  extract_chains: {article: {extractors: [identity]}}
+stages:
+  article:
+    input: each
+    tasks:
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article}
+      - use: sluice.tasks.to_markdown
+""",
+        )
+    )
+    canonical = definition.stages["article"].canonical_config_json
+    assert "env:TEST_KEY" in canonical
+    assert "actual-secret" not in canonical

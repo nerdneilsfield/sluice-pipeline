@@ -13,6 +13,7 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
+import math
 import re
 from types import MappingProxyType
 from typing import (
@@ -249,7 +250,7 @@ class ProviderBinding:
     cookies: Mapping[str, FrozenJSON] = field(default_factory=dict)
     proxy: str | None = None
     target_policy: Any = None
-    timeout_seconds: float | None = None
+    timeout_seconds: int | None = None
     only_main_content: bool = False
     wait_for_selector: str | None = None
     wait_for: Any = None
@@ -294,13 +295,48 @@ class ProviderBinding:
             raise ValueError("timeout must be positive")
         if self.connect_timeout is not None and self.connect_timeout <= timedelta(0):
             raise ValueError("connect_timeout must be positive")
+        if (
+            self.timeout is not None
+            and self.connect_timeout is not None
+            and self.connect_timeout > self.timeout
+        ):
+            raise ValueError("connect_timeout cannot exceed timeout")
         if self.cooldown < timedelta(0):
             raise ValueError("cooldown must be non-negative")
         timeout_seconds = self.timeout_seconds
-        if timeout_seconds is None and self.timeout is not None:
-            timeout_seconds = self.timeout.total_seconds()
-        if timeout_seconds is not None and timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be positive")
+        if timeout_seconds is not None:
+            if isinstance(timeout_seconds, bool) or not isinstance(
+                timeout_seconds, (int, float)
+            ):
+                raise ValueError("timeout_seconds must be a positive whole number")
+            try:
+                finite_timeout = math.isfinite(timeout_seconds)
+            except OverflowError:
+                finite_timeout = False
+            whole_timeout = (
+                isinstance(timeout_seconds, int)
+                or (isinstance(timeout_seconds, float) and timeout_seconds.is_integer())
+            )
+            if (
+                not finite_timeout
+                or timeout_seconds <= 0
+                or not whole_timeout
+            ):
+                raise ValueError("timeout_seconds must be a positive whole number")
+            timeout_seconds = int(timeout_seconds)
+        if self.timeout is not None:
+            timeout_total = self.timeout.total_seconds()
+            if not math.isfinite(timeout_total) or not timeout_total.is_integer():
+                raise ValueError("timeout must be a whole number of seconds")
+            expected_timeout_seconds = int(timeout_total)
+            if timeout_seconds is None:
+                timeout_seconds = expected_timeout_seconds
+            elif timeout_seconds != expected_timeout_seconds:
+                raise ValueError("timeout_seconds must match timeout")
+        if self.connect_timeout is not None:
+            connect_total = self.connect_timeout.total_seconds()
+            if not math.isfinite(connect_total) or not connect_total.is_integer():
+                raise ValueError("connect_timeout must be a whole number of seconds")
         object.__setattr__(self, "timeout_seconds", timeout_seconds)
         if not isinstance(self.only_main_content, bool):
             raise ValueError("only_main_content must be a boolean")
@@ -600,14 +636,32 @@ class FetchRequest:
                 raise ValueError("raw_source requests require raw_source capability")
             if preferred and set(preferred) != {"raw_source"}:
                 raise ValueError("raw_source preferred capability must be raw_source")
+        elif "raw_source" in acceptable:
+            raise ValueError("article requests cannot accept raw_source capability")
         elif self.list_selector is not None:
             raise ValueError("list_selector is valid only for list_html requests")
+        if not set(preferred) <= acceptable:
+            raise ValueError("preferred capabilities must be acceptable")
         if not isinstance(self.quality, QualityPolicy):
             raise TypeError("quality must be a QualityPolicy")
-        if self.stage_deadline is not None and not isinstance(
-            self.stage_deadline, (int, float)
-        ):
-            raise ValueError("stage_deadline must be a monotonic timestamp or null")
+        if self.stage_deadline is not None:
+            if isinstance(self.stage_deadline, bool) or not isinstance(
+                self.stage_deadline, (int, float)
+            ):
+                raise ValueError(
+                    "stage_deadline must be a finite positive monotonic timestamp or null"
+                )
+            try:
+                finite_deadline = math.isfinite(self.stage_deadline)
+            except OverflowError:
+                finite_deadline = False
+            if (
+                not finite_deadline
+                or self.stage_deadline <= 0
+            ):
+                raise ValueError(
+                    "stage_deadline must be a finite positive monotonic timestamp or null"
+                )
         object.__setattr__(self, "acceptable", acceptable)
         object.__setattr__(self, "preferred", preferred)
         object.__setattr__(self, "target_headers", _freeze_mapping(self.target_headers))

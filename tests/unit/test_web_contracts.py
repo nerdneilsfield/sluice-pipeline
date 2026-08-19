@@ -1,4 +1,6 @@
 import pytest
+import math
+from datetime import timedelta
 
 from sluice.canonical import canonical_json
 
@@ -45,6 +47,72 @@ def test_request_enforces_mode_and_list_selector_shape():
             mode="article",
             acceptable=frozenset({"text"}),
             list_selector="article",
+        )
+
+
+def test_article_request_rejects_raw_source_capability():
+    with pytest.raises(ValueError, match="raw_source"):
+        FetchRequest(
+            url="https://example.test",
+            mode="article",
+            acceptable=frozenset({"raw_source"}),
+        )
+
+
+def test_request_preferred_capabilities_must_be_acceptable():
+    with pytest.raises(ValueError, match="preferred"):
+        FetchRequest(
+            url="https://example.test",
+            mode="article",
+            acceptable=frozenset({"text"}),
+            preferred=("markdown",),
+        )
+
+
+@pytest.mark.parametrize("deadline", [True, False, 0, -1, math.nan, math.inf])
+def test_request_stage_deadline_must_be_finite_and_positive(deadline):
+    with pytest.raises(ValueError, match="stage_deadline"):
+        FetchRequest(
+            url="https://example.test",
+            mode="article",
+            acceptable=frozenset({"text"}),
+            stage_deadline=deadline,
+        )
+
+
+def test_provider_timeout_seconds_is_integer_and_matches_timeout():
+    normalized = ProviderBinding(
+        "p",
+        "httpx",
+        timeout=timedelta(seconds=30),
+        timeout_seconds=30.0,
+    )
+    assert normalized.timeout_seconds == 30
+    assert isinstance(normalized.timeout_seconds, int)
+
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        ProviderBinding(
+            "p",
+            "httpx",
+            timeout=timedelta(seconds=30),
+            timeout_seconds=31,
+        )
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        ProviderBinding(
+            "p",
+            "httpx",
+            timeout=timedelta(seconds=30),
+            timeout_seconds=30.5,
+        )
+
+
+def test_provider_connection_timeout_cannot_exceed_timeout():
+    with pytest.raises(ValueError, match="connect_timeout"):
+        ProviderBinding(
+            "p",
+            "httpx",
+            timeout=timedelta(seconds=30),
+            connect_timeout=timedelta(seconds=31),
         )
 
 

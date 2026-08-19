@@ -158,6 +158,39 @@ def _required_string(spec: Mapping[str, object], key: str, label: str) -> str:
     return value
 
 
+def _selector(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DefinitionError(f"{label} must be a non-empty CSS selector")
+    selector = value.strip()
+    stack: list[str] = []
+    quote: str | None = None
+    escaped = False
+    for character in selector:
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if quote is not None:
+            if character == quote:
+                quote = None
+            continue
+        if character in {"'", '"'}:
+            quote = character
+        elif character in "[(":
+            stack.append(character)
+        elif character in ")]":
+            expected = "(" if character == ")" else "["
+            if not stack or stack.pop() != expected:
+                raise DefinitionError(f"{label} must be a structurally valid CSS selector")
+        elif character in "{};" or ord(character) < 0x20:
+            raise DefinitionError(f"{label} must be a structurally valid CSS selector")
+    if quote is not None or stack or escaped:
+        raise DefinitionError(f"{label} must be a structurally valid CSS selector")
+    return selector
+
+
 def _boolean(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise DefinitionError(f"{label} must be a boolean")
@@ -286,7 +319,11 @@ def _provider_base_url(spec: Mapping[str, object], typ: str, label: str) -> str 
     value = authored if authored is not None else defaults.get(typ)
     if not isinstance(value, str) or not value.strip():
         raise DefinitionError(f"{label}.base_url must be a URL")
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError as error:
+        raise DefinitionError(f"{label}.base_url must be a URL") from error
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
@@ -404,7 +441,13 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
         if isinstance(proxy, str) and _ENV_REFERENCE.fullmatch(proxy):
             proxy = _env_reference(proxy, f"{label}.proxy")
         elif isinstance(proxy, str):
-            parsed_proxy = urlsplit(proxy)
+            try:
+                parsed_proxy = urlsplit(proxy)
+                _ = parsed_proxy.port
+            except ValueError as error:
+                raise DefinitionError(
+                    f"{label}.proxy must be a URL or env reference"
+                ) from error
             if (
                 parsed_proxy.username
                 or parsed_proxy.password
@@ -827,8 +870,7 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
         cache_version = _integer(config.get("web_cache_version", 1), "webpage.web_cache_version", 1)
         selector = config.get("list_selector")
         if selector is not None:
-            if not isinstance(selector, str) or not selector.strip():
-                raise DefinitionError("webpage.list_selector must be a non-empty string")
+            selector = _selector(selector, "webpage.list_selector")
             forbidden = {"extract_chain", "output", "min_chars", "min_words", "max_link_ratio", "reject_challenges"}
             present = forbidden & set(config)
             if present:

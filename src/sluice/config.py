@@ -17,6 +17,7 @@ from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -121,6 +122,7 @@ _WEB_QUALITY_KEYS = {
 }
 _WEB_FETCH_CHAIN_KEYS = {"name", "providers"}
 _WEB_EXTRACT_CHAIN_KEYS = {"name", "extractors"}
+_SNAPSHOT_ENV_REFERENCE = re.compile(r"^env:[A-Z_][A-Z0-9_]*$")
 
 
 def _reject_duplicate_yaml_keys(text: str) -> None:
@@ -867,10 +869,60 @@ def _snapshot_optional_string(value: object, label: str) -> str | None:
     return value
 
 
-def _snapshot_duration(value: object, label: str, *, allow_zero: bool = False) -> timedelta | None:
-    """Decode a canonical WebBinding duration expressed in seconds."""
-
+def _snapshot_base_url(value: object, label: str) -> str | None:
+    value = _snapshot_optional_string(value, label)
     if value is None:
+        return None
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError as error:
+        raise ExecutionError(f"invalid retained {label}") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
+def _snapshot_proxy(value: object, label: str) -> str | None:
+    value = _snapshot_optional_string(value, label)
+    if value is None:
+        return None
+    if _SNAPSHOT_ENV_REFERENCE.fullmatch(value):
+        return value
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError as error:
+        raise ExecutionError(f"invalid retained {label}") from error
+    if (
+        parsed.scheme not in {"http", "https", "socks5", "socks5h"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
+def _snapshot_seconds(
+    value: object,
+    label: str,
+    *,
+    allow_zero: bool = False,
+    required: bool = False,
+) -> int | None:
+    if value is None:
+        if required:
+            raise ExecutionError(f"invalid retained {label}")
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ExecutionError(f"invalid retained {label}")
@@ -878,10 +930,32 @@ def _snapshot_duration(value: object, label: str, *, allow_zero: bool = False) -
         finite = math.isfinite(value)
     except OverflowError:
         finite = False
-    if not finite or value < 0 or (value == 0 and not allow_zero):
+    if not finite:
         raise ExecutionError(f"invalid retained {label}")
+    if isinstance(value, float) and not value.is_integer():
+        raise ExecutionError(f"invalid retained {label}")
+    seconds = int(value)
+    if seconds < 0 or (seconds == 0 and not allow_zero):
+        raise ExecutionError(f"invalid retained {label}")
+    return seconds
+
+
+def _snapshot_duration(
+    value: object,
+    label: str,
+    *,
+    allow_zero: bool = False,
+    required: bool = False,
+) -> timedelta | None:
+    """Decode a canonical WebBinding duration expressed in whole seconds."""
+
+    seconds = _snapshot_seconds(
+        value, label, allow_zero=allow_zero, required=required
+    )
+    if seconds is None:
+        return None
     try:
-        return timedelta(seconds=value)
+        return timedelta(seconds=seconds)
     except (OverflowError, ValueError) as error:
         raise ExecutionError(f"invalid retained {label}") from error
 
@@ -902,30 +976,28 @@ def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
     if any(not isinstance(capability, str) for capability in capabilities):
         raise ExecutionError(f"invalid retained {label}.capabilities")
     actions = _snapshot_sequence(value["actions"], f"{label}.actions")
-    timeout = _snapshot_duration(value["timeout"], f"{label}.timeout")
+    timeout = _snapshot_duration(
+        value["timeout"], f"{label}.timeout", required=True
+    )
     connect_timeout = _snapshot_duration(
-        value["connect_timeout"], f"{label}.connect_timeout"
+        value["connect_timeout"], f"{label}.connect_timeout", required=True
     )
     cooldown = _snapshot_duration(
-        value["cooldown"], f"{label}.cooldown", allow_zero=True
+        value["cooldown"], f"{label}.cooldown", allow_zero=True, required=True
     )
     if cooldown is None:
         raise ExecutionError(f"invalid retained {label}.cooldown")
-    timeout_seconds = value["timeout_seconds"]
-    if timeout_seconds is not None:
-        if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
-            raise ExecutionError(f"invalid retained {label}.timeout_seconds")
-        try:
-            finite_timeout = math.isfinite(timeout_seconds)
-        except OverflowError:
-            finite_timeout = False
-        if (
-            not finite_timeout
-            or timeout_seconds <= 0
-        ):
-            raise ExecutionError(f"invalid retained {label}.timeout_seconds")
-    base_url = _snapshot_optional_string(value["base_url"], f"{label}.base_url")
-    proxy = _snapshot_optional_string(value["proxy"], f"{label}.proxy")
+    timeout_seconds = _snapshot_seconds(
+        value["timeout_seconds"], f"{label}.timeout_seconds", required=True
+    )
+    if timeout is None or connect_timeout is None or timeout_seconds is None:
+        raise ExecutionError(f"invalid retained {label}.timeout")
+    if connect_timeout > timeout:
+        raise ExecutionError(f"invalid retained {label}.connect_timeout")
+    if timeout_seconds != int(timeout.total_seconds()):
+        raise ExecutionError(f"invalid retained {label}.timeout_seconds")
+    base_url = _snapshot_base_url(value["base_url"], f"{label}.base_url")
+    proxy = _snapshot_proxy(value["proxy"], f"{label}.proxy")
     wait_for_selector = _snapshot_optional_string(
         value["wait_for_selector"], f"{label}.wait_for_selector"
     )
@@ -979,6 +1051,37 @@ def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
         )
     except (DefinitionError, TypeError, ValueError) as error:
         raise ExecutionError(f"invalid retained {label}") from error
+
+
+def _normalise_snapshot_binding_projection(value: Mapping[str, object]) -> Mapping[str, object]:
+    """Normalize whole-number timing floats before semantic comparison."""
+
+    result = dict(value)
+
+    def normalise_provider(provider: object) -> object:
+        if not isinstance(provider, Mapping):
+            return provider
+        normalized = dict(provider)
+        for field in ("timeout", "connect_timeout", "cooldown", "timeout_seconds"):
+            timing = normalized.get(field)
+            if isinstance(timing, float) and timing.is_integer():
+                normalized[field] = int(timing)
+        return normalized
+
+    direct = result.get("direct_provider")
+    if direct is not None:
+        result["direct_provider"] = normalise_provider(direct)
+    for field in ("fetch_chain",):
+        chain = result.get(field)
+        if isinstance(chain, Mapping):
+            normalized_chain = dict(chain)
+            providers = normalized_chain.get("providers")
+            if isinstance(providers, (list, tuple)):
+                normalized_chain["providers"] = [
+                    normalise_provider(provider) for provider in providers
+                ]
+            result[field] = normalized_chain
+    return result
 
 
 def _decode_snapshot_web_binding(value: object) -> WebBinding:
@@ -1066,11 +1169,55 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
             extract_chain_name=extract_chain_name,
             web_cache_version=cache_version,
         )
-        if canonical_json(binding.semantic_projection()) != canonical_json(value):
+        normalized_value = _normalise_snapshot_binding_projection(value)
+        if canonical_json(binding.semantic_projection()) != canonical_json(normalized_value):
             raise ExecutionError("invalid retained Task web binding")
         return binding
     except (TypeError, ValueError) as error:
         raise ExecutionError("invalid retained Task web binding") from error
+
+
+def _validate_snapshot_task_binding(use: str, binding: WebBinding | None) -> None:
+    if binding is None:
+        return
+    if use not in {
+        "sluice.tasks.fetch_webpage",
+        "sluice.tasks.extract_content",
+        "sluice.tasks.to_markdown",
+        "sluice.tasks.to_text",
+    }:
+        raise ExecutionError("retained web binding is not valid for this Task")
+    if binding.web_cache_version is not None:
+        raise ExecutionError("retained Stage Task cannot carry web_cache_version")
+    if binding.direct_provider is not None:
+        raise ExecutionError("retained Stage Task cannot carry a direct provider")
+    if use == "sluice.tasks.fetch_webpage":
+        if (
+            binding.output != "artifact"
+            or binding.fetch_chain is None
+            or not binding.fetch_chain
+            or binding.extract_chain is None
+            or not binding.extract_chain
+        ):
+            raise ExecutionError("invalid retained fetch_webpage binding")
+    elif use == "sluice.tasks.extract_content":
+        if (
+            binding.output != "artifact"
+            or binding.fetch_chain is not None
+            or binding.extract_chain is None
+            or not binding.extract_chain
+        ):
+            raise ExecutionError("invalid retained extract_content binding")
+    else:
+        expected_output = (
+            "markdown" if use == "sluice.tasks.to_markdown" else "text"
+        )
+        if (
+            binding.output != expected_output
+            or binding.fetch_chain is not None
+            or binding.extract_chain is not None
+        ):
+            raise ExecutionError("invalid retained projector binding")
 
 
 def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
@@ -1124,6 +1271,7 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
             if "web_binding" not in encoded or encoded.get("web_binding") is None
             else _decode_snapshot_web_binding(encoded.get("web_binding"))
         )
+        _validate_snapshot_task_binding(use, web_binding)
         tasks.append(
             TaskDef(use=use, with_config=frozen_config, web_binding=web_binding)
         )
