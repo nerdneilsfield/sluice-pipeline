@@ -6,7 +6,7 @@
 
 **Repository:** `sluice-pipeline-v4`
 
-**Baseline:** `v4-cleanroom` at `070e8f8`
+**Implementation baseline before this Design:** `v4-cleanroom` at `070e8f8`
 
 ## 1. Purpose
 
@@ -294,11 +294,11 @@ is not accepted.
 | --- | --- |
 | `httpx` | No additional fields. Produces raw HTML, text, or raw source. |
 | `curl_cffi` | `impersonate` non-empty profile name, default `chrome`; `http_version` one of `auto`, `2`, `3`, default `auto`. |
-| `trafilatura` provider profile | HTTPX common fields plus `include_tables` boolean default `true`, `include_comments` boolean default `false`. |
-| `crawl4ai` | `api_key`; `browser_type` one of `chromium`, `firefox`, `webkit`, default `chromium`; `headless` boolean default `true`; `wait_until` one of `domcontentloaded`, `load`, `networkidle`, default `domcontentloaded`; optional `wait_for_selector`; `delay_before_return_html` duration default `0s`; `poll_interval` duration default `2s`; `poll_timeout` duration default equal to `timeout`; `poll_paths` non-empty relative-path templates default `[/task/{id}, /jobs/{id}]`. |
-| `firecrawl` | `api_key`; `api_version` one of `v1`, `v2`, default `v2`; `only_main_content` boolean default `false`; optional `wait_for_selector`; `wait_for` duration default `0s`; `mobile` boolean default `false`; `actions` ordered list of validated `wait`, `click`, `write`, `press`, or `scroll` actions. Sluice always asks for both Markdown and HTML when supported. |
+| `trafilatura` provider profile | HTTPX common fields plus `include_tables` boolean default `true`, `include_comments` boolean default `false`. It returns both the direct raw HTML and locally extracted Markdown without changing the declared extract chain. |
+| `crawl4ai` | optional `api_key`; `browser_type` one of `chromium`, `firefox`, `webkit`, default `chromium`; `headless` boolean default `true`; `wait_until` one of `domcontentloaded`, `load`, `networkidle`, default `domcontentloaded`; optional `wait_for_selector`; `delay_before_return_html` duration default `0s`. The initial adapter supports only the synchronous `POST /crawl` API and always sends `cache_mode: bypass`; async job submission, polling, and webhooks are outside this design. |
+| `firecrawl` | optional `api_key`; `api_version` is fixed/defaulted to `v2` and any other value is rejected; `only_main_content` boolean default `false`; optional `wait_for_selector`; `wait_for` duration default `0s`; `mobile` boolean default `false`; `actions` ordered list of validated native-subset actions defined below. Sluice asks for Markdown plus `rawHtml` for article requests and only `rawHtml` for list/raw requests. It always sends `maxAge: 0`, `storeInCache: false`, and `skipTlsVerification: false`; these safety fields are not user-overridable. |
 | `jina_reader` | `api_key`; optional `target_selector`; `with_generated_alt` boolean default `false`; `remove_selectors` string list default empty. Output is Markdown only. |
-| `zyte` | required `api_key`; `mode` one of `auto`, `http`, `browser`, default `auto`; optional ISO country `geolocation`; `actions` ordered validated wait/click/write/scroll actions using the common action schema below; `automatic_content` boolean default `true`. Auto requests browser HTML and automatic page content in one response when available. |
+| `zyte` | required `api_key`; `mode` one of `auto`, `http`, `browser`, default `auto`; optional ISO country `geolocation`; `actions` ordered validated Zyte-subset actions defined below; `automatic_content` boolean default `true`, mapped to the vendor `pageContent` request field. Auto requests browser HTML and `pageContent` in one response; HTTP mode requests `httpResponseBody` and sets `pageContentOptions.extractFrom=httpResponseBody`; browser mode requests `browserHtml` and sets `pageContentOptions.extractFrom=browserHtml`. |
 | `bright_data` | required `api_key` and `zone`; `output` one of `html`, `markdown`, default `markdown`; optional ISO country `country`; `async` must be absent or `false`. |
 | `startup_http` | Requires injected `HTTPClient` and `trusted: true`; no other service options. Its raw string response is normalized by Section 6.2 and is permitted only in tests or explicitly trusted deployments. |
 
@@ -333,12 +333,17 @@ the trailing slash, while each adapter appends its versioned path. Both an
 authored value and a materialized default are stored identically in retained
 bindings.
 
-Action entries reject unknown keys and require the keys appropriate to their
-kind: wait uses `milliseconds`, click uses `selector`, write uses `selector`
-and `text`, press uses `key`, and scroll uses non-negative `x` and `y`.
-Provider adapters translate this stable Sluice schema to the selected vendor
-API version. A vendor feature outside the table requires a design change
-rather than an unvalidated escape hatch.
+Action entries reject unknown keys. Because vendor action models are not
+isomorphic, validation is provider-specific rather than pretending one action
+object is portable. Firecrawl accepts: `wait {milliseconds}`,
+`click {selector}`, `write {text}`, `press {key}`, and
+`scroll {direction: up|down}`. Zyte accepts: `wait {milliseconds}` mapped to
+`waitForTimeout`, `click {selector}` mapped to a CSS `ActionSelector`,
+`write {selector,text}` mapped to `type`, `press {key}` mapped to `keyPress`,
+and `scroll {x,y}` mapped to `scrollTo`; `x` and `y` are non-negative
+integers. Unsupported action kinds or shapes are startup errors. A vendor
+feature outside these subsets requires a design change rather than an
+unvalidated escape hatch.
 
 ### 4.3 Task configuration
 
@@ -430,7 +435,7 @@ Unknown fields are rejected. Quality fields have the Section 9 defaults.
 | `extract_content` | required `extract_chain`, `input_format` one of `auto`, `html`, `text`, `markdown` default `auto`, `min_chars`, optional positive `min_words`, optional `max_link_ratio` in `[0,1]` |
 | `to_markdown` | `input_format` one of `auto`, `html`, `text`, `markdown` default `auto` |
 | `to_text` | `input_format` one of `auto`, `html`, `text`, `markdown` default `auto` |
-| webpage Source | required non-empty `url` and `fetch_chain`; optional non-empty `list_selector` with no extract/output, otherwise required `extract_chain` and `output: markdown|text`; quality fields; arbitrary JSON `next_checkpoint`; positive `web_cache_version` default `1` |
+| webpage Source | required non-empty `url` and `fetch_chain`; optional non-empty `list_selector` with no extract/output/quality fields, otherwise required `extract_chain` and `output: markdown|text` plus optional quality fields; arbitrary JSON `next_checkpoint`; positive `web_cache_version` default `1` |
 | RSS Source | required non-empty `url`; optional `raw_fallback_chain`; `entry_output: text|markdown` default `text`; optional non-empty `cursor_param` or deprecated identical `checkpoint_param` alias, but not both; arbitrary JSON `next_checkpoint`; positive `web_cache_version` default `1` |
 
 For `fetch_webpage`, a configured fixed URL wins; otherwise a string input is
@@ -524,6 +529,18 @@ their authored `with_config`; the private binding is never injected into a
 custom callable. Stage snapshot encoding stores both fields explicitly, and
 retained decoding reconstructs the same `TaskDef.web_binding`.
 
+The new Stage snapshot shape remains the existing outer Stage object, but each
+Task entry is exactly `{use, with, web_binding}`; `web_binding` is JSON null
+for non-web Tasks. A Source execution's existing `config_json` remains its
+authored `with_config`; the expanded Source `web_binding` is stored in the
+binding snapshot used by `_binding_digest`, not passed as authored config.
+The decoder accepts the pre-feature legacy Task shape `{use, with}` and
+normalizes it to `web_binding: null`. Such a legacy terminal snapshot remains
+readable, but an explicit rebuild of a legacy web Task that lacks an exact
+binding fails with `DefinitionError`; it never borrows the current YAML chain.
+Queued or running legacy web work is failed/superseded during startup recovery
+rather than executed under guessed configuration.
+
 The stored `web_binding` is the complete runtime binding. Key construction
 derives a semantic projection that removes only resolved secret values; all
 authored defaults and secret reference
@@ -536,10 +553,16 @@ The snapshot retains enough information to execute queued Stage work, Stage
 retries, and rebuilds after the current YAML changes or removes the original
 named chain.
 
-`WebBinding.version` participates in every Stage key and Source binding
-digest. It is bumped whenever built-in provider, extractor, quality, or
-projection semantics change in a result-affecting way. Stage authors may also
-bump the existing Stage `cache_version`. Built-in web Sources accept
+`WebBinding.version` participates in every **web-bound** Stage key and built-in
+web Source binding digest. A Stage with no built-in web Task receives no
+`WebBinding`, so unrelated filter/dedup/LLM caches do not change. Projector-only
+`to_markdown` or `to_text` Stages are web-bound because projection semantics
+affect their payload and metadata. The first implementation therefore causes
+one intentional cache partition for existing projector Stages whose fixtures
+are updated to the new explicit snapshot shape. The version is bumped whenever
+built-in provider, extractor, quality, or projection semantics change in a
+result-affecting way. Stage authors may also bump the existing Stage
+`cache_version`. Built-in web Sources accept
 `web_cache_version`, a positive integer defaulting to one, solely as an
 operator-controlled Source binding partition.
 
@@ -580,13 +603,17 @@ sanitized endpoint identity and canonical non-secret options.
 ```text
 FetchRequest
   url                  normalized target URL
+  mode                 article, list_html, or raw_source
   acceptable           non-empty any-of capability set drawn from raw_html,
                        text, markdown, raw_source
   preferred            ordered desired capability tuple; providers request
                        every supported preferred representation in one call
+  list_selector        canonical CSS selector required only for list_html;
+                       null for article and raw_source
   target_headers       optional explicitly allowed target headers
   quality              immutable QualityPolicy
-  deadline             provider-level absolute deadline
+  stage_deadline       optional monotonic absolute Stage deadline; null for a
+                       Source request
 ```
 
 Service headers and credentials are not part of `target_headers`.
@@ -654,7 +681,11 @@ The `startup_http` compatibility adapter maps a successful returned string to
 the caller. It has no peer-address evidence, so it is allowed only when the
 named instance is explicitly configured `trusted: true`; that flag is valid
 only for `startup_http`, participates in semantic identity, and is intended
-for tests or operator-supplied transports.
+for tests or operator-supplied transports. `open_app` emits one bounded startup
+warning for every such instance. This flag is an explicit trust exception: it
+does not claim Sluice performed DNS, redirect, peer, or body-stream enforcement,
+and the injected adapter is responsible for those controls in a non-test
+deployment.
 
 ### 6.3 Provider
 
@@ -677,6 +708,8 @@ Extractors are local, deterministic operations over an existing artifact.
 They do not perform network access. `identity` accepts provider-supplied text
 or Markdown. Other extractors may consume raw HTML and add main content,
 title, author, publication time, OpenGraph data, or JSON-LD.
+`no_match` is the exported module-level singleton `NO_MATCH`; it is neither
+`None` nor an exception and cannot be confused with a valid empty extraction.
 
 ### 6.5 Coordinator
 
@@ -697,6 +730,15 @@ HTTP tests and custom direct transports do not need network access. Neither
 injection creates an implicit chain: configuration must still reference the
 corresponding named provider instance, and its sanitized options remain part
 of the canonical snapshot.
+
+Startup resolution changes `bind_builtin_source(path, http_client)` to
+`bind_builtin_source(path, adapters)` so webpage and RSS Sources can use the
+same immutable runtime catalog as Tasks. Built-in Source wrappers receive the
+private pair `(with_config, web_binding)`; custom Source callables keep the
+public `collect(with_config, checkpoint)` contract and never see private
+bindings. Built-in Task wrappers follow the same rule. `open_app` constructs
+or accepts exactly one `WebContentClient`, installs it in `BoundaryAdapters`,
+and resolves both current and retained web bindings before opening execution.
 
 This is a deliberate authoring-contract change. Existing tests and examples
 whose Stage ends at `fetch_webpage`, or whose network webpage Source names no
@@ -722,44 +764,84 @@ built-in chain that would finish with a non-JSON Artifact. A Stage may contain
 at most one `fetch_webpage`. `extract_content` after `fetch_webpage` is legal:
 if the artifact already records a quality-passing extraction under the same
 `extract_binding_digest`, it returns the artifact unchanged; otherwise it
-continues only the declared local extractor chain. `to_markdown` and `to_text`
-perform the sole final metadata projection.
+continues only the declared local extractor chain. Before a different chain is
+run, the Task clears `selected_format`, `quality`,
+`extract_binding_digest`, and any field produced by the prior non-identity
+extractor while retaining fetch-time `raw_html` and provider-original text or
+Markdown. `identity` may reuse only those provider-original representations;
+it may not re-accept output created by the previous extractor chain.
+`to_markdown` and `to_text` perform the sole final metadata projection.
 
 ### 6.7 Exact fallback algorithm
 
-For one Item, `WebContentClient.resolve` executes this algorithm:
+`FetchRequest.mode` selects one of three closed resolution modes:
+
+| Mode | Required winner representation | Extract chain | `identity` |
+| --- | --- | --- | --- |
+| `article` | any requested `raw_html`, `text`, or `markdown` representation that yields a Section 9 quality pass | required | allowed only for acceptable provider-original text/Markdown |
+| `list_html` | valid non-challenge `raw_html`; selector semantics decide matched vs valid-empty | forbidden | forbidden |
+| `raw_source` | `raw_source` bytes that pass Section 13.2 feed validation | absent | forbidden |
+
+`acceptable` constrains both provider eligibility and the representation that
+may win. An adapter may return extra representations for provenance or local
+recovery, but an extra Markdown field cannot win a `list_html` or `raw_source`
+request.
+
+For one Item, `WebContentClient.resolve` executes this common prefix:
 
 1. Iterate provider instances in declared order.
-2. Intersect the request's `acceptable` set with the provider's static
-   capabilities. If the intersection is empty,
-   record `missing_capability` without making a network call and continue.
-3. Acquire the provider instance limiter within the provider deadline, check
-   the Stage attempt cancellation probe, and perform one logical provider
-   operation.
-4. If Markdown or text is present, run `identity` first and evaluate quality.
-   A passing candidate wins immediately.
-5. If identity fails but raw HTML exists, run the remaining extractors in
-   declared order. Evaluate quality after every extractor candidate. The
-   first passing candidate wins.
-6. `no_match`, a sanitized extractor error, or a candidate failing quality
-   advances to the next extractor. Exhausting extractors advances to the next
-   fetch provider.
-7. If no raw HTML exists after supplied text/Markdown fails, advance directly
-   to the next fetch provider.
-8. Exhausting every eligible provider raises one `FetchChainExhausted`
-   containing only redacted ordered attempt summaries.
+2. Intersect `acceptable` with the provider's static or conditional
+   capabilities. If empty, record `missing_capability` without a call.
+3. Acquire the instance limiter within the effective deadline, check the Stage
+   attempt cancellation probe, and perform one logical provider operation.
+4. Reject bad status/MIME, oversized bodies, challenges, and empty shells
+   before mode-specific winner selection.
 
-Quality is never postponed until after all providers run, and providers are
-never fetched speculatively. A provider-supplied short Markdown value does not
-discard raw HTML from the same response; local extractors may still recover a
-passing candidate from that HTML.
+In `article` mode, provider-original acceptable Markdown/text is offered to
+`identity` first. If it fails quality and raw HTML is acceptable and present,
+the remaining extractors run in declared order. Each `NO_MATCH`, sanitized
+extractor error, or failed candidate advances to the next extractor; exhausting
+the chain advances to the next provider. The first quality-passing candidate
+wins.
 
-The historical `type: trafilatura` composite expands to an HTTPX transport
-binding plus a forced Trafilatura extractor binding. Within one Item attempt,
-raw direct responses are memoized only in memory by normalized URL and
-sanitized transport configuration digest. An equivalent preceding HTTPX
-instance is therefore reused rather than requested twice. This attempt-local
-reuse is discarded when the Stage attempt ends and is not a content cache.
+In `list_html` mode, no extractor runs. The Source applies its declared CSS
+selector to valid raw HTML. The loader validates and canonicalizes that
+selector into `FetchRequest.list_selector`; it is an error in either other
+mode or when absent in `list_html`. During the provider loop the coordinator
+calls the same pure `select_list_records(raw_html, final_url, selector)` helper
+used by the Source's final record projection. A page whose helper result is
+non-empty wins immediately. A valid page with an empty result is retained as
+an empty candidate while later raw-HTML providers run; after exhaustion, the
+earliest valid empty candidate becomes a successful empty publication. The
+coordinator returns the winning/candidate Artifact, and the Source invokes the
+same helper to construct records; it does not make a selection decision only
+after resolution. A challenge, invalid page, or selector error is never an
+empty candidate.
+
+In `raw_source` mode, no extractor runs. A provider sets `raw_source` only for
+an exact response representation that passes the bounded `defusedxml` feed
+validation in Section 13.2. The first valid feed, including a valid zero-entry
+feed, wins; other returned Markdown, HTML, or text cannot win.
+
+Exhausting every eligible article provider raises `FetchChainExhausted`.
+Exhausting list providers returns the earliest valid-empty candidate when one
+exists, otherwise raises Source exhaustion. Exhausting raw-source providers
+raises ordinary Source exhaustion. All exception payloads contain only
+redacted ordered attempt summaries.
+
+Quality is evaluated within each provider attempt, and providers are never
+fetched speculatively. A provider-supplied short Markdown value does not
+discard acceptable raw HTML from the same article response; local extractors
+may still recover a passing candidate from that HTML.
+
+The historical `type: trafilatura` composite performs HTTPX transport and one
+offline Trafilatura extraction inside the provider, returning both raw HTML and
+provider-original Markdown. It never replaces or reorders the declared
+extract chain; that chain's `identity` may accept the Markdown. Within one Item
+attempt, an equivalent preceding HTTPX raw response may be reused by normalized
+URL and sanitized transport digest rather than requested twice. This
+attempt-local reuse is discarded when the Stage attempt ends and is not a
+content cache.
 
 ## 7. Provider Semantics
 
@@ -786,8 +868,8 @@ Static capability declarations used for pre-call eligibility are:
 | `httpx` | `raw_html`, `text`, `raw_source` |
 | `curl_cffi` | `raw_html`, `text`, `raw_source` |
 | `trafilatura` provider profile | `raw_html`, `text`, `markdown` |
-| `crawl4ai` | `raw_html`, `text`, `markdown`, `rendered_js`, `raw_source` |
-| `firecrawl` | `raw_html`, `markdown`, `rendered_js`, `raw_source` |
+| `crawl4ai` | `raw_html`, `text`, `markdown`, `rendered_js`, conditional `raw_source` |
+| `firecrawl` | `raw_html`, `markdown`, `rendered_js`, conditional `raw_source` |
 | `jina_reader` | `markdown` |
 | `zyte` | `raw_html`, `text`, `rendered_js` |
 | `bright_data` | configured `raw_html` or `markdown`, plus `rendered_js` |
@@ -800,6 +882,14 @@ specific failure reason and falls through. Article resolution accepts any of
 raw HTML, text, or Markdown and prefers Markdown plus raw HTML in one call;
 list-page resolution accepts only raw HTML; RSS fallback accepts only raw
 source.
+
+`raw_source` is unconditional only for direct byte-preserving transports.
+Crawl4AI and Firecrawl are statically eligible for a raw-source request, but
+set that capability only when the exact same operation returns a body or
+`rawHtml` value that passes the feed validation in Section 13.2. A normalized
+DOM serialization, extracted article HTML, or Markdown never becomes
+`raw_source`; a response lacking qualifying bytes records
+`missing_capability` and advances the chain.
 
 ### 7.1 HTTPX
 
@@ -821,9 +911,12 @@ considered a browser renderer.
 ### 7.3 Trafilatura compatibility profile
 
 Historical `type: trafilatura` configuration remains accepted as a composite
-profile that expands to HTTPX fetch plus the Trafilatura extractor. It does
-not cause an additional request after an equivalent raw HTTP artifact already
-exists in the same Item attempt.
+profile. Its provider implementation performs one HTTPX fetch and one local
+call to `trafilatura.extract()` over that fetched body, then exposes the raw
+HTML and resulting Markdown as provider-original representations. It does not
+insert, replace, or reorder an authored `extract_chain`, and does not cause an
+additional request after an equivalent raw HTTP artifact already exists in
+the same Item attempt.
 
 Trafilatura extraction uses Markdown output, excludes comments, and includes
 tables. Failure to derive useful content is `no_match`, allowing the next
@@ -831,24 +924,38 @@ extractor or fetch provider.
 
 ### 7.4 Crawl4AI
 
-The adapter targets the current self-hosted API and uses its typed browser and
-crawler-run configuration. It supports arbitrary named local instances and a
-custom `base_url`. It may poll the single job created by one request until the
-provider deadline.
+The initial adapter targets the current self-hosted synchronous API. It sends
+one `POST /crawl` request with the typed browser/crawler configuration and
+`cache_mode: bypass`, then captures raw HTML and Markdown returned by that
+response. A configured API key becomes a Bearer service header; deployments
+without API authentication may omit it.
 
-The adapter captures inline or polled raw HTML and Markdown from the same job.
-Polling identifiers and paths are redacted operational detail, not durable
-Sluice execution state.
+Crawl4AI's asynchronous `POST /crawl/job` plus `GET /job/{task_id}` flow is
+outside this design. Supporting it later requires durable provider-job state;
+the adapter must not silently poll historical `/task/{id}` or `/jobs/{id}`
+paths. Arbitrary named local instances and an authored `base_url` remain
+supported.
 
 ### 7.5 Firecrawl
 
-The Firecrawl adapter supports self-hosted and official cloud endpoints, API
-v1 or v2 where declared, service authentication, wait selectors, and browser
-actions supported by the chosen endpoint.
+The initial Firecrawl adapter supports only the v2 scrape contract at
+`POST /v2/scrape`, on either the official cloud endpoint or a self-hosted
+instance that exposes the same contract. Firecrawl v1 request fields and
+actions are not silently translated; authoring `api_version: v1` is a startup
+error. The adapter supports service authentication, wait selectors, and only
+the validated browser actions in Section 4.2.
 
-It requests Markdown and HTML together when the endpoint supports combined
-formats. A self-hosted deployment is not assumed to provide cloud Fire-engine
-anti-bot behavior; its returned artifact must pass the same quality checks.
+For an article request it asks for `markdown` and `rawHtml` in one scrape. For
+list-page and raw-source requests it asks only for `rawHtml`; cleaned `html`
+is not treated as DOM-preserving input. Every request sets `maxAge: 0`,
+`storeInCache: false`, and `skipTlsVerification: false`, and defaults
+`onlyMainContent` to false. Firecrawl-native actions are translated only from
+the validated subset in Section 4.2.
+
+A self-hosted deployment is not assumed to provide cloud Fire-engine anti-bot
+behavior. Its returned artifact must pass the same quality and capability
+checks, and a `rawHtml` value counts as raw feed source only if Section 13.2
+accepts it.
 
 ### 7.6 Jina Reader
 
@@ -859,16 +966,25 @@ HTML or raw feed content.
 
 ### 7.7 Zyte
 
-The Zyte adapter uses the synchronous extraction API with Basic service
-authentication. It may request browser-rendered HTML and supported automatic
-page content in one response. It normalizes returned browser HTML, main
-content, title, and structured fields into an artifact.
+The Zyte adapter sends one Basic-authenticated `POST /v1/extract`. Auto mode
+requests `browserHtml` and, when `automatic_content` is true, `pageContent`;
+HTTP mode requests `httpResponseBody` and sets
+`pageContentOptions.extractFrom=httpResponseBody`; browser mode requests
+`browserHtml` and sets `pageContentOptions.extractFrom=browserHtml`. The
+validated action subset maps to Zyte `click`, `type`, `keyPress`, `scrollTo`,
+and `waitForTimeout` actions with CSS selectors encoded as
+`{type: css, value: <selector>}`. Returned target status/final URL, HTML, page
+content, title, and bounded structured fields are normalized into one
+artifact.
 
 ### 7.8 Bright Data Web Unlocker
 
 The Bright Data adapter uses Web Unlocker, not the interactive Browser API.
-It supports rendered HTML or Markdown responses, zone selection, service
-authentication, and provider concurrency limits.
+It sends a Bearer-authenticated request to the configured zone with
+`format: raw`; configured Markdown output additionally sends
+`data_format: markdown`, while HTML output omits `data_format`. It supports
+zone selection, country selection, and provider concurrency limits. Service
+envelopes are removed by the adapter and never mistaken for target content.
 
 Only the synchronous request path is in scope. Async response IDs, callbacks,
 and multi-hour polling require new durable provider-job state and are excluded
@@ -883,6 +999,21 @@ The initial extractor chain supports:
 3. `newspaper4k`: article-oriented text and publication metadata;
 4. `resiliparse`: fast rule-based main-content and boilerplate removal;
 5. `beautifulsoup`: deterministic visible-content fallback.
+
+Extractor outputs are fixed and never inferred by the projector:
+
+| Extractor | Output field | `selected_format` | Network rule |
+| --- | --- | --- | --- |
+| `identity` | the acceptable provider-original `markdown` or `text` field | matching field | no call |
+| `trafilatura` | sanitized Markdown | `markdown` | call `trafilatura.extract()` on supplied HTML only; never `fetch_url` |
+| `newspaper4k` | normalized article text plus bounded metadata | `text` | supply HTML with `set_html`/equivalent and force `fetch_images=false`; never `download` |
+| `resiliparse` | normalized main-content text | `text` | local extraction only |
+| `beautifulsoup` | normalized visible text | `text` | local parsing only |
+
+Any attempted network access by an extractor is an invariant violation mapped
+to `extract_failed`; it is not recorded as a provider attempt. A projector uses
+only `selected_format` and the corresponding field and does not guess from
+other populated fields.
 
 BeautifulSoup is a core dependency and replaces the hand-written HTML parser
 as the final supported fallback. It removes script, style, template, noscript,
@@ -979,6 +1110,9 @@ metadata.web
 `open_graph` and `twitter_card` are mappings and default to `{}`. `json_ld`,
 `links`, `authors`, and `warnings` are ordered lists and default to `[]`.
 Unavailable scalar provenance values are JSON null as defined above.
+`published_at` is either JSON null or an RFC 3339 UTC string with `Z` suffix.
+`authors` contains whitespace-normalized non-empty strings, deduplicated by
+exact normalized value while retaining first-seen order.
 
 Raw HTML, response headers, cookies, screenshots, challenge bodies, provider
 credentials, and complete attempt error bodies are never materialized.
@@ -1004,6 +1138,12 @@ objects, and unknown keys are discarded. Every retained descriptive string is
 HTML-parsed to visible text and entity-decoded; URL fields must pass URL
 normalization. Link collections contain normalized URLs only. Thus bounded
 metadata never becomes a side channel for raw page markup.
+
+The initial closed warning-code set is `metadata_truncated`,
+`sanitizer_removed_html`, `sanitizer_rejected_link`,
+`sanitizer_rejected_image`, `provider_metadata_ignored`, and
+`publication_date_invalid`. Adding or changing a warning that affects
+persisted metadata requires a `WebBinding.version` bump.
 
 The loader rejects a built-in Stage whose final value kind is Artifact. A
 Stage containing `fetch_webpage` or Artifact-producing `extract_content` must
@@ -1039,11 +1179,15 @@ only by that provider adapter and its inner artifact must declare a target
 representation. A missing or malformed MIME may proceed only when deterministic
 content sniffing recognizes HTML or XML; other binary types fail.
 
-Challenge detection is versioned with `WebBinding.version`. It rejects known
-Cloudflare challenge DOM IDs/classes and script paths, Turnstile/reCAPTCHA/
-hCaptcha containers, password-form login walls with no qualifying article
-content, and normalized phrases such as `verify you are human`, `checking your
-browser`, `access denied`, and `enable javascript and cookies to continue`.
+Challenge detection is versioned with `WebBinding.version`. Version 1 rejects
+the closed selector/path set `#challenge-running`, `#challenge-stage`,
+`.cf-challenge-running`, `.cf-turnstile`, `.g-recaptcha`, `.h-captcha`,
+`iframe[src*="challenges.cloudflare.com"]`, and script URLs containing
+`/cdn-cgi/challenge-platform/`; a `form` containing
+`input[type="password"]` is a login wall only when no qualifying article
+content exists. It also rejects the case-folded, whitespace-normalized phrase
+set `verify you are human`, `checking your browser`, `access denied`, and
+`enable javascript and cookies to continue`.
 An empty shell is raw HTML with fewer than 100 normalized visible characters
 and either a root application container with script resources or no content
 element containing at least 80 characters. These checks run before ordinary
@@ -1053,7 +1197,10 @@ not accidentally accept a recognized challenge.
 Each Task or Source may override `min_chars`, enable `min_words`, or enable a
 maximum link ratio. Challenge rejection, MIME validation, and response-size
 limits cannot be disabled. A provider instance may lower its positive body
-limit but may not make it unlimited.
+limit but may not make it unlimited. The effective decompressed response limit
+is `min(provider.max_body_bytes, 10485760)` bytes for every representation,
+including service-envelope decoding; no provider option can raise the fixed
+10 MiB ceiling.
 
 Stable failure reasons include:
 
@@ -1120,12 +1267,34 @@ If every eligible provider fails, `fetch_webpage` raises a typed
 policy and reuses the exact retained Stage configuration and Item envelope.
 `retries: 2` means one initial attempt plus at most two queued retry attempts.
 
-When the last retry is exhausted, an `each` Stage whose failing operation is
-the single built-in `fetch_webpage` finalizes its terminal Execution as
-`succeeded` with an empty, `succeeded` StageResult. The input Item is dropped
-and no downstream member is admitted. Earlier attempts remain `failed`; a
-queued retry becomes this terminal successful attempt only after it owns the
-same materialization claim and exhausts the persisted retry count.
+The terminal conversion is exact:
+
+1. `FetchChainExhausted` is raised only by built-in `fetch_webpage`; throwing
+   stops the Task chain, so a following projector is not invoked.
+2. The rule applies only to an `each` Stage whose failing Task is its one
+   built-in `fetch_webpage`, which must be the Stage's first
+   Artifact-producing Task. After it, the Stage may contain at most one
+   built-in `extract_content` and must end with exactly one built-in
+   `to_markdown` or `to_text` projector. A terminal-drop-eligible Stage may not
+   contain a custom Task after `fetch_webpage`; this keeps exhaustion scoped to
+   one known Item fetch path while preserving the legal
+   fetch/extract/projector composition from Section 6.6.
+3. While `retry_count < retries`, the current attempt becomes `failed` with a
+   sanitized exhaustion summary and the existing guarded `_fail_execution`
+   path transfers the same materialization claim to one queued retry.
+4. When `retry_count >= retries`, the still-current owner calls the guarded
+   finalizer with `StageOutcome(outputs=(), status="succeeded")`. Its Execution
+   becomes `succeeded`, `error` is JSON/SQL null, and an empty `succeeded`
+   StageResult becomes `stage_result_current`.
+5. This exception never uses the `InvalidStructuredOutput`/`invalid: drop`
+   branch and never publishes a `dropped` StageResult.
+6. Any other exception, `extract_content` exhaustion, batch Stage, custom Task,
+   or invalid web configuration remains `failed` and publishes no StageResult.
+
+The input Item is therefore dropped only after durable retry exhaustion and no
+downstream member is admitted. Earlier attempts remain `failed`; a queued
+retry becomes the terminal successful attempt only after it owns the same
+materialization claim and exhausts the persisted retry count.
 
 The empty StageResult is the current cache result for that lookup key. Shared
 waiters attach the same empty result without calling providers. A forced
@@ -1134,10 +1303,9 @@ sequence and shared-consumer healing withdraws the previously visible output.
 This follows the approved retry-then-drop policy rather than preserving stale
 content after an explicit refresh.
 
-Only the internal `FetchChainExhausted` raised by the built-in
-`fetch_webpage` qualifies. A custom Task, another built-in Task, an extractor
-configuration error, or an arbitrary exception remains a failed Stage. The
-terminal-drop rule does not apply to batch Stages.
+The guarded state/attempt-token update is atomic with checking retry
+exhaustion, so recovery or timeout cannot both queue another retry and publish
+the terminal empty result.
 
 Timeout, startup recovery, stale generation, and late worker completion use
 the existing Stage claim and attempt-token guards. A timed-out or superseded
@@ -1171,9 +1339,28 @@ business state. Restart clears their live occupancy and timers. Their declared
 configuration affects Stage keys and Source bindings because contention and
 skip behavior can affect the winning provider.
 
-Every provider operation has explicit connect, read, and total deadlines.
-The Stage timeout remains a publication watchdog, not a mechanism for killing
-a blocked Python thread.
+Every provider operation has explicit connect, read, and total deadlines. For
+a Stage Task, the absolute Stage attempt deadline is
+`execution.started_at + policy.timeout`. Immediately before limiter
+acquisition for each provider, the coordinator records monotonic
+`provider_attempt_started`; the effective provider deadline is the earlier of
+the Stage timestamp and
+`provider_attempt_started + provider.timeout`. Limiter acquisition,
+`Retry-After`, connect, read, body streaming, and any bounded provider
+operation are clamped to the remaining effective duration, so limiter waiting
+cannot reset or extend the provider budget.
+For a Source, which has no Stage policy timeout, the provider's own deadline
+is the effective deadline. If one provider's deadline expires while Stage time
+remains, the attempt records `timeout` and may advance. Once the Stage deadline
+expires, the coordinator raises internal `WebStageDeadlineExpired` and never
+starts another provider or extractor.
+
+The Stage timeout remains the durable publication watchdog and also supplies
+that cooperative upper bound; it is not a mechanism for killing a blocked
+native or Python thread. `_execute_claimed_stage` handles
+`WebStageDeadlineExpired` through the same guarded timeout transition used by
+the timeout scan. Whichever path first changes the attempt token wins, so the
+other becomes a no-op and cannot queue a duplicate retry.
 
 For built-in web Tasks, Stage runtime installs a private immutable
 `WebExecutionProbe` in a context variable before invoking the Task chain. The
@@ -1195,9 +1382,11 @@ unexpectedly still current, cancellation is an invariant violation and the
 ordinary guarded failure path applies; it is never converted to
 `FetchChainExhausted`.
 
-The runtime catalog owns all provider clients. `App.close()` closes HTTPX and
-other provider resources after Stage workers have joined; shared clients are
-never created or destroyed per Item.
+The runtime catalog owns all provider clients. `App.close()` is synchronous
+and idempotent; callers must not run it concurrently with `tick`, reconcile,
+or rebuild. It first stops admission and joins Stage workers, then closes the
+web runtime catalog and its HTTPX/other provider resources, and finally closes
+SQLite. Shared clients are never created or destroyed per Item.
 
 HTTPX-backed direct and vendor adapters share one documented thread-safe
 `httpx.Client` per runtime digest. curl_cffi uses one session per worker thread
@@ -1220,7 +1409,7 @@ converted to lowercase IDNA ASCII and trailing dots are removed before policy
 evaluation. Host allowlist entries are exact normalized hostnames; CIDR
 entries are parsed networks. No wildcard or substring matching is used.
 
-Direct providers:
+Built-in direct providers (`httpx`, `curl_cffi`, and the Trafilatura profile):
 
 - resolve every hostname and reject the target if any selected address is
   disallowed;
@@ -1315,8 +1504,16 @@ Each list match produces exactly:
 ```text
 SourceRecord.logical_id = resolved URL or final_url#match-index
 SourceRecord.payload    = {url, content, optional title}
-SourceRecord.metadata   = {web: bounded provider/final_url/provenance fields}
+SourceRecord.metadata   = {web: bounded list-record projector metadata}
 ```
+
+For each match, `metadata.web.source_url` is the requested list URL,
+`final_url` is the winning page URL, provider instance/type come from that
+artifact, `extractor` is `list_selector`, and `output_format` is `text`.
+`quality_chars` and `quality_words` are computed from that record's normalized
+content, not from the whole page. Article metadata collections are empty; page
+title and sanitizer-approved bounded provenance may be retained under the same
+Section 8 limits and pruning order.
 
 The payload URL equals the logical ID for an `href` match and equals the page
 `final_url` for a no-`href` match. Provider redirects never leave a relative
@@ -1382,9 +1579,12 @@ direct transport is not repeated inside `raw_fallback_chain`. If the request fai
 returns an unusable MIME/body, or feed parsing rejects the response, it invokes
 the declared `raw_fallback_chain` with `raw_source` capability.
 
-HTTPX, curl_cffi, Crawl4AI, and Firecrawl may satisfy raw feed capability when
-their response preserves the feed document. Jina Reader and providers that
-only return normalized article text or Markdown are skipped.
+HTTPX and curl_cffi satisfy raw feed capability from their byte-preserving
+target responses. Crawl4AI and Firecrawl are conditional candidates only: the
+same operation must expose a body/`rawHtml` representation that independently
+passes the Section 13.2 feed validator before the adapter sets `raw_source`.
+Jina Reader and providers that return only normalized article text, cleaned
+DOM HTML, or Markdown are skipped.
 
 The first valid feed document wins. If all fallback providers fail, the Source
 attempt fails normally and follows Source retry policy; Source failures are
@@ -1470,15 +1670,16 @@ Core dependencies:
 - HTTPX for pooled direct HTTP;
 - Beautiful Soup 4 for supported HTML parsing;
 - `defusedxml>=0.7,<1` for non-resolving bounded RSS/XML parsing;
-- `markdown-it-py>=4.2,<5` for deterministic raw-HTML Markdown sanitization.
+- `markdown-it-py>=4.2,<5` for deterministic raw-HTML Markdown sanitization;
+- `html-to-markdown>=3.10,<4` for the always-available built-in Markdown projector and
+  RSS Markdown projection.
 
 The `web` dependency extra installs:
 
 - curl_cffi;
 - Trafilatura;
 - Newspaper4k;
-- Resiliparse;
-- html-to-markdown.
+- Resiliparse.
 
 Crawl4AI, Firecrawl, Zyte, Bright Data, and Jina use Sluice-owned HTTP adapters
 rather than vendor SDKs.
@@ -1537,8 +1738,11 @@ The design is complete when implementation demonstrates all of the following:
     `env:` secret field do not appear in SQLite, Item payloads, metadata,
     logs, management output, tracked documentation, or exceptions; arbitrary
     input Item business data remains outside automatic secret classification.
-13. Direct URL handling rejects unsafe schemes, DNS answers, redirects, peers,
-    and oversized responses while permitting explicitly allowlisted targets.
+13. Built-in direct URL handling rejects unsafe schemes, DNS answers,
+    redirects, peers, and oversized responses while permitting explicitly
+    allowlisted targets; `startup_http` is separately identified as an
+    operator-trusted compatibility exception and never counted as evidence of
+    these built-in protections.
 14. Final Stage Items contain Markdown or text payloads and bounded deterministic
     `metadata.web`; no Artifact reaches the persistence boundary.
 15. Current unit, integration, smoke, DDL, foreign-key, canonicalization,
