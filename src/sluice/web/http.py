@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
 
 import httpx
 import httpcore
@@ -21,6 +22,7 @@ from .url import (
     NormalizedURL,
     TargetPolicy,
     guard_resolved_addresses,
+    is_non_public_address,
     join_target_url,
     normalize_target_url,
     validate_target_headers,
@@ -28,6 +30,15 @@ from .url import (
 
 
 MAX_BODY_BYTES = 10_485_760
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+    }
+)
+_SENSITIVE_HEADER_PARTS = ("api-key", "apikey", "token", "secret", "signature")
 
 
 class _PinnedSyncBackend(httpcore.SyncBackend):
@@ -306,7 +317,149 @@ def _invoke_callable(callable_obj: Callable[..., Any], target: NormalizedURL, ad
     raise _error("network")
 
 
-def _send_injected(transport: Any, target: NormalizedURL, addresses: tuple[str, ...], request: FetchRequest, binding: ProviderBinding) -> Any:
+def _sensitive_header(name: str) -> bool:
+    lowered = name.casefold()
+    return lowered in _SENSITIVE_HEADER_NAMES or any(
+        part in lowered for part in _SENSITIVE_HEADER_PARTS
+    )
+
+
+def _merge_target_headers(request: FetchRequest, binding: ProviderBinding) -> dict[str, str]:
+    """Validate and merge provider/request target headers for one hop."""
+
+    try:
+        binding_headers = validate_target_headers(binding.target_headers)
+        request_headers = validate_target_headers(request.target_headers)
+    except WebSafetyError:
+        raise
+    merged = dict(binding_headers)
+    seen = {name.casefold() for name in binding_headers}
+    for name, value in request_headers.items():
+        if name.casefold() in seen:
+            raise _error("forbidden_header")
+        seen.add(name.casefold())
+        merged[name] = value
+    cookie = _cookie_header(binding)
+    if cookie is not None:
+        merged["Cookie"] = cookie
+    return merged
+
+
+def _cookie_header(binding: ProviderBinding) -> str | None:
+    if not binding.cookies:
+        return None
+    cookie_parts: list[str] = []
+    for name, value in binding.cookies.items():
+        if not isinstance(name, str) or not name.strip() or any(
+            ord(char) < 0x21 or char in ";=\r\n" for char in name
+        ):
+            raise _error("forbidden_header")
+        if not isinstance(value, str) or any(
+            ord(char) < 0x20 or char in ";\r\n" for char in value
+        ):
+            raise _error("forbidden_header")
+        cookie_parts.append(f"{name}={value}")
+    return "; ".join(cookie_parts) if cookie_parts else None
+
+
+def _validate_transport_headers(
+    headers: Mapping[str, str], binding: ProviderBinding
+) -> dict[str, str]:
+    """Validate public sender headers, allowing only its own cookie header."""
+
+    if not isinstance(headers, Mapping):
+        raise _error("forbidden_header")
+    cookie_name: str | None = None
+    cookie_value: str | None = None
+    ordinary: dict[str, str] = {}
+    for name, value in headers.items():
+        if str(name).casefold() == "cookie":
+            if cookie_name is not None:
+                raise _error("forbidden_header")
+            cookie_name, cookie_value = str(name), value
+        else:
+            ordinary[name] = value
+    validated = validate_target_headers(ordinary)
+    if cookie_name is not None:
+        expected = _cookie_header(binding)
+        if expected is None or cookie_value != expected:
+            raise _error("forbidden_header")
+        validated[cookie_name] = cookie_value
+    return validated
+
+
+def _strip_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in headers.items()
+        if not _sensitive_header(str(name))
+    }
+
+
+def _request_with_headers(request: FetchRequest, headers: Mapping[str, str]) -> FetchRequest:
+    return FetchRequest(
+        url=request.url,
+        mode=request.mode,
+        acceptable=request.acceptable,
+        preferred=request.preferred,
+        list_selector=request.list_selector,
+        target_headers=dict(headers),
+        quality=request.quality,
+        stage_deadline=request.stage_deadline,
+    )
+
+
+def _service_endpoint(value: str) -> tuple[NormalizedURL, TargetPolicy]:
+    """Normalize a service endpoint with an exact-host private-network policy."""
+
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname
+    except (TypeError, ValueError):
+        raise _error("bad_url") from None
+    if not host:
+        raise _error("bad_url")
+    # ``TargetPolicy`` is intentionally exact-host based: this permits a
+    # private localhost/self-host service while still rejecting all other
+    # private target URLs.
+    policy = TargetPolicy(allow_hosts=(host,))
+    return normalize_target_url(value, policy), policy
+
+
+def _explicit_private_service_host(host: str) -> bool:
+    """Recognize operator-explicit self-host names without trusting DNS alone."""
+
+    if is_non_public_address(host):
+        return True
+    normalized = host.casefold().rstrip(".")
+    if normalized in {"localhost", "localhost.localdomain", "ip6-localhost"}:
+        return True
+    # Unqualified and private-name suffixes are conventional self-host
+    # configuration.  A public DNS name resolving to a private peer is not.
+    return "." not in normalized or normalized.endswith(
+        (".local", ".localhost", ".internal", ".lan", ".home")
+    )
+
+
+def _guard_service_addresses(
+    service: NormalizedURL, policy: TargetPolicy
+) -> tuple[str, ...]:
+    addresses = guard_resolved_addresses(service.host, policy)
+    private = [is_non_public_address(address) for address in addresses]
+    if any(private) and (
+        not _explicit_private_service_host(service.host) or not all(private)
+    ):
+        raise _error("ssrf_blocked")
+    return addresses
+
+
+def _send_injected(
+    transport: Any,
+    target: NormalizedURL,
+    addresses: tuple[str, ...],
+    request: FetchRequest,
+    binding: ProviderBinding,
+) -> Any:
     if callable(transport):
         return _invoke_callable(transport, target, addresses, request, binding)
     getter = getattr(transport, "get", None)
@@ -314,10 +467,9 @@ def _send_injected(transport: Any, target: NormalizedURL, addresses: tuple[str, 
         try:
             return getter(str(target), headers=dict(request.target_headers), follow_redirects=False)
         except TypeError:
-            try:
-                return getter(str(target), headers=dict(request.target_headers))
-            except TypeError:
-                return getter(str(target))
+            # Never retry without the explicit redirect guard: clients that
+            # reject this keyword may otherwise auto-follow cross-host hops.
+            raise _error("provider_error") from None
     sender = getattr(transport, "send", None)
     if callable(sender):
         http_request = httpx.Request("GET", str(target), headers=dict(request.target_headers))
@@ -332,6 +484,7 @@ def send_pinned_httpx_request(
     binding: ProviderBinding | None = None,
     *,
     transport: Any = None,
+    headers: Mapping[str, str] | None = None,
 ) -> DirectResponse:
     """Perform one redirect-disabled GET and return a detached response.
 
@@ -343,13 +496,25 @@ def send_pinned_httpx_request(
         url=str(target), mode="article", acceptable=frozenset({"text"})
     )
     binding = binding or ProviderBinding("direct", "httpx")
+    source_headers = headers if headers is not None else request.target_headers
+    outgoing_headers = _validate_transport_headers(source_headers, binding)
     if transport is not None:
-        result = _send_injected(transport, target, addresses, request, binding)
-        detached = read_decompressed_limited(result, min(binding.max_body_bytes, MAX_BODY_BYTES))
-        if detached.url is None:
-            detached.url = str(target)
-            detached.final_url = str(target)
-        return detached
+        try:
+            request_for_transport = request
+            if headers is not None:
+                request_for_transport = _request_with_headers(request, outgoing_headers)
+            result = _send_injected(transport, target, addresses, request_for_transport, binding)
+            detached = read_decompressed_limited(result, min(binding.max_body_bytes, MAX_BODY_BYTES))
+            if detached.url is None:
+                detached.url = str(target)
+                detached.final_url = str(target)
+            return detached
+        except WebSafetyError:
+            raise
+        except Exception:
+            # Injected transports are provider boundaries; vendor exception
+            # text and response bodies must never escape this function.
+            raise _error("provider_error") from None
 
     timeout = None
     if binding.timeout is not None:
@@ -362,7 +527,7 @@ def send_pinned_httpx_request(
             timeout=timeout,
             trust_env=False,
         ) as client:
-            with client.stream("GET", str(target), headers=dict(request.target_headers)) as response:
+            with client.stream("GET", str(target), headers=outgoing_headers) as response:
                 return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
     except WebSafetyError:
         raise
@@ -394,23 +559,19 @@ def bounded_manual_get(
     if not isinstance(request, FetchRequest) or not isinstance(binding, ProviderBinding):
         raise _error("provider_error")
     target_policy = TargetPolicy.from_value(binding.target_policy)
-    headers = validate_target_headers(request.target_headers)
-    if headers != dict(request.target_headers):
-        # Keep the normalized validation result in a detached request-like
-        # value without mutating the caller's frozen contract.
-        request = FetchRequest(
-            url=request.url,
-            mode=request.mode,
-            acceptable=request.acceptable,
-            preferred=request.preferred,
-            list_selector=request.list_selector,
-            target_headers=headers,
-            quality=request.quality,
-            stage_deadline=request.stage_deadline,
-        )
+    headers = _merge_target_headers(request, binding)
+    request = _request_with_headers(request, headers)
 
     current = normalize_target_url(request.url, target_policy)
     injected = _transport_for_binding(binding, transport)
+    service_target: NormalizedURL | None = None
+    if binding.base_url:
+        try:
+            service_target, _service_policy = _service_endpoint(binding.base_url)
+        except WebSafetyError:
+            # A manual target is still governed by its target policy.  An
+            # invalid optional service URL cannot become a redirect target.
+            service_target = None
     redirect_count = 0
     while True:
         addresses = guard_resolved_addresses(current.host, target_policy)
@@ -434,11 +595,11 @@ def bounded_manual_get(
             except WebSafetyError:
                 raise
             except Exception:
-                raise _error("network") from None
+                raise _error("provider_error") from None
         except WebSafetyError:
             raise
         except Exception:
-            raise _error("network") from None
+            raise _error("provider_error") from None
 
         response = read_decompressed_limited(
             response, min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES)
@@ -451,7 +612,11 @@ def bounded_manual_get(
                 reported_target = normalize_target_url(reported, target_policy)
             except WebSafetyError:
                 raise _error("ssrf_blocked") from None
-            if reported_target.host != current.host or reported_target.port != current.port:
+            if (
+                reported_target.host != current.host
+                or reported_target.port != current.port
+                or reported_target.scheme != current.scheme
+            ):
                 # A transport must not silently change the target host without
                 # going through a guarded redirect hop.
                 raise _error("peer_mismatch")
@@ -466,19 +631,35 @@ def bounded_manual_get(
         if not location:
             raise _error("http_status")
         try:
-            next_target = join_target_url(current, location, target_policy)
+            redirect_policy = target_policy
+            if service_target is not None and service_target.host not in target_policy.allow_hosts:
+                # Permit normalization of the configured service host solely
+                # so it can be rejected as ``service_redirect`` below.  No
+                # other private host is added to the target policy.
+                redirect_policy = TargetPolicy(
+                    allow_hosts=target_policy.allow_hosts + (service_target.host,),
+                    allow_cidrs=target_policy.allow_cidrs,
+                    allow_remote_dns_proxy=target_policy.allow_remote_dns_proxy,
+                )
+            next_target = join_target_url(current, location, redirect_policy)
         except WebSafetyError:
             raise
-        # A service endpoint never follows a redirect because credentials could
-        # otherwise be sent to an unexpected host.
-        if binding.base_url:
-            try:
-                service_target = normalize_target_url(binding.base_url, target_policy)
-                if current.host == service_target.host and current.port == service_target.port:
-                    raise _error("service_redirect")
-            except WebSafetyError as error:
-                if getattr(error, "reason", None) == "service_redirect":
-                    raise
+        # A target redirect to the configured service host is rejected before
+        # DNS resolution or a request to that endpoint.  In particular this
+        # check also handles a private localhost service URL.
+        if service_target is not None and next_target.host == service_target.host:
+            raise _error("service_redirect")
+        # Never carry credentials across an origin boundary.  Ordinary
+        # tracing headers remain available, while authorization/cookie-style
+        # headers are stripped before the next transport call.
+        if (
+            next_target.host != current.host
+            or next_target.port != current.port
+            or next_target.scheme != current.scheme
+        ):
+            request = _request_with_headers(
+                request, _strip_sensitive_headers(request.target_headers)
+            )
         current = next_target
         redirect_count += 1
 
@@ -491,25 +672,62 @@ def bounded_service_get(
 ) -> DirectResponse:
     """Call a provider service endpoint exactly once (no redirects)."""
 
-    if not binding.base_url:
-        raise _error("provider_error")
-    target = normalize_target_url(url, binding.target_policy)
-    service = normalize_target_url(binding.base_url, binding.target_policy)
-    if target.host != service.host or target.port != service.port:
-        raise _error("service_redirect")
-    request = FetchRequest(
-        url=str(target), mode="article", acceptable=frozenset({"text"}), target_headers=headers or {}
-    )
-    addresses = guard_resolved_addresses(target.host, binding.target_policy)
-    if transport is None:
-        response = send_pinned_httpx_request(target, addresses, request, binding)
-    else:
-        response = send_pinned_httpx_request(
-            target, addresses, request, binding, transport=transport
+    try:
+        if not isinstance(binding, ProviderBinding) or not binding.base_url:
+            raise _error("provider_error")
+        # Service calls have their own protected-header validation.  This is
+        # intentionally performed before URL policy checks so a caller cannot
+        # use a private service URL to bypass the header boundary.
+        validate_target_headers(binding.target_headers)
+        validated_headers = validate_target_headers(headers)
+        service, service_policy = _service_endpoint(binding.base_url)
+        target = normalize_target_url(url, service_policy)
+        if target.host != service.host or target.port != service.port:
+            raise _error("service_redirect")
+        # A service configured for HTTPS must never be downgraded by a caller
+        # supplied HTTP URL.  Public HTTP service bases are rejected below.
+        if service.scheme == "https" and target.scheme != "https":
+            raise _error("service_redirect")
+        addresses = _guard_service_addresses(service, service_policy)
+        if service.scheme == "http" and any(
+            not is_non_public_address(address) for address in addresses
+        ):
+            raise _error("service_https_required")
+        request = FetchRequest(
+            url=str(target),
+            mode="article",
+            acceptable=frozenset({"text"}),
+            target_headers=validated_headers,
         )
-    if response.is_redirect:
-        raise _error("service_redirect")
-    return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
+        if transport is None:
+            response = send_pinned_httpx_request(target, addresses, request, binding)
+        else:
+            response = send_pinned_httpx_request(
+                target, addresses, request, binding, transport=transport
+            )
+        if response.peer is not None and response.peer not in addresses:
+            raise _error("peer_mismatch")
+        reported = response.final_url or response.url
+        if reported:
+            try:
+                reported_target = normalize_target_url(reported, service_policy)
+            except WebSafetyError:
+                raise _error("service_redirect") from None
+            if (
+                reported_target.host != target.host
+                or reported_target.port != target.port
+                or reported_target.scheme != target.scheme
+            ):
+                raise _error("service_redirect")
+            response.final_url = str(reported_target)
+        if response.is_redirect:
+            raise _error("service_redirect")
+        return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
+    except WebSafetyError:
+        raise
+    except Exception:
+        # Keep injected/direct transport details out of provider-facing errors.
+        raise _error("provider_error") from None
 
 
 __all__ = [

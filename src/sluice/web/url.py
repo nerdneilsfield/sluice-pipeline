@@ -26,6 +26,7 @@ from ..errors import WebSafetyError
 MAX_REDIRECTS = 10
 _PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTROL = re.compile(r"[\x00-\x20\x7f]")
+_HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _NUMERIC_HOST = re.compile(r"^(?:0[xX][0-9A-Fa-f]+|[0-9]+|[0-9.]+)$")
 _SAFE_HEADER_NAME = re.compile(r"^[^\x00-\x20\x7f:]+$")
 _FORBIDDEN_HEADERS = frozenset(
@@ -125,6 +126,18 @@ def _is_disallowed_address(address: ipaddress._BaseAddress) -> bool:
         or address in cgn
         or address in metadata
     )
+
+
+def is_non_public_address(address: str) -> bool:
+    """Return whether *address* belongs to a non-public network range.
+
+    Service endpoints use this narrow classification after their exact host
+    has been allowlisted.  It intentionally mirrors the target SSRF guard,
+    while keeping the helper read-only and free of DNS resolution.
+    """
+
+    parsed = _normalise_ip_for_policy(str(address))
+    return parsed is not None and _is_disallowed_address(parsed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,6 +394,8 @@ def guard_resolved_addresses(
     if not addresses:
         raise _error("ssrf_blocked")
     normalized: list[str] = []
+    has_public = False
+    has_non_public = False
     for raw in addresses:
         candidate = _normalise_ip_for_policy(str(raw))
         if candidate is None:
@@ -388,8 +403,14 @@ def guard_resolved_addresses(
         text = str(candidate)
         if text not in normalized:
             normalized.append(text)
+        if _is_disallowed_address(candidate):
+            has_non_public = True
+        else:
+            has_public = True
         if not _address_allowed(normalized_host, candidate, policy):
             raise _error("ssrf_blocked")
+    if has_public and has_non_public:
+        raise _error("ssrf_blocked")
     return tuple(normalized)
 
 
@@ -411,7 +432,7 @@ def validate_target_headers(headers: Mapping[str, Any] | None) -> dict[str, str]
         seen.add(normalized)
         if normalized in _FORBIDDEN_HEADERS or normalized.startswith("x-forwarded-"):
             raise _error("forbidden_header")
-        if not isinstance(value, str) or _CONTROL.search(value):
+        if not isinstance(value, str) or _HEADER_CONTROL.search(value):
             raise _error("forbidden_header")
         result[name] = value
     return result
@@ -478,6 +499,7 @@ __all__ = [
     "TargetPolicy",
     "guard_resolved_addresses",
     "join_target_url",
+    "is_non_public_address",
     "normalize_target_url",
     "normalize_target_url_string",
     "redact_url",

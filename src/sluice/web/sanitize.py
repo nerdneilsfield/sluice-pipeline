@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timezone
 import json
 import re
+from itertools import islice
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 from markdown_it import MarkdownIt
 
 from ..errors import WebSafetyError
@@ -41,6 +43,9 @@ _RE_LINK = re.compile(r"(?<!!)\[([^\]]+)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+['\"]([
 _RE_AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^>\s]+)>", re.I)
 _RE_REFERENCE = re.compile(r"^(\s*\[[^\]]+\]:\s*)(\S+)(.*)$", re.M)
 _RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[Tt ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:[Zz]|[+-][0-9]{2}:?[0-9]{2})?)?$")
+_RE_RFC3339 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|z|[+-]\d{2}:?\d{2})$"
+)
 _RE_FENCED_CODE = re.compile(r"(?P<fence>`{3,}|~{3,})[^\n]*\n.*?(?P=fence)\s*", re.S)
 _RE_INLINE_CODE = re.compile(r"(?<!`)`+[^`\n]+`+(?!`)")
 
@@ -49,10 +54,17 @@ def _visible_text(value: Any) -> str:
     if value is None:
         return ""
     text = str(value)
-    soup = BeautifulSoup(text, "html.parser")
-    for node in soup.find_all(["script", "style", "template", "noscript", "svg"]):
-        node.decompose()
-    return " ".join(soup.get_text(" ", strip=True).replace("\u00a0", " ").split())
+    try:
+        soup = BeautifulSoup(text, "html.parser")
+        for node in soup.find_all(
+            ["script", "style", "template", "noscript", "svg", "head", "title"]
+        ):
+            node.decompose()
+        for comment in list(soup.find_all(string=lambda item: isinstance(item, Comment))):
+            comment.extract()
+        return " ".join(soup.get_text(" ", strip=True).replace("\u00a0", " ").split())
+    except Exception:
+        return ""
 
 
 def _normalise_destination(destination: str, base_url: str | None, *, image: bool = False) -> str | None:
@@ -61,7 +73,7 @@ def _normalise_destination(destination: str, base_url: str | None, *, image: boo
         return None
     # Same-document fragments do not need network validation.
     if destination.startswith("#"):
-        return destination
+        return None if image else destination
     try:
         parsed = urlsplit(destination)
     except ValueError:
@@ -91,11 +103,35 @@ def _normalise_destination(destination: str, base_url: str | None, *, image: boo
     return None
 
 
-def _markdown_parse(value: str) -> None:
+def _markdown_parse(value: str) -> list[Any]:
     # Parse with HTML tokenization enabled as the design requires.  Rendering
     # is intentionally not used; this call validates the token stream before
     # our deterministic sanitizer strips raw HTML.
-    MarkdownIt("commonmark", {"html": True, "linkify": False}).parse(value)
+    return MarkdownIt("commonmark", {"html": True, "linkify": False}).parse(value)
+
+
+def _strip_html_blocks(value: str) -> str:
+    """Drop complete raw HTML block token ranges while preserving code fences."""
+
+    try:
+        tokens = _markdown_parse(value)
+    except Exception:
+        return value
+    lines = value.splitlines(keepends=True)
+    ranges = [
+        (token.map[0], token.map[1])
+        for token in tokens
+        if getattr(token, "type", None) == "html_block"
+        and getattr(token, "map", None)
+        and len(token.map) == 2
+    ]
+    if not ranges:
+        return value
+    return "".join(
+        line
+        for index, line in enumerate(lines)
+        if not any(start <= index < end for start, end in ranges)
+    )
 
 
 def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
@@ -106,9 +142,13 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
     try:
         _markdown_parse(markdown)
     except Exception:
-        # Malformed Markdown is still safe to treat as plain text after the
-        # same HTML/link passes; no parser detail crosses the boundary.
-        pass
+        # Parser failures are not rendered through an untrusted fallback; map
+        # them to the same stable provider boundary as other sanitizer errors.
+        raise WebSafetyError("provider_error") from None
+    # Markdown-It identifies multiline raw blocks without confusing HTML-like
+    # text inside fenced code.  Regexes below remain the fallback for inline
+    # tags and malformed fragments.
+    value = _strip_html_blocks(markdown)
     protected: list[str] = []
 
     def protect(match: re.Match[str]) -> str:
@@ -116,7 +156,7 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
         protected.append(match.group(0))
         return token
 
-    value = _RE_FENCED_CODE.sub(protect, markdown)
+    value = _RE_FENCED_CODE.sub(protect, value)
     value = _RE_INLINE_CODE.sub(protect, value)
     value = _RE_SCRIPT.sub("", value)
     # Markdown-It represents a raw HTML block as one token, including its
@@ -155,7 +195,7 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
 
     def autolink_replacement(match: re.Match[str]) -> str:
         safe = _normalise_destination(match.group(1), base_url)
-        return f"<{safe}>" if safe is not None else match.group(1).replace(":", "")
+        return safe if safe is not None else match.group(1).replace(":", "")
 
     value = _RE_AUTOLINK.sub(autolink_replacement, value)
     # Remove ordinary raw HTML tags after link/image handling.  Script content
@@ -208,7 +248,7 @@ def _sanitize_open_graph(raw: Any, base_url: str | None, warnings: list[str]) ->
         if output_key in {"url", "image"}:
             if isinstance(value, (list, tuple)):
                 values = []
-                for item in value:
+                for item in value[:MAX_FIELD_LIST]:
                     safe = _safe_url(item, base_url, warnings, "sanitizer_rejected_image" if output_key == "image" else "sanitizer_rejected_link")
                     if safe is not None and safe not in values:
                         values.append(safe)
@@ -252,20 +292,61 @@ def _sanitize_twitter(raw: Any, base_url: str | None, warnings: list[str]) -> di
     return result
 
 
-def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> dict[str, Any]:
-    if isinstance(raw, (list, tuple)):
-        raw = next((item for item in raw if isinstance(item, Mapping)), None)
-    if not isinstance(raw, Mapping):
-        return {}
+def _normalise_rfc3339(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if _RE_RFC3339.fullmatch(text) is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text[-1] in "Zz" else text)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    utc = parsed.astimezone(timezone.utc)
+    if utc.microsecond:
+        value = utc.isoformat(timespec="microseconds").replace("+00:00", "Z")
+        head, fraction = value[:-1].split(".", 1)
+        return f"{head}.{fraction.rstrip('0')}Z"
+    return utc.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _contains_html_marker(value: Any, budget: list[int], depth: int = 0) -> bool:
+    """Inspect only a bounded prefix of metadata collections for raw markup."""
+
+    if budget[0] <= 0 or depth > 4:
+        return False
+    budget[0] -= 1
+    if isinstance(value, str):
+        return re.search(
+            r"<\s*(?:script|style|template|noscript|svg|[A-Za-z][^>]{0,80})",
+            value[:MAX_FIELD_STRING],
+            re.I,
+        ) is not None
+    if isinstance(value, Mapping):
+        return any(
+            _contains_html_marker(item, budget, depth + 1)
+            for _key, item in islice(value.items(), MAX_FIELD_LIST)
+        )
+    if isinstance(value, (list, tuple)):
+        return any(
+            _contains_html_marker(item, budget, depth + 1)
+            for item in value[:MAX_FIELD_LIST]
+        )
+    return False
+
+
+def _sanitize_json_ld_object(raw: Mapping[str, Any], base_url: str | None, warnings: list[str]) -> dict[str, Any]:
     allowed = {"@type", "headline", "name", "description", "author", "datePublished", "dateModified", "url", "image"}
     result: dict[str, Any] = {}
-    for key, value in raw.items():
+    for key, value in islice(raw.items(), MAX_FIELD_LIST):
         if key not in allowed:
             continue
         if key in {"url", "image"}:
             if isinstance(value, (list, tuple)):
                 urls: list[str] = []
-                for item in value:
+                for item in value[:MAX_FIELD_LIST]:
                     item_value = item.get("url") if isinstance(item, Mapping) else item
                     safe = _safe_url(item_value, base_url, warnings, "sanitizer_rejected_image" if key == "image" else "sanitizer_rejected_link")
                     if safe is not None and safe not in urls:
@@ -283,7 +364,7 @@ def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> di
         elif key == "author":
             authors: list[str] = []
             values = value if isinstance(value, (list, tuple)) else (value,)
-            for item in values:
+            for item in values[:MAX_FIELD_LIST]:
                 text = item.get("name") if isinstance(item, Mapping) else item
                 text = _bounded_string(text)
                 if text and text not in authors:
@@ -292,7 +373,10 @@ def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> di
                 result[key] = authors[:MAX_FIELD_LIST]
         elif key in {"datePublished", "dateModified"}:
             text = _bounded_string(value)
-            if _RE_DATE.fullmatch(text):
+            normalized = _normalise_rfc3339(value)
+            if normalized is not None:
+                result[key] = normalized
+            elif text and _RE_DATE.fullmatch(text):
                 result[key] = text
             elif text and "publication_date_invalid" not in warnings:
                 warnings.append("publication_date_invalid")
@@ -308,12 +392,26 @@ def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> di
     return result
 
 
+def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> list[dict[str, Any]]:
+    """Return ordered, bounded JSON-LD objects without unknown fields."""
+
+    values = raw if isinstance(raw, (list, tuple)) else (raw,)
+    result: list[dict[str, Any]] = []
+    for item in values[:MAX_FIELD_LIST]:
+        if not isinstance(item, Mapping):
+            continue
+        sanitized = _sanitize_json_ld_object(item, base_url, warnings)
+        if sanitized:
+            result.append(sanitized)
+    return result
+
+
 def _sanitize_links(raw: Any, base_url: str | None, warnings: list[str]) -> list[dict[str, str]]:
     if not isinstance(raw, (list, tuple)):
         return []
     result: list[dict[str, str]] = []
     seen: set[str] = set()
-    for item in raw:
+    for item in raw[:MAX_FIELD_LIST]:
         if not isinstance(item, Mapping):
             continue
         destination = _safe_url(item.get("url", item.get("href")), base_url, warnings, "sanitizer_rejected_link")
@@ -324,8 +422,6 @@ def _sanitize_links(raw: Any, base_url: str | None, warnings: list[str]) -> list
             text = destination
         result.append({"text": text, "url": destination})
         seen.add(destination)
-        if len(result) >= MAX_FIELD_LIST:
-            break
     return result
 
 
@@ -337,7 +433,10 @@ def _truncate_fields(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_truncate_fields(item) for item in value[:MAX_FIELD_LIST]]
     if isinstance(value, Mapping):
-        return {str(key): _truncate_fields(item) for key, item in value.items()}
+        return {
+            str(key): _truncate_fields(item)
+            for key, item in islice(value.items(), MAX_FIELD_LIST)
+        }
     return value
 
 
@@ -354,7 +453,7 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
     warnings: list[str] = []
     raw_warnings = source.get("warnings", ())
     if isinstance(raw_warnings, (list, tuple)):
-        for warning in raw_warnings:
+        for warning in raw_warnings[:MAX_WARNINGS]:
             if isinstance(warning, str) and warning in _SAFE_WARNINGS and warning not in warnings:
                 warnings.append(warning)
 
@@ -363,13 +462,12 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
         "output_format", "quality_chars", "quality_words", "published_at", "open_graph",
         "twitter_card", "json_ld", "links", "authors", "warnings",
     }
-    if any(key not in known_top_level for key in source):
+    if (
+        any(key not in known_top_level for key in islice(source, MAX_FIELD_LIST))
+        and "provider_metadata_ignored" not in warnings
+    ):
         warnings.append("provider_metadata_ignored")
-    try:
-        raw_dump = json.dumps(source, ensure_ascii=False, default=str)
-    except Exception:
-        raw_dump = ""
-    if re.search(r"<\s*(?:script|style|template|noscript|svg|[A-Za-z][^>]{0,80})", raw_dump, re.I):
+    if _contains_html_marker(source, [MAX_FIELD_LIST * 4]) and "sanitizer_removed_html" not in warnings:
         warnings.append("sanitizer_removed_html")
 
     scalar_fields = (
@@ -391,11 +489,16 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 result[key] = value
         elif key == "published_at":
-            text = _bounded_string(value)
-            if not text or _RE_DATE.fullmatch(text):
-                result[key] = text or None
-            elif "publication_date_invalid" not in warnings:
+            result[key] = _normalise_rfc3339(value)
+            if (
+                value is not None
+                and result[key] is None
+                and _bounded_string(value)
+                and "publication_date_invalid" not in warnings
+            ):
                 warnings.append("publication_date_invalid")
+        elif key == "output_format":
+            result[key] = value if isinstance(value, str) and value in {"text", "markdown"} else None
         else:
             result[key] = _bounded_string(value) if value is not None else None
 
@@ -407,12 +510,10 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
     authors: list[str] = []
     raw_authors = source.get("authors", ())
     if isinstance(raw_authors, (list, tuple)):
-        for author in raw_authors:
+        for author in raw_authors[:MAX_FIELD_LIST]:
             text = _bounded_string(author)
             if text and text not in authors:
                 authors.append(text)
-            if len(authors) >= MAX_FIELD_LIST:
-                break
     result["authors"] = authors
     result["warnings"] = warnings[:MAX_WARNINGS]
     result = _truncate_fields(result)

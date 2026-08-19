@@ -57,6 +57,28 @@ def test_quality_rejects_bad_status_mime_and_short_text():
     assert short.quality.reason == "too_short"
 
 
+def test_quality_excludes_comments_head_and_title_and_rejects_untyped_plain_text():
+    artifact = _artifact(
+        "<head><title>Hidden title</title></head><!-- hidden comment -->"
+        "<article>" + "visible " * 30 + "</article>",
+    )
+    result = evaluate_quality(artifact, QualityPolicy(min_chars=1))
+    assert "Hidden title" not in result.quality.visible_text
+    assert "hidden comment" not in result.quality.visible_text
+
+    untyped = _artifact("plain text", content_type=None, raw_html=None, text="plain text")
+    assert evaluate_quality(untyped, QualityPolicy(min_chars=1)).quality.reason == "bad_content_type"
+
+
+def test_quality_parser_failures_map_to_provider_error(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RecursionError("parser recursion")
+
+    monkeypatch.setattr("sluice.web.quality.BeautifulSoup", fail)
+    result = evaluate_quality(_artifact("<article>content</article>"), QualityPolicy(min_chars=1))
+    assert result.quality.reason == "provider_error"
+
+
 def test_challenge_phrase_and_link_ratio_are_detected():
     phrase = evaluate_quality(
         _artifact("<article>Checking   your browser</article>"), QualityPolicy(min_chars=1)
@@ -100,7 +122,7 @@ def test_metadata_is_structurally_allowlisted_bounded_and_safe():
                 {"text": "duplicate", "url": "https://example.test/a#fragment"},
                 {"text": "bad", "url": "javascript:alert(1)"},
             ],
-            "json_ld": {"articleBody": "raw page body", "headline": "<i>Headline</i>"},
+            "json_ld": [{"articleBody": "raw page body", "headline": "<i>Headline</i>"}],
             "warnings": ["not-a-warning", "sanitizer_rejected_link"],
         },
         "https://example.test/",
@@ -109,9 +131,30 @@ def test_metadata_is_structurally_allowlisted_bounded_and_safe():
     assert "secret" not in str(result)
     assert "unknown" not in result["open_graph"]
     assert len(result["links"]) == 1
-    assert "articleBody" not in result["json_ld"]
+    assert isinstance(result["json_ld"], list)
+    assert "articleBody" not in result["json_ld"][0]
     assert "sanitizer_rejected_link" in result["warnings"]
     assert "sanitizer_rejected_image" in result["warnings"]
+
+
+def test_metadata_dates_jsonld_order_and_output_format_are_bounded_and_typed():
+    result = sanitize_metadata(
+        {
+            "published_at": "2024-01-01T01:00:00+01:00",
+            "output_format": "html",
+            "json_ld": [
+                {"headline": "first"},
+                {"headline": "second"},
+            ] * 80,
+        },
+        "https://example.test/",
+    )
+    assert result["published_at"] == "2024-01-01T00:00:00Z"
+    assert result["output_format"] is None
+    assert [item["headline"] for item in result["json_ld"]] == ["first", "second"] * 50
+    invalid = sanitize_metadata({"published_at": "2024-01-01"}, "https://example.test/")
+    assert invalid["published_at"] is None
+    assert "publication_date_invalid" in invalid["warnings"]
 
 
 def test_web_errors_are_stable_and_never_include_exception_text():

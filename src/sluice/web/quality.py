@@ -7,12 +7,14 @@ import re
 import unicodedata
 from typing import Any
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .contracts import DocumentArtifact, QualityPolicy
 
 
-_HIDDEN_TAGS = frozenset({"script", "style", "template", "noscript", "svg", "canvas"})
+_HIDDEN_TAGS = frozenset(
+    {"script", "style", "template", "noscript", "svg", "canvas", "head", "title"}
+)
 _BLOCK_TAGS = frozenset(
     {
         "address", "article", "aside", "blockquote", "body", "dd", "div", "dl", "dt",
@@ -57,6 +59,8 @@ def _visible_html(html: str) -> tuple[str, float, BeautifulSoup]:
         node.decompose()
 
     def append_visible(node: Any, parts: list[str], anchors: list[str], in_anchor: bool = False) -> None:
+        if isinstance(node, Comment):
+            return
         if isinstance(node, NavigableString):
             text = str(node)
             if text:
@@ -109,6 +113,8 @@ def _sniff_kind(artifact: DocumentArtifact) -> str | None:
         raw = artifact.markdown
     if raw is not None:
         stripped = raw.lstrip().casefold()
+        if stripped.startswith(("<?xml", "<rss", "<feed")):
+            return "xml"
         if stripped.startswith("<") and (
             "<html" in stripped[:512]
             or "<article" in stripped[:512]
@@ -116,7 +122,9 @@ def _sniff_kind(artifact: DocumentArtifact) -> str | None:
             or re.match(r"<\s*[a-z][^>]*>", stripped[:512]) is not None
         ):
             return "html"
-        return "text"
+        # An absent MIME is not permission to treat arbitrary bytes/text as a
+        # valid article.  Only deterministic HTML/XML signatures may proceed.
+        return None
     if artifact.raw_source is not None:
         prefix = artifact.raw_source.lstrip().lower()
         if prefix.startswith((b"<rss", b"<feed", b"<?xml")):
@@ -231,18 +239,29 @@ def evaluate_quality(
     if byte_sizes and max(byte_sizes) > policy.max_body_bytes:
         return QualityEvaluation(QualityMetrics(reason="body_too_large"), artifact)
 
-    kind = _sniff_kind(artifact)
+    try:
+        kind = _sniff_kind(artifact)
+    except Exception:
+        return QualityEvaluation(QualityMetrics(reason="provider_error"), artifact)
     if kind not in {"html", "text"}:
         return QualityEvaluation(QualityMetrics(reason="bad_content_type"), artifact)
     if kind == "html":
         source = artifact.raw_html or artifact.text or artifact.markdown or ""
-        # Inspect challenge selectors and script URLs before removing hidden
-        # script/style nodes from visible-text normalization.
-        raw_soup = BeautifulSoup(source, "html.parser")
-        raw_visible = _normalise_text(raw_soup.get_text(" ", strip=True))
-        raw_challenge = _challenge_reason(raw_soup, raw_visible)
-        visible, link_ratio, soup = _visible_html(source)
-        challenge = raw_challenge or _challenge_reason(soup, visible)
+        try:
+            # Inspect challenge selectors and script URLs before removing
+            # hidden script/style nodes from visible-text normalization.
+            raw_soup = BeautifulSoup(source, "html.parser")
+            raw_challenge = _challenge_reason(raw_soup, "")
+            for node in list(raw_soup.find_all(_HIDDEN_TAGS)):
+                node.decompose()
+            for comment in list(raw_soup.find_all(string=lambda value: isinstance(value, Comment))):
+                comment.extract()
+            raw_visible = _normalise_text(raw_soup.get_text(" ", strip=True))
+            raw_challenge = raw_challenge or _challenge_reason(raw_soup, raw_visible)
+            visible, link_ratio, soup = _visible_html(source)
+            challenge = raw_challenge or _challenge_reason(soup, visible)
+        except Exception:
+            return QualityEvaluation(QualityMetrics(reason="provider_error"), artifact)
         if challenge is not None:
             return QualityEvaluation(QualityMetrics(reason=challenge, visible_text=visible), artifact)
         if _empty_shell(soup, visible):
