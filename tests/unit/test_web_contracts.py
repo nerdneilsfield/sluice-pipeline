@@ -1,5 +1,7 @@
 import pytest
 
+from sluice.canonical import canonical_json
+
 from sluice.web.contracts import (
     DocumentArtifact,
     FetchChainExhausted,
@@ -100,3 +102,95 @@ def test_attempt_identifiers_and_detail_codes_are_bounded_safe_strings():
         detail_code="connect_timeout",
     )
     assert valid.detail_code == "connect_timeout"
+
+
+def test_binding_projection_is_secret_safe_and_keeps_order():
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                "first",
+                "firecrawl",
+                options={"api_key": "actual-secret", "timeout": 60},
+            ),
+            ProviderBinding("second", "httpx"),
+        ),
+        fetch_chain_name="ordered",
+    )
+    projection = canonical_json(binding.semantic_projection())
+    assert "actual-secret" not in projection
+    assert "<redacted>" in projection
+    assert projection.index("first") < projection.index("second")
+    assert canonical_json(binding.runtime_digest()) == projection
+
+
+def test_binding_projection_redacts_nested_cookies_and_credentialed_proxy():
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                "p",
+                "httpx",
+                cookies={"sessionid": "actual-cookie"},
+                proxy="http://user:actual-password@example.test:8080",
+            ),
+        )
+    )
+    projection = canonical_json(binding.semantic_projection())
+    assert "actual-cookie" not in projection
+    assert "actual-password" not in projection
+
+
+def test_binding_projection_redacts_proxy_in_typed_and_options_paths():
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                "p",
+                "httpx",
+                proxy="http://user:typed-password@example.test:8080",
+                options={"proxy": "http://user:options-password@example.test:8080"},
+            ),
+        )
+    )
+    projection = canonical_json(binding.semantic_projection())
+    assert "typed-password" not in projection
+    assert "options-password" not in projection
+
+
+def test_binding_projection_preserves_only_exact_env_references():
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                "p",
+                "firecrawl",
+                proxy="env:proxy-runtime-secret",
+                options={
+                    "proxy": "env:options-runtime-secret",
+                    "api_key": "env:api-runtime-secret",
+                    "zone": "env:VALID_ZONE",
+                },
+            ),
+        )
+    )
+    projection = canonical_json(binding.semantic_projection())
+    assert "proxy-runtime-secret" not in projection
+    assert "options-runtime-secret" not in projection
+    assert "api-runtime-secret" not in projection
+    assert "env:VALID_ZONE" in projection
+
+
+def test_binding_projection_redacts_proxy_query_and_fragment_secrets():
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                "p",
+                "httpx",
+                proxy="https://proxy.example/?token=query-secret#fragment-secret",
+                options={
+                    "proxy": "https://proxy.example/?token=options-secret#fragment-secret"
+                },
+            ),
+        )
+    )
+    projection = canonical_json(binding.semantic_projection())
+    assert "query-secret" not in projection
+    assert "options-secret" not in projection
+    assert "fragment-secret" not in projection

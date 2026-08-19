@@ -23,6 +23,7 @@ from typing import (
     Mapping,
     TypeAlias,
 )
+from urllib.parse import urlsplit
 
 from ..errors import ExecutionError
 
@@ -118,13 +119,62 @@ def _validate_non_empty(value: str, field_name: str) -> str:
 
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_ENV_REFERENCE = re.compile(r"^env:[A-Z_][A-Z0-9_]*$")
 
 
 def _validate_safe_identifier(value: str, field_name: str) -> str:
+    # The RSS fallback uses one reserved synthetic provider name whose leading
+    # underscores intentionally distinguish it from authored instances.
+    if value == "__rss_direct__":
+        return value
     if not isinstance(value, str) or not _SAFE_IDENTIFIER.fullmatch(value):
         raise ValueError(
             f"{field_name} must be an ASCII identifier of at most 128 characters"
         )
+    return value
+
+
+def _is_secret_field(key: str) -> bool:
+    normalized = key.casefold().replace("_", "-")
+    return (
+        normalized in {"api-key", "authorization", "proxy-authorization", "cookie", "set-cookie"}
+        or any(token in normalized for token in ("api-key", "token", "secret", "signature", "cookie"))
+    )
+
+
+def _duration_seconds(value: timedelta | None) -> int | None:
+    if value is None:
+        return None
+    seconds = value.total_seconds()
+    return int(seconds) if seconds.is_integer() else seconds
+
+
+def _is_exact_env_reference(value: Any) -> bool:
+    return isinstance(value, str) and _ENV_REFERENCE.fullmatch(value) is not None
+
+
+def _safe_proxy(value: Any) -> Any:
+    if value is None:
+        return None
+    if _is_exact_env_reference(value):
+        return value
+    if not isinstance(value, str):
+        return "<redacted>"
+    if value.startswith("env:"):
+        return "<redacted>"
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return "<redacted>"
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or "?" in value
+        or "#" in value
+    ):
+        return "<redacted>"
     return value
 
 
@@ -244,8 +294,8 @@ class ProviderBinding:
             raise ValueError("timeout must be positive")
         if self.connect_timeout is not None and self.connect_timeout <= timedelta(0):
             raise ValueError("connect_timeout must be positive")
-        if self.cooldown <= timedelta(0):
-            raise ValueError("cooldown must be positive")
+        if self.cooldown < timedelta(0):
+            raise ValueError("cooldown must be non-negative")
         timeout_seconds = self.timeout_seconds
         if timeout_seconds is None and self.timeout is not None:
             timeout_seconds = self.timeout.total_seconds()
@@ -311,6 +361,7 @@ class WebBinding:
     output: WebOutput = "artifact"
     fetch_chain_name: str | None = None
     extract_chain_name: str | None = None
+    web_cache_version: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -331,6 +382,12 @@ class WebBinding:
             _validate_safe_identifier(self.fetch_chain_name, "fetch chain name")
         if self.extract_chain_name is not None:
             _validate_safe_identifier(self.extract_chain_name, "extract chain name")
+        if self.web_cache_version is not None and (
+            isinstance(self.web_cache_version, bool)
+            or not isinstance(self.web_cache_version, int)
+            or self.web_cache_version <= 0
+        ):
+            raise ValueError("web_cache_version must be a positive integer or null")
 
         fetch_chain, fetch_name = _normalise_chain(
             self.fetch_chain, ProviderBinding, self.fetch_chain_name, "provider"
@@ -354,6 +411,122 @@ class WebBinding:
     def extractors(self) -> tuple[ExtractorBinding, ...]:
         chain = self.extract_chain
         return () if chain is None else tuple(chain)
+
+    def semantic_projection(self) -> Mapping[str, FrozenJSON]:
+        """Return the deterministic, secret-safe identity of this binding.
+
+        Provider and extractor objects are runtime contracts, while this
+        projection is the persisted/cache-facing representation.  It contains
+        only JSON-safe values and retains secret *references* (for example
+        ``env:API_KEY``), never values resolved from the environment.
+        """
+
+        def safe_value(value: Any, key: str | None = None) -> Any:
+            if key is not None and key.casefold().replace("_", "-") == "proxy":
+                return _safe_proxy(value)
+            if key is not None and _is_secret_field(key):
+                if isinstance(value, Mapping):
+                    return {
+                        str(name): safe_value(item, "__secret_value__")
+                        for name, item in value.items()
+                    }
+                if isinstance(value, (tuple, list)):
+                    return [safe_value(item, "__secret_value__") for item in value]
+                if _is_exact_env_reference(value):
+                    return value
+                return "<redacted>"
+            if isinstance(value, Mapping):
+                return {
+                    str(name): safe_value(item, str(name))
+                    for name, item in value.items()
+                }
+            if isinstance(value, (tuple, list)):
+                return [safe_value(item, key) for item in value]
+            if isinstance(value, timedelta):
+                return _duration_seconds(value)
+            return value
+
+        def provider_projection(provider: ProviderBinding) -> Mapping[str, Any]:
+            return {
+                "name": provider.name,
+                "type": provider.type,
+                "options": safe_value(provider.options),
+                "base_url": provider.base_url,
+                "timeout": _duration_seconds(provider.timeout),
+                "connect_timeout": _duration_seconds(provider.connect_timeout),
+                "transport_retries": provider.transport_retries,
+                "max_body_bytes": provider.max_body_bytes,
+                "concurrency": provider.concurrency,
+                "cooldown": _duration_seconds(provider.cooldown),
+                "capabilities": sorted(provider.capabilities),
+                "service_headers": safe_value(provider.service_headers),
+                "target_headers": safe_value(provider.target_headers),
+                "cookies": safe_value(provider.cookies, "cookies"),
+                "proxy": _safe_proxy(provider.proxy),
+                "target_policy": safe_value(provider.target_policy),
+                "timeout_seconds": provider.timeout_seconds,
+                "only_main_content": provider.only_main_content,
+                "wait_for_selector": provider.wait_for_selector,
+                "wait_for": safe_value(provider.wait_for),
+                "mobile": provider.mobile,
+                "actions": safe_value(provider.actions),
+            }
+
+        def extractor_projection(extractor: ExtractorBinding) -> Mapping[str, Any]:
+            return {
+                "name": extractor.name,
+                "type": extractor.type,
+                "options": safe_value(extractor.options),
+            }
+
+        projection: dict[str, Any] = {
+            "version": self.version,
+            "direct_provider": (
+                None
+                if self.direct_provider is None
+                else provider_projection(self.direct_provider)
+            ),
+            "fetch_chain": (
+                None
+                if self.fetch_chain is None
+                else {
+                    "name": self.fetch_chain_name,
+                    "providers": [provider_projection(p) for p in self.fetch_chain],
+                }
+            ),
+            "extract_chain": (
+                None
+                if self.extract_chain is None
+                else {
+                    "name": self.extract_chain_name,
+                    "extractors": [
+                        extractor_projection(e) for e in self.extract_chain
+                    ],
+                }
+            ),
+            "quality": {
+                "min_chars": self.quality.min_chars,
+                "min_words": self.quality.min_words,
+                "max_link_ratio": self.quality.max_link_ratio,
+                "reject_challenges": self.quality.reject_challenges,
+                "max_body_bytes": self.quality.max_body_bytes,
+            },
+            "output": self.output,
+        }
+        if self.web_cache_version is not None:
+            projection["web_cache_version"] = self.web_cache_version
+        return _freeze_mapping(projection)
+
+    def runtime_digest(self) -> Mapping[str, FrozenJSON]:
+        """Return the runtime-safe identity used by provider catalogs.
+
+        Resolved clients, limiters, and other process-local values are not
+        representable in this immutable contract.  A runtime catalog may add
+        those values in memory, but it must retain this secret-safe projection
+        as its canonical base.
+        """
+
+        return self.semantic_projection()
 
 
 def _normalise_chain(

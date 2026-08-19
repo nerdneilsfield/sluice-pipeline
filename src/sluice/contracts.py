@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Mapping, Protocol, TypeAl
 
 if TYPE_CHECKING:
     from .web.contracts import WebBinding
+    from .web.config import WebRegistryConfig
 
 
 JSONValue: TypeAlias = (
@@ -277,6 +278,7 @@ class Definition:
     sources: Mapping[str, SourceDef]
     stages: Mapping[str, StageDef]
     pipelines: Mapping[str, PipelineDef]
+    web: WebRegistryConfig | None = None
 
 
 # ``web.contracts`` deliberately has no eager dependency on this module so it
@@ -284,3 +286,4 @@ class Definition:
 # definitions are complete keeps ``typing.get_type_hints`` useful without
 # introducing an import cycle during module initialisation.
 from .web.contracts import WebBinding  # noqa: E402  (intentional late import)
+from .web.config import WebRegistryConfig  # noqa: E402  (intentional late import)

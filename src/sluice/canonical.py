@@ -10,6 +10,25 @@ from .contracts import BatchPolicy, DeliveryDef, Item, StageDef
 from .errors import ExecutionError
 
 
+def web_binding_projection(binding: Any) -> Any:
+    """Return the canonical semantic projection for an optional web binding.
+
+    Keeping this tiny adapter in the canonical module gives Stage and Source
+    identity code one place to enforce that a binding contributes only its
+    secret-safe semantic view; custom/non-web definitions retain a JSON null.
+    """
+
+    if binding is None:
+        return None
+    projection = getattr(binding, "semantic_projection", None)
+    if not callable(projection):
+        raise ExecutionError("web binding must provide semantic_projection()")
+    try:
+        return projection()
+    except (TypeError, ValueError) as error:
+        raise ExecutionError("invalid web binding projection") from error
+
+
 def utc_datetime(value: datetime | str) -> datetime:
     """Return *value* as an aware UTC datetime.
 

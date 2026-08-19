@@ -20,7 +20,7 @@ from typing import Any
 
 import yaml
 
-from sluice.canonical import canonical_json
+from sluice.canonical import canonical_json, web_binding_projection
 from sluice.contracts import (
     BatchPolicy,
     Definition,
@@ -35,6 +35,7 @@ from sluice.contracts import (
     TaskDef,
 )
 from sluice.errors import DefinitionError, ExecutionError, GraphError
+from sluice.web.config import WebRegistryConfig, decode_web_config, expand_web_binding
 
 
 # This map is intentionally a literal.  It is a validation aid only; it is
@@ -54,7 +55,7 @@ BUILTIN_TASK_MODES: dict[str, str] = {
 }
 
 
-_TOP_LEVEL_KEYS = {"version", "database", "sources", "stages", "pipelines"}
+_TOP_LEVEL_KEYS = {"version", "database", "web", "sources", "stages", "pipelines"}
 _SOURCE_KEYS = {"use", "schedule", "with", "timeout", "retries"}
 _STAGE_KEYS = {"input", "tasks", "output", "output_schema", "cache_version"}
 _TASK_KEYS = {"use", "with"}
@@ -269,7 +270,9 @@ def _decode_source_policy(spec: Mapping[str, object], label: str) -> ExecutionPo
     return ExecutionPolicy(timeout=timeout, retries=retries, concurrency=1)
 
 
-def _decode_sources(raw: Mapping[str, object]) -> dict[str, SourceDef]:
+def _decode_sources(
+    raw: Mapping[str, object], registry: WebRegistryConfig
+) -> dict[str, SourceDef]:
     decoded: dict[str, SourceDef] = {}
     for name, value in raw.items():
         if not name:
@@ -277,12 +280,18 @@ def _decode_sources(raw: Mapping[str, object]) -> dict[str, SourceDef]:
         spec = _mapping(value, f"sources.{name}")
         _check_keys(spec, _SOURCE_KEYS | {"concurrency"}, f"sources.{name}")
         use = _required_string(spec, "use", f"sources.{name}")
+        with_config = _mapping(spec.get("with"), f"sources.{name}.with")
+        try:
+            web_binding = expand_web_binding(use, with_config, registry)
+        except DefinitionError as error:
+            raise DefinitionError(f"invalid sources.{name}: {error}") from error
         decoded[name] = SourceDef(
             name=name,
             use=use,
             schedule=_optional_interval(spec.get("schedule"), f"sources.{name}.schedule"),
-            with_config=freeze_json(_mapping(spec.get("with"), f"sources.{name}.with")),
+            with_config=freeze_json(with_config),
             policy=_decode_source_policy(spec, f"sources.{name}"),
+            web_binding=web_binding,
         )
     return decoded
 
@@ -296,15 +305,26 @@ def _normalize_task_file_paths(config: dict[str, object], base_dir: Path) -> dic
     return normalized
 
 
-def _decode_task(spec: Mapping[str, object], label: str, base_dir: Path) -> TaskDef:
+def _decode_task(
+    spec: Mapping[str, object],
+    label: str,
+    base_dir: Path,
+    registry: WebRegistryConfig,
+) -> TaskDef:
     _check_keys(spec, _TASK_KEYS, label)
     use = _required_string(spec, "use", label)
     config = _mapping(spec.get("with"), f"{label}.with")
     config = _normalize_task_file_paths(config, base_dir)
-    return TaskDef(use=use, with_config=freeze_json(config))
+    try:
+        web_binding = expand_web_binding(use, config, registry)
+    except DefinitionError as error:
+        raise DefinitionError(f"invalid {label}: {error}") from error
+    return TaskDef(use=use, with_config=freeze_json(config), web_binding=web_binding)
 
 
-def _decode_stages(raw: Mapping[str, object], base_dir: Path) -> dict[str, StageDef]:
+def _decode_stages(
+    raw: Mapping[str, object], base_dir: Path, registry: WebRegistryConfig
+) -> dict[str, StageDef]:
     decoded: dict[str, StageDef] = {}
     for name, value in raw.items():
         if not name:
@@ -318,7 +338,12 @@ def _decode_stages(raw: Mapping[str, object], base_dir: Path) -> dict[str, Stage
         if not isinstance(raw_tasks, (list, tuple)) or not raw_tasks:
             raise DefinitionError(f"stages.{name}.tasks must be a non-empty list")
         tasks = tuple(
-            _decode_task(_mapping(task, f"stages.{name}.tasks[{index}]"), f"stages.{name}.tasks[{index}]", base_dir)
+            _decode_task(
+                _mapping(task, f"stages.{name}.tasks[{index}]"),
+                f"stages.{name}.tasks[{index}]",
+                base_dir,
+                registry,
+            )
             for index, task in enumerate(raw_tasks)
         )
         for task in tasks:
@@ -334,6 +359,18 @@ def _decode_stages(raw: Mapping[str, object], base_dir: Path) -> dict[str, Stage
                 raise DefinitionError(
                     "invalid: drop is only valid for each llm_extract"
                 )
+
+        artifact_task_present = any(
+            task.use in {"sluice.tasks.fetch_webpage", "sluice.tasks.extract_content"}
+            for task in tasks
+        )
+        if artifact_task_present and tasks[-1].use not in {
+            "sluice.tasks.to_markdown",
+            "sluice.tasks.to_text",
+        }:
+            raise DefinitionError(
+                f"stages.{name} containing an Artifact-producing web Task must end with to_markdown or to_text"
+            )
 
         output_value = spec.get("output", spec.get("output_schema"))
         if output_value is None:
@@ -448,16 +485,22 @@ def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
     database = raw.get("database", ".sluice/sluice.db")
     if not isinstance(database, str) or not database:
         raise DefinitionError("database must be a non-empty string")
+    registry = decode_web_config(raw.get("web"), base_dir)
     return Definition(
         version=1,
         database=database,
-        sources=MappingProxyType(_decode_sources(_mapping(raw.get("sources"), "sources"))),
+        sources=MappingProxyType(
+            _decode_sources(_mapping(raw.get("sources"), "sources"), registry)
+        ),
         stages=MappingProxyType(
-            _decode_stages(_mapping(raw.get("stages"), "stages"), base_dir)
+            _decode_stages(
+                _mapping(raw.get("stages"), "stages"), base_dir, registry
+            )
         ),
         pipelines=MappingProxyType(
             _decode_pipelines(_mapping(raw.get("pipelines"), "pipelines"))
         ),
+        web=registry,
     )
 
 
@@ -604,6 +647,8 @@ def validate_definition(definition: Definition) -> None:
         definition.stages, Mapping
     ) or not isinstance(definition.pipelines, Mapping):
         raise DefinitionError("definition collections must be mappings")
+    if definition.web is not None and not isinstance(definition.web, WebRegistryConfig):
+        raise DefinitionError("definition.web must be a WebRegistryConfig or null")
 
     for name, source in definition.sources.items():
         if name != source.name:
@@ -685,7 +730,17 @@ def canonical_stage_config(
                 raise DefinitionError(f"cannot read Stage file {file_path}") from error
             config[key] = str(file_path)
             config[f"{key}_digest"] = digest
-        values.append({"use": task.use, "with": config})
+        values.append(
+            {
+                "use": task.use,
+                "with": config,
+                "web_binding": (
+                    None
+                    if task.web_binding is None
+                    else web_binding_projection(task.web_binding)
+                ),
+            }
+        )
     try:
         return canonical_json(
             {
