@@ -21,9 +21,11 @@ from sluice.contracts import (
     StageDef,
     SourceContract,
     SourceResult,
+    TaskDef,
     TaskContract,
 )
 from sluice.errors import DefinitionError
+from sluice.web.contracts import PrivateWebInvocation
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +54,14 @@ BUILTIN_TASK_BINDERS: dict[str, str] = {
     "sluice.tasks.llm_extract": "sluice.tasks.llm.bind_extract",
     "sluice.tasks.llm_summary": "sluice.tasks.llm.bind_summary",
 }
+BUILTIN_WEB_TASKS = frozenset(
+    {
+        "sluice.tasks.fetch_webpage",
+        "sluice.tasks.extract_content",
+        "sluice.tasks.to_markdown",
+        "sluice.tasks.to_text",
+    }
+)
 BUILTIN_SINK_BINDERS: dict[str, str] = {
     "sluice.sinks.email": "sluice.sinks.email.bind",
     "sluice.sinks.telegram": "sluice.sinks.telegram.bind",
@@ -99,6 +109,24 @@ class FunctionSink:
     ) -> str | None:
         copied = _fresh_json(config)
         return self.function(copied, rendered_payload, delivery_key)  # type: ignore[arg-type]
+
+
+def private_web_invocation(task: TaskDef) -> PrivateWebInvocation | None:
+    """Build the private typed payload reserved for built-in web Tasks.
+
+    Custom callables keep the public ``Mapping`` contract, even if a caller
+    constructs a custom ``TaskDef`` with a binding by hand.  Legacy retained
+    web Tasks have no binding and therefore cannot produce an invocation.
+    """
+
+    if not isinstance(task, TaskDef):
+        raise DefinitionError("private web invocation requires a TaskDef")
+    if task.use not in BUILTIN_WEB_TASKS or task.web_binding is None:
+        return None
+    return PrivateWebInvocation(
+        with_config=task.with_config,
+        web_binding=task.web_binding,
+    )
 
 
 def import_value(path: str) -> object:

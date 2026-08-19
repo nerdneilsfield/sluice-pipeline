@@ -36,6 +36,12 @@ from sluice.contracts import (
 )
 from sluice.errors import DefinitionError, ExecutionError, GraphError
 from sluice.web.config import WebRegistryConfig, decode_web_config, expand_web_binding
+from sluice.web.contracts import (
+    ExtractorBinding,
+    ProviderBinding,
+    QualityPolicy,
+    WebBinding,
+)
 
 
 # This map is intentionally a literal.  It is a validation aid only; it is
@@ -789,6 +795,164 @@ def verify_stage_files(stage: StageDef) -> None:
                 raise DefinitionError(f"stage file changed or is missing: {file_path}")
 
 
+def _snapshot_duration(value: object, label: str, *, allow_zero: bool = False) -> timedelta | None:
+    """Decode a canonical WebBinding duration expressed in seconds."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ExecutionError(f"invalid retained {label}")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite or value < 0 or (value == 0 and not allow_zero):
+        raise ExecutionError(f"invalid retained {label}")
+    try:
+        return timedelta(seconds=value)
+    except (OverflowError, ValueError) as error:
+        raise ExecutionError(f"invalid retained {label}") from error
+
+
+def _snapshot_sequence(value: object, label: str) -> tuple[object, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ExecutionError(f"invalid retained {label}")
+    return tuple(value)
+
+
+def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
+    if not isinstance(value, Mapping):
+        raise ExecutionError(f"invalid retained {label}")
+    name = value.get("name")
+    provider_type = value.get("type", value.get("provider_type"))
+    if not isinstance(name, str) or not name or not isinstance(provider_type, str) or not provider_type:
+        raise ExecutionError(f"invalid retained {label}")
+    capabilities = _snapshot_sequence(value.get("capabilities", ()), f"{label}.capabilities")
+    if any(not isinstance(capability, str) for capability in capabilities):
+        raise ExecutionError(f"invalid retained {label}.capabilities")
+    actions = _snapshot_sequence(value.get("actions", ()), f"{label}.actions")
+    try:
+        return ProviderBinding(
+            name=name,
+            type=provider_type,
+            options=_mapping(value.get("options"), f"{label}.options"),
+            base_url=value.get("base_url"),
+            timeout=_snapshot_duration(value.get("timeout"), f"{label}.timeout"),
+            connect_timeout=_snapshot_duration(
+                value.get("connect_timeout"), f"{label}.connect_timeout"
+            ),
+            transport_retries=value.get("transport_retries", 0),
+            max_body_bytes=value.get("max_body_bytes", 10_485_760),
+            concurrency=value.get("concurrency", 8),
+            cooldown=_snapshot_duration(
+                value.get("cooldown", 60), f"{label}.cooldown", allow_zero=True
+            )
+            or timedelta(0),
+            capabilities=frozenset(capabilities),
+            service_headers=_mapping(value.get("service_headers"), f"{label}.service_headers"),
+            target_headers=_mapping(value.get("target_headers"), f"{label}.target_headers"),
+            cookies=_mapping(value.get("cookies"), f"{label}.cookies"),
+            proxy=value.get("proxy"),
+            target_policy=value.get("target_policy"),
+            timeout_seconds=value.get("timeout_seconds"),
+            only_main_content=value.get("only_main_content", False),
+            wait_for_selector=value.get("wait_for_selector"),
+            wait_for=value.get("wait_for"),
+            mobile=value.get("mobile", False),
+            actions=actions,
+        )
+    except (TypeError, ValueError) as error:
+        raise ExecutionError(f"invalid retained {label}") from error
+
+
+def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
+    if not isinstance(value, Mapping):
+        raise ExecutionError(f"invalid retained {label}")
+    name = value.get("name")
+    extractor_type = value.get("type", value.get("extractor_type"))
+    if not isinstance(name, str) or not name or not isinstance(extractor_type, str) or not extractor_type:
+        raise ExecutionError(f"invalid retained {label}")
+    try:
+        return ExtractorBinding(
+            name=name,
+            type=extractor_type,
+            options=_mapping(value.get("options"), f"{label}.options"),
+        )
+    except (TypeError, ValueError) as error:
+        raise ExecutionError(f"invalid retained {label}") from error
+
+
+def _decode_snapshot_web_binding(value: object) -> WebBinding:
+    """Reconstruct a typed binding from its persisted semantic projection."""
+
+    if not isinstance(value, Mapping):
+        raise ExecutionError("invalid retained Task web binding")
+    direct_value = value.get("direct_provider")
+    direct_provider = (
+        None
+        if direct_value is None
+        else _decode_snapshot_provider(direct_value, "Task web binding.direct_provider")
+    )
+
+    fetch_value = value.get("fetch_chain")
+    if fetch_value is None:
+        fetch_chain = None
+        fetch_chain_name = None
+    elif isinstance(fetch_value, Mapping):
+        fetch_chain_name = fetch_value.get("name")
+        fetch_chain = tuple(
+            _decode_snapshot_provider(provider, f"Task web binding.fetch_chain.providers[{index}]")
+            for index, provider in enumerate(
+                _snapshot_sequence(fetch_value.get("providers", ()), "Task web binding.fetch_chain.providers")
+            )
+        )
+    else:
+        raise ExecutionError("invalid retained Task web binding.fetch_chain")
+
+    extract_value = value.get("extract_chain")
+    if extract_value is None:
+        extract_chain = None
+        extract_chain_name = None
+    elif isinstance(extract_value, Mapping):
+        extract_chain_name = extract_value.get("name")
+        extract_chain = tuple(
+            _decode_snapshot_extractor(extractor, f"Task web binding.extract_chain.extractors[{index}]")
+            for index, extractor in enumerate(
+                _snapshot_sequence(
+                    extract_value.get("extractors", ()),
+                    "Task web binding.extract_chain.extractors",
+                )
+            )
+        )
+    else:
+        raise ExecutionError("invalid retained Task web binding.extract_chain")
+
+    quality_value = value.get("quality", {})
+    if not isinstance(quality_value, Mapping):
+        raise ExecutionError("invalid retained Task web binding.quality")
+    try:
+        quality = QualityPolicy(
+            min_chars=quality_value.get("min_chars", 500),
+            min_words=quality_value.get("min_words"),
+            max_link_ratio=quality_value.get("max_link_ratio"),
+            reject_challenges=quality_value.get("reject_challenges", True),
+            max_body_bytes=quality_value.get("max_body_bytes", 10_485_760),
+        )
+        return WebBinding(
+            version=value.get("version", 1),
+            direct_provider=direct_provider,
+            fetch_chain=fetch_chain,
+            extract_chain=extract_chain,
+            quality=quality,
+            output=value.get("output", "artifact"),
+            fetch_chain_name=fetch_chain_name,
+            extract_chain_name=extract_chain_name,
+            web_cache_version=value.get("web_cache_version"),
+        )
+    except (TypeError, ValueError) as error:
+        raise ExecutionError("invalid retained Task web binding") from error
+
+
 def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
     """Decode and verify one immutable Stage configuration retained in SQLite.
 
@@ -812,9 +976,17 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
     if not isinstance(encoded_tasks, list) or not encoded_tasks:
         raise ExecutionError("invalid retained Task configuration")
 
+    try:
+        canonical = canonical_json(value)
+    except (TypeError, ValueError) as error:
+        raise ExecutionError("invalid retained Stage configuration") from error
+
     tasks: list[TaskDef] = []
     for encoded in encoded_tasks:
-        if not isinstance(encoded, Mapping) or set(encoded) != {"use", "with"}:
+        if not isinstance(encoded, Mapping) or set(encoded) not in (
+            {"use", "with"},
+            {"use", "with", "web_binding"},
+        ):
             raise ExecutionError("invalid retained Task configuration")
         use = encoded.get("use")
         config = encoded.get("with")
@@ -827,7 +999,14 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
             frozen_config = freeze_json(runtime_config)
         except DefinitionError as error:
             raise ExecutionError("invalid retained Task configuration") from error
-        tasks.append(TaskDef(use=use, with_config=frozen_config))
+        web_binding = (
+            None
+            if "web_binding" not in encoded or encoded.get("web_binding") is None
+            else _decode_snapshot_web_binding(encoded.get("web_binding"))
+        )
+        tasks.append(
+            TaskDef(use=use, with_config=frozen_config, web_binding=web_binding)
+        )
 
     output = value.get("output_schema")
     if output is None:
@@ -840,10 +1019,6 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
         if not isinstance(frozen_output, Mapping):
             raise ExecutionError("invalid retained Stage output schema")
         output_schema = frozen_output
-    try:
-        canonical = canonical_json(value)
-    except (TypeError, ValueError) as error:
-        raise ExecutionError("invalid retained Stage configuration") from error
     stage = StageDef(
         name=name,
         input_mode=value["input"],  # type: ignore[arg-type]
