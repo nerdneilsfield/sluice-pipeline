@@ -80,6 +80,16 @@ def test_request_stage_deadline_must_be_finite_and_positive(deadline):
         )
 
 
+def test_raw_source_request_rejects_list_selector():
+    with pytest.raises(ValueError, match="list_selector"):
+        FetchRequest(
+            url="https://example.test",
+            mode="raw_source",
+            acceptable=frozenset({"raw_source"}),
+            list_selector="article",
+        )
+
+
 def test_provider_timeout_seconds_is_integer_and_matches_timeout():
     normalized = ProviderBinding(
         "p",

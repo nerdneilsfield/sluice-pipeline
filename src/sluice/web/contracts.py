@@ -636,6 +636,8 @@ class FetchRequest:
                 raise ValueError("raw_source requests require raw_source capability")
             if preferred and set(preferred) != {"raw_source"}:
                 raise ValueError("raw_source preferred capability must be raw_source")
+            if self.list_selector is not None:
+                raise ValueError("list_selector is valid only for list_html requests")
         elif "raw_source" in acceptable:
             raise ValueError("article requests cannot accept raw_source capability")
         elif self.list_selector is not None:

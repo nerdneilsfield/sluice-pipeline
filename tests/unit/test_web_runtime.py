@@ -173,6 +173,30 @@ def test_snapshot_decoder_rejects_web_binding_on_custom_task():
         decode_stage_snapshot(_current_web_snapshot(_projection(), use="custom.task"))
 
 
+@pytest.mark.parametrize(
+    "use",
+    [
+        "sluice.tasks.fetch_webpage",
+        "sluice.tasks.extract_content",
+        "sluice.tasks.to_markdown",
+        "sluice.tasks.to_text",
+    ],
+)
+def test_snapshot_decoder_rejects_explicit_null_binding_for_web_task(use):
+    snapshot = _stage(
+        [
+            {
+                "use": use,
+                "with": {},
+                "web_binding": None,
+            }
+        ]
+    )
+
+    with pytest.raises(ExecutionError):
+        decode_stage_snapshot(snapshot)
+
+
 def test_snapshot_decoder_rejects_source_only_cache_version_on_stage_task():
     projection = _projection()
     projection["web_cache_version"] = 1
@@ -235,6 +259,35 @@ def test_snapshot_decoder_rejects_provider_connection_timeout_longer_than_timeou
 
     with pytest.raises(ExecutionError):
         decode_stage_snapshot(_current_web_snapshot(projection))
+
+
+@pytest.mark.parametrize(
+    ("chain", "field"),
+    [("fetch_chain", "name"), ("extract_chain", "name")],
+)
+def test_snapshot_decoder_rejects_missing_retained_chain_name(chain, field):
+    projection = _provider_projection()
+    chain_value = projection[chain]
+    assert isinstance(chain_value, dict)
+    chain_value[field] = ""
+    use = "sluice.tasks.fetch_webpage"
+
+    with pytest.raises(ExecutionError):
+        decode_stage_snapshot(_current_web_snapshot(projection, use=use))
+
+
+@pytest.mark.parametrize("chain", ["fetch_chain", "extract_chain"])
+def test_snapshot_decoder_rejects_duplicate_retained_chain_members(chain):
+    projection = _provider_projection()
+    chain_value = projection[chain]
+    assert isinstance(chain_value, dict)
+    members = chain_value["providers" if chain == "fetch_chain" else "extractors"]
+    assert isinstance(members, list)
+    members.append(dict(members[0]))
+    use = "sluice.tasks.fetch_webpage"
+
+    with pytest.raises(ExecutionError):
+        decode_stage_snapshot(_current_web_snapshot(projection, use=use))
 
 
 def test_snapshot_decoder_normalizes_whole_float_timeout_seconds():

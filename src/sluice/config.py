@@ -1109,6 +1109,8 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
             fetch_value, "Task web binding.fetch_chain", _WEB_FETCH_CHAIN_KEYS
         )
         fetch_chain_name = fetch_value["name"]
+        if not isinstance(fetch_chain_name, str) or not fetch_chain_name:
+            raise ExecutionError("invalid retained Task web binding.fetch_chain.name")
         fetch_chain = tuple(
             _decode_snapshot_provider(provider, f"Task web binding.fetch_chain.providers[{index}]")
             for index, provider in enumerate(
@@ -1118,6 +1120,10 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
                 )
             )
         )
+        if len({provider.name for provider in fetch_chain}) != len(fetch_chain):
+            raise ExecutionError(
+                "invalid retained Task web binding.fetch_chain.providers"
+            )
 
     extract_value = value["extract_chain"]
     if extract_value is None:
@@ -1128,6 +1134,8 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
             extract_value, "Task web binding.extract_chain", _WEB_EXTRACT_CHAIN_KEYS
         )
         extract_chain_name = extract_value["name"]
+        if not isinstance(extract_chain_name, str) or not extract_chain_name:
+            raise ExecutionError("invalid retained Task web binding.extract_chain.name")
         extract_chain = tuple(
             _decode_snapshot_extractor(extractor, f"Task web binding.extract_chain.extractors[{index}]")
             for index, extractor in enumerate(
@@ -1137,6 +1145,10 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
                 )
             )
         )
+        if len({extractor.name for extractor in extract_chain}) != len(extract_chain):
+            raise ExecutionError(
+                "invalid retained Task web binding.extract_chain.extractors"
+            )
 
     quality_value = _snapshot_projection_mapping(
         value["quality"], "Task web binding.quality", _WEB_QUALITY_KEYS
@@ -1266,11 +1278,21 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
             frozen_config = freeze_json(runtime_config)
         except DefinitionError as error:
             raise ExecutionError("invalid retained Task configuration") from error
-        web_binding = (
-            None
-            if "web_binding" not in encoded or encoded.get("web_binding") is None
-            else _decode_snapshot_web_binding(encoded.get("web_binding"))
-        )
+        if "web_binding" not in encoded:
+            web_binding = None
+        elif encoded.get("web_binding") is None:
+            if use in {
+                "sluice.tasks.fetch_webpage",
+                "sluice.tasks.extract_content",
+                "sluice.tasks.to_markdown",
+                "sluice.tasks.to_text",
+            }:
+                raise ExecutionError(
+                    "retained web Task must include a non-null web_binding"
+                )
+            web_binding = None
+        else:
+            web_binding = _decode_snapshot_web_binding(encoded.get("web_binding"))
         _validate_snapshot_task_binding(use, web_binding)
         tasks.append(
             TaskDef(use=use, with_config=frozen_config, web_binding=web_binding)
