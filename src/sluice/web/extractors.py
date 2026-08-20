@@ -236,14 +236,14 @@ def _node_text(node: Tag) -> str:
     return _normalise_text(node.get_text("\n", strip=True))
 
 
-def _article_root(soup: BeautifulSoup, selector: str | None) -> Tag | BeautifulSoup:
+def _article_root(soup: BeautifulSoup, selector: str | None) -> Tag | BeautifulSoup | None:
     if selector:
         try:
             selected = soup.select_one(selector)
         except Exception:
             raise _failure() from None
         if selected is None:
-            return soup
+            return None
         return selected
 
     for tag in ("article", "main"):
@@ -285,12 +285,15 @@ def _beautifulsoup_text(
 ) -> tuple[str, str | None]:
     soup = _soup_for_html(html)
     _remove_selectors(soup, remove_selectors)
-    root: Tag | BeautifulSoup
+    root: Tag | BeautifulSoup | None
     if mode == "plain":
         root = soup
     else:
         root = _article_root(soup, content_selector)
-    text = _node_text(root) if isinstance(root, Tag) else _normalise_text(root.get_text("\n", strip=True))
+    if root is None:
+        text = ""
+    else:
+        text = _node_text(root) if isinstance(root, Tag) else _normalise_text(root.get_text("\n", strip=True))
     title_node = soup.find("title")
     title = _normalise_text(title_node.get_text(" ", strip=True)) if isinstance(title_node, Tag) else None
     return text, title
@@ -532,6 +535,26 @@ EXTRACTORS: dict[str, WebExtractor] = {
 }
 
 
+def extract_identity(artifact: DocumentArtifact) -> DocumentArtifact | object:
+    return identity.extract(artifact)
+
+
+def extract_trafilatura(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+    return _configured("trafilatura", "trafilatura", options).extract(artifact)
+
+
+def extract_newspaper4k(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+    return _configured("newspaper4k", "newspaper4k", options).extract(artifact)
+
+
+def extract_resiliparse(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+    return _configured("resiliparse", "resiliparse", options).extract(artifact)
+
+
+def extract_beautifulsoup(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+    return _configured("beautifulsoup", "beautifulsoup", options).extract(artifact)
+
+
 def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] | None = None) -> WebExtractor:
     """Build one fixed extractor from an expanded binding or type name."""
 
@@ -555,6 +578,11 @@ __all__ = [
     "resiliparse_extractor",
     "beautifulsoup",
     "build_extractor",
+    "extract_identity",
+    "extract_trafilatura",
+    "extract_newspaper4k",
+    "extract_resiliparse",
+    "extract_beautifulsoup",
     "trafilatura",
     "newspaper",
     "resiliparse",
