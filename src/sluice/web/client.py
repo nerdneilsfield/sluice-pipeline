@@ -11,7 +11,13 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ..errors import ExecutionError
-from .contracts import DocumentArtifact, ExtractorBinding, FetchRequest, ProviderBinding
+from .contracts import (
+    DocumentArtifact,
+    ExtractorBinding,
+    FetchRequest,
+    PrivateWebInvocation,
+    ProviderBinding,
+)
 
 
 class WebContentClient:
@@ -55,6 +61,35 @@ class WebContentClient:
 
     def close(self) -> None:
         self._closed = True
+
+    def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+        """Private built-in Task boundary.
+
+        Task-specific artifact projection is layered on top of this startup
+        client by the content-task slice.  Keeping the method here is
+        important even before that coordinator is installed: a configured
+        web Task must fail at the private boundary rather than silently
+        falling back to the legacy ``http_client`` Task implementation.
+        """
+
+        del input
+        if self._closed:
+            raise ExecutionError("web content client is closed")
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        raise ExecutionError("web task coordinator is not configured")
+
+    def collect_web(
+        self, invocation: PrivateWebInvocation, checkpoint: object
+    ) -> object:
+        """Private built-in Source boundary; see :meth:`run_web`."""
+
+        del checkpoint
+        if self._closed:
+            raise ExecutionError("web content client is closed")
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        raise ExecutionError("web source coordinator is not configured")
 
 
 __all__ = ["WebContentClient"]

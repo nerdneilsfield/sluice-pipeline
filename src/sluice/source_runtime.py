@@ -144,9 +144,14 @@ def _collect_contract(app: App, source: Any, contract: Any, checkpoint: JSONValu
     if (
         getattr(source, "web_binding", None) is not None
         and getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
-        and client is not None
-        and any(callable(getattr(client, name, None)) for name in ("collect_web", "collect"))
     ):
+        if client is None:
+            raise ExecutionError("web content client is not configured")
+        if not any(
+            callable(getattr(client, name, None))
+            for name in ("collect_web", "collect")
+        ):
+            raise ExecutionError("web content client has no collect operation")
         from sluice.resolution import collect_web
 
         return collect_web(

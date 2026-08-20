@@ -170,7 +170,13 @@ def bind_builtin_source(path: str, adapters: BoundaryAdapters | HTTPClient | Non
             parameter = next(iter(signature.parameters.values()), None)
         except (TypeError, ValueError):
             parameter = None
-        if parameter is not None and parameter.name in {"adapters", "boundary"}:
+        if path in BUILTIN_SOURCE_BINDERS:
+            # Built-in Sources need the complete immutable startup boundary so
+            # their web variants can retain the shared private client.  The
+            # source adapters accept a plain HTTPClient as a compatibility
+            # form for direct callers.
+            value = binder(boundary)
+        elif parameter is not None and parameter.name in {"adapters", "boundary"}:
             value = binder(boundary)
         else:
             value = binder(boundary.http_client)

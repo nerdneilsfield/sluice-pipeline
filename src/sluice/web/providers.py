@@ -41,6 +41,12 @@ def _transport_for(runtime: object, binding: ProviderBinding) -> Any:
             found = resolver(binding.name)
         if found is not None:
             return found
+    catalog = _runtime_value(runtime, "catalog")
+    resolver = getattr(catalog, "transport_for", None)
+    if callable(resolver):
+        found = resolver(binding)
+        if found is not None:
+            return found
     transports = _runtime_value(runtime, "transports")
     if isinstance(transports, Mapping) and transports.get(binding.name) is not None:
         return transports[binding.name]
@@ -77,7 +83,9 @@ def _response_body(response: Any) -> tuple[int, Mapping[str, str], bytes, str | 
         body = getattr(response, "text", "")
     if isinstance(body, str):
         body = body.encode("utf-8")
-    final = getattr(response, "url", None)
+    final = getattr(response, "final_url", None)
+    if final is None:
+        final = getattr(response, "url", None)
     return status, headers, bytes(body or b""), None if final is None else str(final)
 
 
@@ -138,11 +146,15 @@ def _artifact_from_response(
     if default_status is not None and status == 0:
         status = default_status
     content_type = _sniff_content_type(body, _header(headers, "content-type"))
-    final_url = force_final_url or response_url or request.url
+    final_url = force_final_url if force_final_url is not None else response_url
+    if final_url is None:
+        final_url = request.url
     try:
         final_url = str(normalize_target_url(final_url, binding.target_policy))
+    except WebSafetyError:
+        raise
     except Exception:
-        final_url = request.url
+        raise WebSafetyError("provider_error") from None
     representation = _allowed_representation(request, content_type)
     fields: dict[str, Any] = {
         "source_url": request.url,
@@ -218,11 +230,13 @@ class StartupHTTPProvider:
             response = client(request.url) if callable(client) and not callable(getter) else getter(request.url)
         except BaseException:
             raise WebSafetyError("provider_error") from None
+        force_final_url: str | None = None
         if isinstance(response, str):
             response = DirectResponse(status_code=200, body=response.encode("utf-8"), url=request.url, final_url=request.url)
+            force_final_url = request.url
         return _safe_fetch(
             lambda: _artifact_from_response(
-                self.binding, request, response, default_status=200, force_final_url=request.url
+                self.binding, request, response, default_status=200, force_final_url=force_final_url
             )
         )
 
@@ -248,7 +262,11 @@ class CurlCffiProvider:
             ) from None
 
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
-        session = self.session or _runtime_value(self.runtime, "curl_session")
+        session = (
+            self.session
+            or _runtime_value(self.runtime, "curl_session")
+            or _transport_for(self.runtime, self.binding)
+        )
         if session is None:
             try:
                 module = importlib.import_module("curl_cffi.requests")

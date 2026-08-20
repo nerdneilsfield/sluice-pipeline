@@ -137,6 +137,7 @@ def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceRes
 @dataclass(frozen=True, slots=True)
 class _RSSSource:
     http_client: HTTPClient | None
+    web_content_client: object | None = None
 
     def collect(
         self, config: Mapping[str, JSONValue], checkpoint: JSONValue
@@ -153,7 +154,12 @@ class _RSSSource:
         return SourceResult(records=records, next_checkpoint=next_checkpoint)
 
 
-def bind(http_client: HTTPClient | None) -> _RSSSource:
-    """Bind the process-start HTTP adapter into an immutable Source object."""
+def bind(adapters: object | None) -> _RSSSource:
+    """Bind the startup boundary, retaining legacy HTTP compatibility."""
 
-    return _RSSSource(http_client)
+    if hasattr(adapters, "http_client") and hasattr(adapters, "web_content_client"):
+        return _RSSSource(
+            getattr(adapters, "http_client"),
+            getattr(adapters, "web_content_client"),
+        )
+    return _RSSSource(adapters)  # type: ignore[arg-type]

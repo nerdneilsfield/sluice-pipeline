@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+import importlib
 import logging
 import os
 import re
@@ -152,6 +153,56 @@ class ProviderLimiter:
             return self._cooldown_until
 
 
+class _ThreadLocalCurlSession:
+    """Catalog-owned curl sessions, isolated per worker thread."""
+
+    def __init__(self, module: object, impersonate: object) -> None:
+        self._module = module
+        self._impersonate = impersonate
+        self._lock = threading.RLock()
+        self._sessions: dict[int, object] = {}
+        self._closed = False
+        # Construct the registering thread's session eagerly.  Other worker
+        # threads get their own session on first use.
+        self._session_for_current_thread()
+
+    def _session_for_current_thread(self) -> object:
+        thread_id = threading.get_ident()
+        with self._lock:
+            if self._closed:
+                raise DefinitionError("curl session is closed")
+            session = self._sessions.get(thread_id)
+            if session is None:
+                factory = getattr(self._module, "Session", None)
+                if not callable(factory):
+                    raise DefinitionError("curl_cffi dependency is unavailable")
+                session = factory(impersonate=self._impersonate)
+                self._sessions[thread_id] = session
+            return session
+
+    def get(self, *args: object, **kwargs: object) -> object:
+        session = self._session_for_current_thread()
+        getter = getattr(session, "get", None)
+        if not callable(getter):
+            raise DefinitionError("curl session has no GET operation")
+        return getter(*args, **kwargs)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            sessions = tuple(self._sessions.values())
+            self._sessions.clear()
+        for session in sessions:
+            close = getattr(session, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    _LOG.debug("curl session close failed", exc_info=True)
+
+
 def _binding_runtime_key(binding: ProviderBinding) -> str:
     # semantic_projection intentionally keeps env reference names while
     # removing resolved values.  It includes operational limiter settings.
@@ -199,6 +250,8 @@ class WebRuntimeCatalog:
         self._providers: dict[str, WebProvider] = {}
         self._provider_bindings: dict[str, ProviderBinding] = {}
         self._limiters: dict[str, ProviderLimiter] = {}
+        self._transports: dict[str, object] = {}
+        self._owned_transports: dict[int, object] = {}
         self._extractors: dict[tuple[str, str], object] = {}
         self._warnings: list[str] = []
         self._logger = logger or _LOG
@@ -289,7 +342,17 @@ class WebRuntimeCatalog:
             existing = self._providers.get(key)
             if existing is not None:
                 return existing
-            provider = build_provider(runtime_binding, self._runtime)
+            # Construct the direct transport once at registration time.  A
+            # provider fetch must never fall back to constructing an unowned
+            # HTTPX client or curl session for an individual Item.
+            transport = self._transport_for_binding(binding, key)
+            provider_runtime = SimpleNamespace(
+                http_client=self._http_client,
+                curl_session=transport if binding.type == "curl_cffi" else None,
+                catalog=self,
+                transport_for=lambda _binding, value=transport: value,
+            )
+            provider = build_provider(runtime_binding, provider_runtime)
             self._providers[key] = provider
             self._provider_bindings[key] = binding
             self._limiters[key] = ProviderLimiter(binding.concurrency, binding.cooldown.total_seconds())
@@ -299,6 +362,102 @@ class WebRuntimeCatalog:
                     self._warnings.append(warning)
                     self._logger.warning(warning)
             return provider
+
+    def _configured_transport(self, binding: ProviderBinding) -> object | None:
+        """Return an explicitly supplied transport, without creating one."""
+
+        runtime = self._runtime
+        resolver = _runtime_value(runtime, "transport_for")
+        if callable(resolver):
+            try:
+                found = resolver(binding)
+            except TypeError:
+                found = resolver(binding.name)
+            if found is not None:
+                return found
+        transports = _runtime_value(runtime, "transports")
+        if isinstance(transports, Mapping):
+            found = transports.get(binding.name)
+            if found is not None:
+                return found
+        # ``http_client`` is the explicitly trusted compatibility boundary
+        # for startup_http only.  Direct providers get catalog-owned clients.
+        if binding.type == "startup_http":
+            return self._http_client
+        for name in ("httpx_client", "curl_session", "transport"):
+            found = _runtime_value(runtime, name)
+            if found is not None:
+                return found
+        return None
+
+    def _transport_for_binding(self, binding: ProviderBinding, key: str) -> object | None:
+        with self._lock:
+            if self._closed or self._closing:
+                raise DefinitionError("web runtime catalog is closed")
+            if key in self._transports:
+                return self._transports[key]
+        configured = self._configured_transport(binding)
+        if configured is not None:
+            transport = configured
+            owned = False
+        elif binding.type in {"httpx", "trafilatura"}:
+            try:
+                import httpx
+
+                timeout = None
+                if binding.timeout is not None:
+                    timeout = httpx.Timeout(
+                        binding.timeout.total_seconds(),
+                        connect=(binding.connect_timeout or binding.timeout).total_seconds(),
+                    )
+                transport = httpx.Client(
+                    follow_redirects=False,
+                    timeout=timeout,
+                    trust_env=False,
+                )
+            except Exception as error:
+                raise DefinitionError(
+                    f"cannot create HTTPX client for provider {binding.name!r}"
+                ) from error
+            owned = True
+        elif binding.type == "curl_cffi":
+            try:
+                module = importlib.import_module("curl_cffi.requests")
+                transport = _ThreadLocalCurlSession(
+                    module,
+                    binding.options.get("impersonate", "chrome"),
+                )
+            except Exception:
+                raise DefinitionError(
+                    f"curl_cffi dependency is unavailable for provider {binding.name!r}"
+                ) from None
+            owned = True
+        else:
+            # startup_http has already been validated in the provider
+            # constructor; retaining None here gives that constructor the
+            # precise missing-boundary error.
+            transport = None
+            owned = False
+        with self._lock:
+            existing = self._transports.get(key)
+            if existing is not None:
+                if owned and existing is not transport:
+                    close = getattr(transport, "close", None)
+                    if callable(close):
+                        close()
+                return existing
+            self._transports[key] = transport
+            if owned and transport is not None:
+                self._owned_transports[id(transport)] = transport
+            return transport
+
+    def transport_for(self, binding: ProviderBinding) -> object | None:
+        """Resolve a provider's already-owned transport for direct callers."""
+
+        if not isinstance(binding, ProviderBinding):
+            raise DefinitionError("provider binding must be a ProviderBinding")
+        key = _binding_runtime_key(binding)
+        return self._transport_for_binding(binding, key)
 
     def validate_provider_binding(self, binding: ProviderBinding) -> None:
         """Validate a retained terminal binding without opening a client.
@@ -398,32 +557,15 @@ class WebRuntimeCatalog:
             self._closing = True
             clients: list[object] = []
             seen_ids: set[int] = set()
-            for provider in self._providers.values():
-                marker = id(provider)
-                if marker not in seen_ids:
-                    seen_ids.add(marker)
-                    clients.append(provider)
             content_client = self._web_content_client
-            transport = self._http_client
-            runtime = self._runtime
-            runtime_values: list[object] = []
-            for name in ("http_client", "httpx_client", "transport", "curl_session"):
-                value = _runtime_value(runtime, name)
-                if value is not None:
-                    runtime_values.append(value)
-            transports = _runtime_value(runtime, "transports")
-            if isinstance(transports, Mapping):
-                runtime_values.extend(value for value in transports.values() if value is not None)
+            owned_transports = tuple(self._owned_transports.values())
         if content_client is not None and id(content_client) not in seen_ids:
             clients.append(content_client)
             seen_ids.add(id(content_client))
-        if transport is not None and id(transport) not in seen_ids:
-            clients.append(transport)
-            seen_ids.add(id(transport))
-        for runtime_value in runtime_values:
-            if id(runtime_value) not in seen_ids:
-                clients.append(runtime_value)
-                seen_ids.add(id(runtime_value))
+        for transport in owned_transports:
+            if id(transport) not in seen_ids:
+                clients.append(transport)
+                seen_ids.add(id(transport))
         try:
             for client in clients:
                 close = getattr(client, "close", None)

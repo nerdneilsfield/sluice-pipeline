@@ -44,7 +44,6 @@ from .config import decode_stage_snapshot, freeze_json, verify_stage_files
 from .db import write_transaction
 from .logging import log_event
 from .errors import DefinitionError, ExecutionError, InvalidStructuredOutput
-from .web.contracts import PrivateWebInvocation
 
 if TYPE_CHECKING:
     from .app import App
@@ -185,8 +184,6 @@ def _task_run(
     if (
         task_def is not None
         and task_def.web_binding is not None
-        and web_content_client is not None
-        and any(callable(getattr(web_content_client, name, None)) for name in ("run_web", "run"))
         and task_def.use
         in {
             "sluice.tasks.fetch_webpage",
@@ -195,10 +192,21 @@ def _task_run(
             "sluice.tasks.to_text",
         }
     ):
-        from .resolution import run_web
+        if web_content_client is None:
+            raise ExecutionError("web content client is not configured")
+        if not any(
+            callable(getattr(web_content_client, name, None))
+            for name in ("run_web", "run")
+        ):
+            raise ExecutionError("web content client has no run operation")
+        from .resolution import private_web_invocation, run_web
+
+        invocation = private_web_invocation(task_def)
+        if invocation is None:
+            raise DefinitionError("web Task has no private invocation")
 
         return run_web(
-            PrivateWebInvocation(config, task_def.web_binding),
+            invocation,
             value,
             web_content_client,
         )

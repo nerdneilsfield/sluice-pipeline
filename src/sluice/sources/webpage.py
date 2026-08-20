@@ -140,6 +140,7 @@ def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceRes
 @dataclass(frozen=True, slots=True)
 class _WebpageSource:
     http_client: HTTPClient | None
+    web_content_client: object | None = None
 
     def collect(
         self, config: Mapping[str, JSONValue], checkpoint: JSONValue
@@ -156,5 +157,12 @@ class _WebpageSource:
         return _collect_html(config, html)
 
 
-def bind(http_client: HTTPClient | None) -> _WebpageSource:
-    return _WebpageSource(http_client)
+def bind(adapters: object | None) -> _WebpageSource:
+    """Bind either the complete startup boundary or a legacy HTTP client."""
+
+    if hasattr(adapters, "http_client") and hasattr(adapters, "web_content_client"):
+        return _WebpageSource(
+            getattr(adapters, "http_client"),
+            getattr(adapters, "web_content_client"),
+        )
+    return _WebpageSource(adapters)  # type: ignore[arg-type]

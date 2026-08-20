@@ -9,9 +9,13 @@ import pytest
 
 from sluice.canonical import canonical_json
 from sluice.config import decode_stage_snapshot
-from sluice.contracts import TaskDef
+from sluice.contracts import FORWARD, Item, StageDef, TaskDef
 from sluice.errors import ExecutionError
 from sluice.resolution import private_web_invocation
+from sluice.sources.webpage import bind as bind_webpage_source
+from sluice.stage_runtime import run_stage_tasks
+from sluice.tasks.content import fetch_webpage
+from sluice.web.client import WebContentClient
 from sluice.web.contracts import (
     ExtractorBinding,
     PrivateWebInvocation,
@@ -350,3 +354,157 @@ def test_private_invocation_is_typed_and_frozen_for_a_web_builtin():
     assert invocation.web_binding is binding
     assert invocation.with_config["input_format"] == "auto"
     assert not isinstance(invocation, dict)
+
+
+def test_default_web_client_does_not_fall_back_to_legacy_http_task() -> None:
+    class LegacyHTTP:
+        calls = 0
+
+        def get(self, url: str) -> str:
+            self.calls += 1
+            raise AssertionError("legacy HTTP task path was used")
+
+    legacy = LegacyHTTP()
+    task = fetch_webpage.bind(type("Adapters", (), {"http_client": legacy})())
+    stage = StageDef(
+        name="article",
+        input_mode="each",
+        tasks=(
+            TaskDef(
+                use="sluice.tasks.fetch_webpage",
+                with_config={"url_field": "url"},
+                web_binding=WebBinding(output="artifact"),
+            ),
+        ),
+        output_schema=None,
+        cache_version=1,
+        canonical_config_json="{}",
+    )
+    item = Item(
+        id="item",
+        producer_scope=("source", "feed"),
+        logical_id="item",
+        payload={"url": "https://example.test/article"},
+        metadata={},
+        content_hash="hash",
+        observed_at="2026-08-20T00:00:00Z",
+        produced_by=1,
+    )
+
+    with pytest.raises(ExecutionError):
+        run_stage_tasks(
+            stage,
+            (item,),
+            (),
+            (task,),
+            web_content_client=WebContentClient(),
+        )
+    assert legacy.calls == 0
+
+
+def test_default_web_client_does_not_fall_back_to_legacy_http_source() -> None:
+    class LegacyHTTP:
+        calls = 0
+
+        def get(self, url: str) -> str:
+            self.calls += 1
+            raise AssertionError("legacy HTTP source path was used")
+
+    legacy = LegacyHTTP()
+    source = type(
+        "Source",
+        (),
+        {
+            "use": "sluice.sources.webpage",
+            "with_config": {"url": "https://example.test/page"},
+            "web_binding": WebBinding(output="text"),
+        },
+    )()
+    contract = bind_webpage_source(legacy)
+    app = type("App", (), {"web_content_client": WebContentClient()})()
+
+    from sluice.source_runtime import _collect_contract
+
+    with pytest.raises(ExecutionError):
+        _collect_contract(app, source, contract, None)
+    assert legacy.calls == 0
+
+
+def test_private_web_task_receives_expanded_binding_while_custom_task_gets_mapping() -> None:
+    binding = WebBinding(output="artifact")
+    item = Item(
+        id="item",
+        producer_scope=("source", "feed"),
+        logical_id="item",
+        payload={"url": "https://example.test/article"},
+        metadata={},
+        content_hash="hash",
+        observed_at="2026-08-20T00:00:00Z",
+        produced_by=1,
+    )
+
+    class WebSpy:
+        def __init__(self) -> None:
+            self.invocations: list[PrivateWebInvocation] = []
+
+        def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+            self.invocations.append(invocation)
+            assert input is item
+            return FORWARD(item)
+
+    web_spy = WebSpy()
+    web_stage = StageDef(
+        name="article",
+        input_mode="each",
+        tasks=(
+            TaskDef(
+                use="sluice.tasks.to_markdown",
+                with_config={"input_format": "auto"},
+                web_binding=binding,
+            ),
+        ),
+        output_schema=None,
+        cache_version=1,
+        canonical_config_json="{}",
+    )
+    run_stage_tasks(
+        web_stage,
+        (item,),
+        (),
+        (
+            type(
+                "Task",
+                (),
+                {"input_mode": "each", "run": lambda self, config, value: None},
+            )(),
+        ),
+        web_content_client=web_spy,
+    )
+    assert len(web_spy.invocations) == 1
+    assert web_spy.invocations[0].web_binding is binding
+
+    seen: list[object] = []
+
+    class CustomTask:
+        input_mode = "each"
+
+        def run(self, config, value):
+            seen.append(config)
+            return FORWARD(item)
+
+    custom_stage = StageDef(
+        name="custom",
+        input_mode="each",
+        tasks=(TaskDef(use="custom.task", with_config={"nested": {"x": 1}}),),
+        output_schema=None,
+        cache_version=1,
+        canonical_config_json="{}",
+    )
+    run_stage_tasks(
+        custom_stage,
+        (item,),
+        (),
+        (CustomTask(),),
+        web_content_client=web_spy,
+    )
+    assert seen == [{"nested": {"x": 1}}]

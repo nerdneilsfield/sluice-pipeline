@@ -47,10 +47,14 @@ def _url(config: Mapping[str, Any], value: object) -> str:
 @dataclass(frozen=True, slots=True)
 class _FetchTask:
     http_client: HTTPClient | None = None
+    web_content_client: object | None = None
     input_mode: str = "each"
 
     def bind(self, adapters: object) -> "_FetchTask":
-        return _FetchTask(getattr(adapters, "http_client", None))
+        return _FetchTask(
+            getattr(adapters, "http_client", None),
+            getattr(adapters, "web_content_client", None),
+        )
 
     def run(self, config: Mapping[str, Any], input: object) -> object:
         if self.http_client is None:
