@@ -270,6 +270,39 @@ def test_public_service_requires_https_and_transport_errors_are_safe(monkeypatch
     assert "Authorization" not in str(captured.value)
 
 
+def test_web_safety_errors_from_injected_transport_are_sanitized(monkeypatch):
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+
+    class RaisingSafetyTransport:
+        def get(self, *args, **kwargs):
+            raise WebSafetyError("Authorization: bearer vendor-secret")
+
+    binding = ProviderBinding("cloud", "firecrawl", base_url="https://api.example.test")
+    with pytest.raises(WebSafetyError, match="provider_error") as captured:
+        bounded_service_get(
+            "https://api.example.test/v1", binding, transport=RaisingSafetyTransport()
+        )
+    assert str(captured.value) == "provider_error"
+    assert "vendor-secret" not in str(captured.value)
+
+
+def test_manual_sender_fallback_sanitizes_external_safety_errors(monkeypatch):
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+    calls: list[int] = []
+
+    def sender(*args):
+        calls.append(len(args))
+        if len(args) > 2:
+            raise TypeError("legacy signature")
+        raise WebSafetyError("vendor body Authorization secret")
+
+    monkeypatch.setattr("sluice.web.http.send_pinned_httpx_request", sender)
+    with pytest.raises(WebSafetyError, match="provider_error") as captured:
+        bounded_manual_get(_request(), ProviderBinding("direct", "httpx"))
+    assert calls == [4, 2]
+    assert str(captured.value) == "provider_error"
+
+
 def test_public_service_rejects_private_or_mixed_dns_peers(monkeypatch):
     monkeypatch.setattr(
         "sluice.web.url.resolve_host",

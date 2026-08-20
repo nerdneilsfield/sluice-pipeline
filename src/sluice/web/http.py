@@ -16,7 +16,7 @@ import httpx
 import httpcore
 
 from ..errors import WebSafetyError
-from .contracts import FetchRequest, ProviderBinding
+from .contracts import FetchRequest, ProviderBinding, STABLE_FAILURE_REASONS
 from .url import (
     MAX_REDIRECTS,
     NormalizedURL,
@@ -39,6 +39,9 @@ _SENSITIVE_HEADER_NAMES = frozenset(
     }
 )
 _SENSITIVE_HEADER_PARTS = ("api-key", "apikey", "token", "secret", "signature")
+_INTERNAL_SAFETY_REASONS = frozenset(STABLE_FAILURE_REASONS) | frozenset(
+    {"peer_mismatch", "forbidden_header", "service_redirect", "too_many_redirects", "service_https_required"}
+)
 
 
 class _PinnedSyncBackend(httpcore.SyncBackend):
@@ -114,6 +117,17 @@ def _error(reason: str) -> WebSafetyError:
     except Exception:
         pass
     return exc
+
+
+def _safe_transport_safety_error(error: WebSafetyError) -> WebSafetyError:
+    """Keep only reasons produced by this module across provider boundaries."""
+
+    reason = getattr(error, "reason", None)
+    if reason in _INTERNAL_SAFETY_REASONS and (
+        not error.args or error.args[0] == reason
+    ):
+        return error
+    return _error("provider_error")
 
 
 @dataclass
@@ -330,8 +344,8 @@ def _merge_target_headers(request: FetchRequest, binding: ProviderBinding) -> di
     try:
         binding_headers = validate_target_headers(binding.target_headers)
         request_headers = validate_target_headers(request.target_headers)
-    except WebSafetyError:
-        raise
+    except WebSafetyError as error:
+        raise _safe_transport_safety_error(error) from None
     merged = dict(binding_headers)
     seen = {name.casefold() for name in binding_headers}
     for name, value in request_headers.items():
@@ -509,8 +523,8 @@ def send_pinned_httpx_request(
                 detached.url = str(target)
                 detached.final_url = str(target)
             return detached
-        except WebSafetyError:
-            raise
+        except WebSafetyError as error:
+            raise _safe_transport_safety_error(error) from None
         except Exception:
             # Injected transports are provider boundaries; vendor exception
             # text and response bodies must never escape this function.
@@ -529,8 +543,8 @@ def send_pinned_httpx_request(
         ) as client:
             with client.stream("GET", str(target), headers=outgoing_headers) as response:
                 return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
-    except WebSafetyError:
-        raise
+    except WebSafetyError as error:
+        raise _safe_transport_safety_error(error) from None
     except httpx.TimeoutException:
         raise _error("timeout") from None
     except (httpx.HTTPError, OSError):
@@ -592,12 +606,12 @@ def bounded_manual_get(
             # network failure.
             try:
                 response = send_pinned_httpx_request(current, addresses)
-            except WebSafetyError:
-                raise
+            except WebSafetyError as error:
+                raise _safe_transport_safety_error(error) from None
             except Exception:
                 raise _error("provider_error") from None
-        except WebSafetyError:
-            raise
+        except WebSafetyError as error:
+            raise _safe_transport_safety_error(error) from None
         except Exception:
             raise _error("provider_error") from None
 
@@ -642,8 +656,8 @@ def bounded_manual_get(
                     allow_remote_dns_proxy=target_policy.allow_remote_dns_proxy,
                 )
             next_target = join_target_url(current, location, redirect_policy)
-        except WebSafetyError:
-            raise
+        except WebSafetyError as error:
+            raise _safe_transport_safety_error(error) from None
         # A target redirect to the configured service host is rejected before
         # DNS resolution or a request to that endpoint.  In particular this
         # check also handles a private localhost service URL.
@@ -723,8 +737,8 @@ def bounded_service_get(
         if response.is_redirect:
             raise _error("service_redirect")
         return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
-    except WebSafetyError:
-        raise
+    except WebSafetyError as error:
+        raise _safe_transport_safety_error(error) from None
     except Exception:
         # Keep injected/direct transport details out of provider-facing errors.
         raise _error("provider_error") from None
