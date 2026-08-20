@@ -521,6 +521,16 @@ newspaper4k = _configured("newspaper4k", "newspaper4k")
 resiliparse_extractor = _configured("resiliparse", "resiliparse")
 beautifulsoup = _configured("beautifulsoup", "beautifulsoup")
 
+# Fixed instances are convenient for direct offline use.  ``build_extractor``
+# still creates an option-aware instance for expanded bindings.
+EXTRACTORS: dict[str, WebExtractor] = {
+    "identity": identity,
+    "trafilatura": trafilatura_extractor,
+    "newspaper4k": newspaper4k,
+    "resiliparse": resiliparse_extractor,
+    "beautifulsoup": beautifulsoup,
+}
+
 
 def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] | None = None) -> WebExtractor:
     """Build one fixed extractor from an expanded binding or type name."""
@@ -536,6 +546,7 @@ def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] 
 
 __all__ = [
     "EXTRACTOR_FORMATS",
+    "EXTRACTORS",
     "WebExtractor",
     "NO_MATCH",
     "identity",
