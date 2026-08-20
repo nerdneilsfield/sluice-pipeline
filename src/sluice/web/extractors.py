@@ -172,6 +172,8 @@ def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
     if selected in {"markdown", "text"}:
         candidates = (selected, "text" if selected == "markdown" else "markdown")
     for candidate in candidates:
+        if artifact.capabilities and candidate not in artifact.capabilities:
+            continue
         if candidate == "markdown" and isinstance(artifact.markdown, str) and artifact.markdown.strip():
             try:
                 value = sanitize_markdown(artifact.markdown, artifact.final_url or artifact.source_url)
