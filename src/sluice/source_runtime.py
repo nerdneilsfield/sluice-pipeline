@@ -21,6 +21,7 @@ from sluice.contracts import (
 from sluice.db import write_transaction
 from sluice.errors import ExecutionError
 from sluice.logging import log_event
+from sluice.web.contracts import PrivateWebInvocation
 
 
 _LOGGER = logging.getLogger("sluice.source_runtime")
@@ -34,7 +35,13 @@ def _fresh_json(value: object) -> object:
     return value
 
 
-def _source_config(name: str, source: Any) -> dict[str, object]:
+def _source_execution_config(name: str | Any, source: Any | None = None) -> dict[str, object]:
+    """Authored Source configuration persisted for collection/retry only."""
+
+    if source is None:
+        source = name
+        name = getattr(source, "name", "")
+
     return {
         "source": name,
         "use": source.use,
@@ -42,8 +49,28 @@ def _source_config(name: str, source: Any) -> dict[str, object]:
     }
 
 
+def _source_identity_config(name: str | Any, source: Any | None = None) -> dict[str, object]:
+    """Result-affecting Source identity, including expanded web semantics."""
+
+    if source is None:
+        source = name
+        name = getattr(source, "name", "")
+
+    value = _source_execution_config(name, source)
+    web_binding = getattr(source, "web_binding", None)
+    if web_binding is not None:
+        value["web_binding"] = web_binding.semantic_projection()
+    return value
+
+
+def _source_config(name: str, source: Any) -> dict[str, object]:
+    """Compatibility alias for callers that need the identity projection."""
+
+    return _source_identity_config(name, source)
+
+
 def _binding_digest(name: str, source: Any) -> str:
-    return digest(_source_config(name, source))
+    return digest(_source_identity_config(name, source))
 
 
 def _timestamp(value: datetime) -> str:
@@ -108,6 +135,26 @@ def _strict_json(
             active.remove(marker)
         return
     raise ExecutionError(f"{label} is not JSON-compatible")
+
+
+def _collect_contract(app: App, source: Any, contract: Any, checkpoint: JSONValue) -> SourceResult:
+    """Run a built-in web Source through the private startup client when set."""
+
+    client = getattr(app, "web_content_client", None)
+    if (
+        getattr(source, "web_binding", None) is not None
+        and getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
+        and client is not None
+        and any(callable(getattr(client, name, None)) for name in ("collect_web", "collect"))
+    ):
+        from sluice.resolution import collect_web
+
+        return collect_web(
+            PrivateWebInvocation(source.with_config, source.web_binding),
+            checkpoint,
+            client,
+        )
+    return contract.collect(_fresh_json(source.with_config), checkpoint)
 
 
 def _validate_result(result: object) -> SourceResult:
@@ -184,8 +231,11 @@ def _activate_binding(
     """Create/select the current binding and claim one Source execution."""
 
     conn = app.conn
-    source_config = {**_source_config(source_name, source), "trigger": trigger}
-    config_json = canonical_json(source_config)
+    # Durable Source configuration is the authored execution contract only.
+    # The trigger is an invocation/logging detail; persisting it would make
+    # retries and retained snapshots carry a field outside the stable
+    # ``{source, use, with}`` shape.
+    config_json = canonical_json(_source_execution_config(source_name, source))
     policy_json = _policy_json(source)
     superseded: list[tuple[int, str]] = []
     activated = False
@@ -530,7 +580,7 @@ def _execute_queued_source(app: App, execution_id: int, at: datetime) -> int:
         source = app.definition.sources[source_name]
         contract = app.sources[source_name]
         checkpoint = _checkpoint_value(expected_json)
-        result = _validate_result(contract.collect(_fresh_json(source_config), checkpoint))
+        result = _validate_result(_collect_contract(app, source, contract, checkpoint))
     except BaseException as error:
         wrapped = error if isinstance(error, ExecutionError) else ExecutionError(str(error) or "Source collection failed")
         if wrapped is not error:
@@ -754,7 +804,7 @@ def collect_source(
     )
 
     try:
-        result = contract.collect(_fresh_json(source.with_config), checkpoint)
+        result = _collect_contract(app, source, contract, checkpoint)
         result = _validate_result(result)
         log_event(
             _LOGGER,

@@ -45,7 +45,7 @@ else:
                 utc_datetime(at) if at is not None else datetime.now(timezone.utc),
             )
         finally:
-            app.conn.close()
+            app.close()
 
 
 __all__ = ["prefect_tick"]

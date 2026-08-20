@@ -33,6 +33,7 @@ class BoundaryAdapters:
     http_client: HTTPClient | None
     llm_client: LLMClient | None
     sink_clients: Mapping[str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]]
+    web_content_client: object | None = None
 
 
 # Built-ins are an explicit, fixed map.  Runtime resolution never discovers
@@ -154,10 +155,25 @@ def _bound_builtin(binding: str, path: str) -> object:
     return binder
 
 
-def bind_builtin_source(path: str, http_client: HTTPClient | None) -> SourceContract:
+def bind_builtin_source(path: str, adapters: BoundaryAdapters | HTTPClient | None) -> SourceContract:
+    """Bind one built-in Source against the immutable startup boundary.
+
+    The v4 Source modules still expose ``bind(http_client)`` for compatibility;
+    accepting the full adapter bundle here lets newer wrappers consume the
+    shared WebContentClient without changing public custom Source contracts.
+    """
+    boundary = adapters if isinstance(adapters, BoundaryAdapters) else freeze_adapters(http_client=adapters)
     try:
         binder = _bound_builtin(BUILTIN_SOURCE_BINDERS[path], path)
-        value = binder(http_client)
+        try:
+            signature = inspect.signature(binder)
+            parameter = next(iter(signature.parameters.values()), None)
+        except (TypeError, ValueError):
+            parameter = None
+        if parameter is not None and parameter.name in {"adapters", "boundary"}:
+            value = binder(boundary)
+        else:
+            value = binder(boundary.http_client)
     except (KeyError, TypeError, AttributeError) as error:
         raise DefinitionError(f"cannot bind built-in Source {path}") from error
     return value  # normalized by resolve_source below
@@ -208,7 +224,7 @@ def require_call_shape(path: str, function: Callable[..., object], *sample_args:
 
 def resolve_source(path: str, adapters: BoundaryAdapters) -> SourceContract:
     value = (
-        bind_builtin_source(path, adapters.http_client)
+        bind_builtin_source(path, adapters)
         if path in BUILTIN_SOURCE_BINDERS
         else import_value(path)
     )
@@ -296,6 +312,7 @@ def freeze_adapters(
     http_client: HTTPClient | None = None,
     llm_client: LLMClient | None = None,
     sink_clients: Mapping[str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]] | None = None,
+    web_content_client: object | None = None,
 ) -> BoundaryAdapters:
     """Copy the startup boundary bundle into immutable mapping storage."""
 
@@ -304,4 +321,48 @@ def freeze_adapters(
         http_client=http_client,
         llm_client=llm_client,
         sink_clients=MappingProxyType(clients),
+        web_content_client=web_content_client,
     )
+
+
+def run_web(
+    invocation: PrivateWebInvocation,
+    input: object,
+    web_content_client: object | None = None,
+) -> object:
+    """Invoke a private web wrapper without widening public Mapping contracts."""
+
+    if not isinstance(invocation, PrivateWebInvocation):
+        raise DefinitionError("web invocation must be a PrivateWebInvocation")
+    client = web_content_client
+    if client is None:
+        raise DefinitionError("web content client is not configured")
+    runner = getattr(client, "run_web", None)
+    if callable(runner):
+        return runner(invocation, input)
+    runner = getattr(client, "run", None)
+    if callable(runner):
+        return runner(invocation, input)
+    if callable(client):
+        return client(invocation, input)
+    raise DefinitionError("web content client has no run operation")
+
+
+def collect_web(
+    invocation: PrivateWebInvocation,
+    checkpoint: JSONValue,
+    web_content_client: object | None = None,
+) -> object:
+    """Invoke a private built-in web Source wrapper."""
+
+    if not isinstance(invocation, PrivateWebInvocation):
+        raise DefinitionError("web invocation must be a PrivateWebInvocation")
+    if web_content_client is None:
+        raise DefinitionError("web content client is not configured")
+    runner = getattr(web_content_client, "collect_web", None)
+    if callable(runner):
+        return runner(invocation, checkpoint)
+    runner = getattr(web_content_client, "collect", None)
+    if callable(runner):
+        return runner(invocation, checkpoint)
+    raise DefinitionError("web content client has no collect operation")

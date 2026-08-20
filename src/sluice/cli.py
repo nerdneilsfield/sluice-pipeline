@@ -61,11 +61,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _close_app(app: object) -> None:
-    """Close the SQLite connection when the application exposes one."""
+    """Close one App through its admission-aware lifecycle."""
 
-    connection = getattr(app, "conn", None)
-    close = getattr(connection, "close", None)
-    if close is not None:
+    close = getattr(app, "close", None)
+    if callable(close):
         close()
 
 

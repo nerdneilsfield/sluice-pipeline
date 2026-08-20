@@ -43,7 +43,8 @@ from .canonical import (
 from .config import decode_stage_snapshot, freeze_json, verify_stage_files
 from .db import write_transaction
 from .logging import log_event
-from .errors import ExecutionError, InvalidStructuredOutput
+from .errors import DefinitionError, ExecutionError, InvalidStructuredOutput
+from .web.contracts import PrivateWebInvocation
 
 if TYPE_CHECKING:
     from .app import App
@@ -173,7 +174,34 @@ def _task_config(stage: StageDef, index: int) -> Mapping[str, object]:
         raise ExecutionError("resolved Task chain does not match Stage definition") from error
 
 
-def _task_run(task: object, config: Mapping[str, object], value: object) -> object:
+def _task_run(
+    task: object,
+    config: Mapping[str, object],
+    value: object,
+    *,
+    task_def: TaskDef | None = None,
+    web_content_client: object | None = None,
+) -> object:
+    if (
+        task_def is not None
+        and task_def.web_binding is not None
+        and web_content_client is not None
+        and any(callable(getattr(web_content_client, name, None)) for name in ("run_web", "run"))
+        and task_def.use
+        in {
+            "sluice.tasks.fetch_webpage",
+            "sluice.tasks.extract_content",
+            "sluice.tasks.to_markdown",
+            "sluice.tasks.to_text",
+        }
+    ):
+        from .resolution import run_web
+
+        return run_web(
+            PrivateWebInvocation(config, task_def.web_binding),
+            value,
+            web_content_client,
+        )
     run = getattr(task, "run", None)
     if not callable(run):
         raise ExecutionError("resolved Task is not callable")
@@ -198,6 +226,8 @@ def run_stage_tasks(
     items: Sequence[Item],
     history: Sequence[Item],
     tasks: Sequence[object],
+    *,
+    web_content_client: object | None = None,
 ) -> StageOutcome:
     """Run a resolved Task chain without consulting durable runtime state."""
 
@@ -228,7 +258,13 @@ def run_stage_tasks(
             raise ExecutionError("each Stage requires exactly one current Item")
         value: object = current_items[0]
         for index, task in enumerate(tasks):
-            result = _task_run(task, _task_config(stage, index), value)
+            result = _task_run(
+                task,
+                _task_config(stage, index),
+                value,
+                task_def=stage.tasks[index],
+                web_content_client=web_content_client,
+            )
             markers = validate_task_outputs(
                 "each",
                 result,
@@ -253,7 +289,13 @@ def run_stage_tasks(
             task_input = BatchInput(values, task_history)  # type: ignore[arg-type]
         else:
             task_input = values
-        result = _task_run(task, _task_config(stage, index), task_input)
+        result = _task_run(
+            task,
+            _task_config(stage, index),
+            task_input,
+            task_def=stage.tasks[index],
+            web_content_client=web_content_client,
+        )
         markers = validate_task_outputs(
             "batch",
             result,
@@ -1419,7 +1461,13 @@ def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
         items = _items_for_execution(app, execution_id, "items")
         history = _items_for_execution(app, execution_id, "history")
         tasks = [app.tasks[task.use] for task in stage.tasks]
-        outcome = run_stage_tasks(stage, items, history, tasks)
+        outcome = run_stage_tasks(
+            stage,
+            items,
+            history,
+            tasks,
+            web_content_client=getattr(app, "web_content_client", None),
+        )
         if not _finalize_stage(app, execution_id, outcome, at):
             return execution_id
         return execution_id
@@ -1624,6 +1672,22 @@ def rebuild_stage(app: "App", execution_id: int, at: datetime) -> RebuildResult:
     retained_stage = decode_stage_snapshot(raw_snapshot)  # type: ignore[arg-type]
     if retained_stage.name != str(target["stage_name"]):
         raise ExecutionError("Stage snapshot name does not match Execution")
+    legacy_web_uses = {
+        "sluice.tasks.fetch_webpage",
+        "sluice.tasks.extract_content",
+        "sluice.tasks.to_markdown",
+        "sluice.tasks.to_text",
+    }
+    for task in retained_stage.tasks:
+        if task.use in legacy_web_uses and task.web_binding is None:
+            raise DefinitionError("legacy web snapshot cannot rebuild")
+        if task.web_binding is not None:
+            catalog = getattr(app, "web_runtime_catalog", None)
+            if catalog is not None:
+                for provider in task.web_binding.providers:
+                    # Explicit rebuild is the one point where a retained
+                    # terminal snapshot must resolve its old secret refs.
+                    catalog.register_provider(provider, allow_missing_secrets=False)
     pipeline_name = target["pipeline_name"]
     node_name = target["node_name"]
     owner = (
