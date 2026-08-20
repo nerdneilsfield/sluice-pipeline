@@ -338,7 +338,7 @@ def _escape_plain_markdown(value: str) -> str:
     # Keep authored plain text literal in a Markdown channel.  Backslash is
     # escaped first so the operation is idempotent for already-safe values.
     value = value.replace("\\", "\\\\")
-    return re.sub(r"([`*_{}\[\]()#+.!|>~\-])", r"\\\1", value).strip()
+    return re.sub(r"([`*_{}\[\]()#+.!|<>~\-])", r"\\\1", value).strip()
 
 
 def _markdown_to_text(value: str, base_url: str | None) -> str:
