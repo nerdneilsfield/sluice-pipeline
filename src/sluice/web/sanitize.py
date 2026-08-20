@@ -207,6 +207,11 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
 
 
 def _bounded_string(value: Any) -> str:
+    # Descriptive metadata is scalar text.  Do not stringify arbitrary
+    # mappings/sequences: their representation can embed credentials or
+    # other provider-controlled secrets into persisted metadata.
+    if not isinstance(value, str):
+        return ""
     return _visible_text(value)[:MAX_FIELD_STRING]
 
 
@@ -500,7 +505,7 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
         elif key == "output_format":
             result[key] = value if isinstance(value, str) and value in {"text", "markdown"} else None
         else:
-            result[key] = _bounded_string(value) if value is not None else None
+            result[key] = _bounded_string(value) if isinstance(value, str) else None
 
     result["open_graph"] = _sanitize_open_graph(source.get("open_graph", {}), base_url, warnings)
     result["twitter_card"] = _sanitize_twitter(source.get("twitter_card", {}), base_url, warnings)

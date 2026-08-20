@@ -139,7 +139,19 @@ def _is_secret_field(key: str) -> bool:
     normalized = key.casefold().replace("_", "-")
     return (
         normalized in {"api-key", "authorization", "proxy-authorization", "cookie", "set-cookie"}
-        or any(token in normalized for token in ("api-key", "token", "secret", "signature", "cookie"))
+        or any(
+            token in normalized
+            for token in (
+                "authorization",
+                "proxy-authorization",
+                "cookie",
+                "set-cookie",
+                "api-key",
+                "token",
+                "secret",
+                "signature",
+            )
+        )
     )
 
 

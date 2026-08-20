@@ -217,6 +217,25 @@ def test_binding_projection_redacts_nested_cookies_and_credentialed_proxy():
     assert "actual-password" not in projection
 
 
+def test_binding_projection_redacts_sensitive_header_name_fragments():
+    secrets = {
+        "X-Authorization": "authorization-secret",
+        "X-Proxy-Authorization": "proxy-authorization-secret",
+        "X-Cookie": "cookie-secret",
+        "X-Set-Cookie": "set-cookie-secret",
+    }
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding("p", "httpx", target_headers=secrets),
+        )
+    )
+
+    projection = canonical_json(binding.semantic_projection())
+
+    for secret in secrets.values():
+        assert secret not in projection
+
+
 def test_binding_projection_redacts_proxy_in_typed_and_options_paths():
     binding = WebBinding(
         fetch_chain=(

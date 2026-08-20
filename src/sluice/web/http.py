@@ -38,7 +38,17 @@ _SENSITIVE_HEADER_NAMES = frozenset(
         "set-cookie",
     }
 )
-_SENSITIVE_HEADER_PARTS = ("api-key", "apikey", "token", "secret", "signature")
+_SENSITIVE_HEADER_PARTS = (
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "api-key",
+    "apikey",
+    "token",
+    "secret",
+    "signature",
+)
 _INTERNAL_SAFETY_REASONS = frozenset(STABLE_FAILURE_REASONS) | frozenset(
     {"peer_mismatch", "forbidden_header", "service_redirect", "too_many_redirects", "service_https_required"}
 )

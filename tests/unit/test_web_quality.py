@@ -157,6 +157,27 @@ def test_metadata_dates_jsonld_order_and_output_format_are_bounded_and_typed():
     assert "publication_date_invalid" in invalid["warnings"]
 
 
+def test_metadata_drops_non_string_descriptive_scalars_without_stringifying_secrets():
+    result = sanitize_metadata(
+        {
+            "title": {"X-Authorization": "Bearer title-secret"},
+            "provider_instance": ["X-Proxy-Authorization", "instance-secret"],
+            "provider_type": {"X-Cookie": "cookie-secret"},
+            "extractor": ["X-Set-Cookie", "extractor-secret"],
+        }
+    )
+
+    assert result["title"] is None
+    assert result["provider_instance"] is None
+    assert result["provider_type"] is None
+    assert result["extractor"] is None
+    serialized = str(result)
+    assert "title-secret" not in serialized
+    assert "instance-secret" not in serialized
+    assert "cookie-secret" not in serialized
+    assert "extractor-secret" not in serialized
+
+
 def test_web_errors_are_stable_and_never_include_exception_text():
     error = RuntimeError("Authorization: bearer top-secret vendor body")
     safe = sanitize_web_error(error)
