@@ -13,7 +13,19 @@ from .contracts import DocumentArtifact, QualityPolicy
 
 
 _HIDDEN_TAGS = frozenset(
-    {"script", "style", "template", "noscript", "svg", "canvas", "head", "title"}
+    {
+        "script",
+        "style",
+        "template",
+        "noscript",
+        "svg",
+        "canvas",
+        "head",
+        "title",
+        "iframe",
+        "object",
+        "embed",
+    }
 )
 _BLOCK_TAGS = frozenset(
     {

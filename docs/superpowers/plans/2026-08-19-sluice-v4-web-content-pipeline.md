@@ -420,6 +420,27 @@ git add src/sluice/web/extractors.py src/sluice/web/projectors.py tests/unit/tes
 git commit -m "feat(web): add offline extractors and projectors"
 ~~~
 
+#### Task 5 review-fix report (2026-08-20)
+
+The follow-up review hardening keeps BeautifulSoup plain extraction aligned
+with quality-visible text by removing `head`/`title` (and non-visible embedded
+fallback nodes) before text selection while retaining a sanitized title
+provenance field. Projector `input_format=auto` now recognizes only
+deterministic actual HTML start tags; Markdown autolinks, email autolinks,
+angle syntax, and fenced examples stay on the Markdown path. Identity reuse
+requires advertised `text`/`markdown` capabilities for provider-origin
+artifacts and uses the explicit `input` marker for direct/local artifacts.
+Nested-parenthesis unsafe link/image destinations are consumed as complete
+tokens before sanitization, so no trailing delimiter survives. Markdown link
+metadata is AST-derived (excluding code/raw HTML), and the local HTML fallback
+escapes literal text nodes and drops embedded metadata links safely. The
+newspaper4k adapter consumes supplied HTML through its in-memory
+`download(input_html=...)` path, disables read-more/meta-refresh traversal, and
+shadows image probing so optional parsing cannot perform network requests.
+
+Focused verification: `python3 -m pytest -q tests/unit/test_content_extraction.py tests/unit/test_web_quality.py`
+(`39 passed`).
+
 ### Task 6: Implement fixed core providers and registry
 
 **Files:**

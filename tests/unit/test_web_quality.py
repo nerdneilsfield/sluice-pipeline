@@ -70,6 +70,17 @@ def test_quality_excludes_comments_head_and_title_and_rejects_untyped_plain_text
     assert evaluate_quality(untyped, QualityPolicy(min_chars=1)).quality.reason == "bad_content_type"
 
 
+def test_quality_excludes_embedded_fallback_content():
+    artifact = _artifact(
+        "<article>visible</article><iframe>frame secret</iframe>"
+        "<object>object secret</object><embed src='movie.swf'>"
+    )
+
+    result = evaluate_quality(artifact, QualityPolicy(min_chars=1))
+
+    assert result.quality.visible_text == "visible"
+
+
 def test_quality_parser_failures_map_to_provider_error(monkeypatch):
     def fail(*args, **kwargs):
         raise RecursionError("parser recursion")
@@ -101,6 +112,34 @@ def test_unsafe_markdown_links_images_and_raw_html_are_removed():
     assert "<script>" not in sanitized
     assert "raw page body" not in sanitized
     assert "x" in sanitized and "alt" in sanitized
+
+
+def test_unsafe_embedded_markdown_blocks_are_removed():
+    sanitized = sanitize_markdown(
+        "<iframe>frame secret</iframe>\n"
+        "<object>object secret</object>\n"
+        "<embed>embed secret</embed>\n\nvisible"
+    )
+
+    assert sanitized.strip() == "visible"
+
+
+def test_inline_embedded_markdown_nodes_do_not_expose_link_content():
+    sanitized = sanitize_markdown("<canvas>[secret](https://secret.example)</canvas> visible")
+
+    assert "secret" not in sanitized
+    assert sanitized.strip() == "visible"
+
+
+def test_inline_head_and_title_nodes_do_not_expose_markdown_content():
+    sanitized = sanitize_markdown(
+        "pre <head>secret [x](https://secret.example)</head>"
+        "<title>title secret</title> post"
+    )
+
+    assert "secret" not in sanitized
+    assert "https://secret.example" not in sanitized
+    assert sanitized.strip() == "pre  post"
 
 
 def test_markdown_code_literals_are_not_treated_as_raw_html():

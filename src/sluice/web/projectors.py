@@ -29,6 +29,122 @@ from .sanitize import sanitize_markdown, sanitize_metadata
 
 INPUT_FORMATS = frozenset({"auto", "html", "text", "markdown"})
 _HIDDEN_TAGS = ("script", "style", "template", "noscript", "svg", "canvas", "head", "title")
+_HIDDEN_TAGS = _HIDDEN_TAGS + ("iframe", "object", "embed")
+_HTML_START_TAGS = frozenset(
+    {
+        "a",
+        "abbr",
+        "address",
+        "article",
+        "aside",
+        "audio",
+        "b",
+        "base",
+        "bdi",
+        "bdo",
+        "blockquote",
+        "body",
+        "br",
+        "button",
+        "canvas",
+        "caption",
+        "cite",
+        "code",
+        "col",
+        "colgroup",
+        "data",
+        "datalist",
+        "dd",
+        "del",
+        "details",
+        "dfn",
+        "dialog",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "embed",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hgroup",
+        "hr",
+        "html",
+        "i",
+        "iframe",
+        "img",
+        "input",
+        "ins",
+        "kbd",
+        "label",
+        "legend",
+        "li",
+        "link",
+        "main",
+        "map",
+        "mark",
+        "menu",
+        "meta",
+        "meter",
+        "nav",
+        "noscript",
+        "object",
+        "ol",
+        "optgroup",
+        "option",
+        "output",
+        "p",
+        "picture",
+        "pre",
+        "progress",
+        "q",
+        "rp",
+        "rt",
+        "ruby",
+        "s",
+        "samp",
+        "script",
+        "search",
+        "section",
+        "select",
+        "slot",
+        "small",
+        "source",
+        "span",
+        "strong",
+        "style",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "template",
+        "textarea",
+        "tfoot",
+        "th",
+        "thead",
+        "time",
+        "title",
+        "tr",
+        "track",
+        "u",
+        "ul",
+        "var",
+        "video",
+        "wbr",
+    }
+)
 _BLOCK_TAGS = frozenset(
     {
         "address",
@@ -69,19 +185,12 @@ _BLOCK_TAGS = frozenset(
 )
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
-_MARKDOWN_LINK = re.compile(
-    r"(?<!!)\[([^\]]+)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+['\"][^'\"]*['\"])?\)"
-)
-_MARKDOWN_IMAGE = re.compile(
-    r"!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+['\"][^'\"]*['\"])?\)"
-)
-
-
 @dataclass(frozen=True, slots=True)
 class _CoercedInput:
     artifact: DocumentArtifact
     item_metadata: dict[str, Any]
     input_kind: str
+    preserve_markup: bool = False
 
 
 def _normalise_text(value: str) -> str:
@@ -93,13 +202,42 @@ def _normalise_text(value: str) -> str:
 def _is_html(value: str) -> bool:
     if not value.strip():
         return False
+    # Markdown code spans/fences are literal source, not HTML input.  Remove
+    # them before sniffing so an example such as `````html\n<div>...````` stays
+    # in the Markdown path.
+    candidate = re.sub(
+        r"(?P<fence>`{3,}|~{3,})[^\n]*\n.*?(?P=fence)\s*",
+        "",
+        value,
+        flags=re.DOTALL,
+    )
+    candidate = re.sub(r"`+[^`\n]+`+", "", candidate)
+    if not candidate.strip():
+        return False
     try:
-        soup = BeautifulSoup(value, "html.parser")
+        soup = BeautifulSoup(candidate, "html.parser")
     except Exception:
         return False
-    # ``find`` alone treats a number of malformed strings as tags.  Require a
-    # genuine opening start tag as BeautifulSoup's parser sees it.
-    return soup.find() is not None and re.search(r"<\s*[A-Za-z][^>]*>", value) is not None
+    # BeautifulSoup intentionally accepts arbitrary names as tags.  That is
+    # useful for malformed HTML, but it also turns Markdown autolinks such as
+    # ``<https://example.test>`` and email/angle syntax into fake tags.  A
+    # deterministic HTML sniff therefore requires a standard HTML start-tag
+    # name; unknown angle-bracket text remains Markdown.
+    if any(
+        isinstance(tag, Tag) and tag.name.casefold() in _HTML_START_TAGS
+        for tag in soup.find_all(True)
+    ):
+        return True
+    # Custom elements are valid HTML when they have an explicit closing tag,
+    # while a lone ``<angle>`` is ordinary Markdown angle syntax.  Requiring
+    # the paired close keeps this extension deterministic without reintroducing
+    # URI/email autolink false positives.
+    for tag in soup.find_all(True):
+        if not isinstance(tag, Tag) or not re.fullmatch(r"[a-z][a-z0-9-]*", tag.name.casefold()):
+            continue
+        if re.search(rf"</\s*{re.escape(tag.name)}\s*>", candidate, flags=re.IGNORECASE):
+            return True
+    return False
 
 
 def _item_content(item: Item) -> tuple[str, Mapping[str, Any]]:
@@ -177,7 +315,12 @@ def _coerce(value: DocumentArtifact | Item | str, input_format: str) -> _Coerced
     else:
         fields["text"] = content
     artifact = DocumentArtifact(**fields)
-    return _CoercedInput(artifact, item_metadata, kind)
+    return _CoercedInput(
+        artifact,
+        item_metadata,
+        kind,
+        preserve_markup=input_format == "auto" and kind == "text",
+    )
 
 
 def coerce_projector_input(
@@ -219,6 +362,14 @@ def _safe_markup_url(value: str, base_url: str | None) -> str:
     return value
 
 
+def _escape_html_text(value: str) -> str:
+    """Keep HTML text nodes literal when emitted into Markdown."""
+
+    value = value.replace("\\", "\\\\")
+    value = re.sub(r"([`*_{}\[\]()#+.!|~\-])", r"\\\1", value)
+    return value.replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _own_html_to_markdown(value: str, base_url: str | None) -> str:
     soup = _soup_html(value)
     root = soup.body if soup.body is not None else soup
@@ -237,6 +388,7 @@ def _own_html_to_markdown(value: str, base_url: str | None) -> str:
             text = str(node)
             if not in_pre:
                 text = _WHITESPACE.sub(" ", text)
+                text = _escape_html_text(text)
             append(text)
             return
         if not isinstance(node, Tag):
@@ -306,6 +458,18 @@ def _own_html_to_markdown(value: str, base_url: str | None) -> str:
     return "\n\n".join(compact)
 
 
+def _converter_html(value: str) -> str:
+    """Serialize cleaned HTML with literal text safe for Markdown conversion."""
+
+    soup = _soup_html(value)
+    for node in list(soup.find_all(string=True)):
+        parent = node.parent
+        if isinstance(parent, Tag) and parent.name.casefold() in {"pre", "code"}:
+            continue
+        node.replace_with(_escape_html_text(str(node)))
+    return str(soup)
+
+
 def _html_to_markdown(value: str, base_url: str | None) -> str:
     # html-to-markdown is a declared core dependency in normal installations.
     # Keep a deterministic local implementation for minimal/offline installs
@@ -315,12 +479,17 @@ def _html_to_markdown(value: str, base_url: str | None) -> str:
     except (ImportError, ModuleNotFoundError):
         module = None
     converter = getattr(module, "convert", None) if module is not None else None
+    # Normalize through the same hidden-node policy used by visible-text
+    # projection before handing HTML to an optional converter.  Otherwise a
+    # converter may retain fallback text nested in iframe/object/embed nodes
+    # even though those nodes are non-visible content for this boundary.
+    cleaned_value = _converter_html(value)
     if callable(converter):
         try:
             try:
-                converted = converter(value, allow_raw_html=False)
+                converted = converter(cleaned_value, allow_raw_html=False)
             except TypeError:
-                converted = converter(value)
+                converted = converter(cleaned_value)
         except Exception:
             raise ExecutionError("web Markdown conversion failed") from None
         if not isinstance(converted, str):
@@ -426,7 +595,8 @@ def _html_metadata(value: str, base_url: str | None) -> dict[str, Any]:
         result["twitter_card"] = twitter
 
     links: list[dict[str, str]] = []
-    for anchor in soup.find_all("a"):
+    visible_soup = _soup_html(value)
+    for anchor in visible_soup.find_all("a"):
         href = anchor.get("href")
         if not isinstance(href, str) or not href.strip():
             continue
@@ -467,15 +637,36 @@ def _html_metadata(value: str, base_url: str | None) -> dict[str, Any]:
 
 
 def _markdown_metadata(value: str, base_url: str | None) -> dict[str, Any]:
+    try:
+        tokens = MarkdownIt("commonmark", {"html": True, "linkify": False}).parse(value)
+    except Exception:
+        return {}
     links: list[dict[str, str]] = []
-    for match in _MARKDOWN_LINK.finditer(value):
-        destination = match.group(2) or match.group(3) or ""
-        links.append(
-            {
-                "text": _normalise_text(match.group(1)),
-                "url": urljoin(base_url, destination) if base_url else destination,
-            }
-        )
+    for token in tokens:
+        if token.type != "inline":
+            continue
+        open_link: dict[str, str] | None = None
+        for child in token.children or ():
+            if child.type == "link_open":
+                destination = child.attrGet("href")
+                open_link = {
+                    "text": "",
+                    "url": destination if isinstance(destination, str) else "",
+                }
+            elif child.type == "link_close":
+                if open_link is not None and open_link["url"]:
+                    open_link["text"] = _normalise_text(open_link["text"])
+                    if open_link["text"]:
+                        destination = open_link["url"]
+                        open_link["url"] = (
+                            destination
+                            if destination.startswith("#")
+                            else urljoin(base_url, destination) if base_url else destination
+                        )
+                        links.append(open_link)
+                open_link = None
+            elif open_link is not None and child.type in {"text", "code_inline", "softbreak", "hardbreak"}:
+                open_link["text"] += " " if child.type in {"softbreak", "hardbreak"} else child.content
     if not links:
         return {}
     return {"links": links}
@@ -568,10 +759,14 @@ def _project(input_value: DocumentArtifact | Item | str, *, input_format: str, o
         source_metadata = _html_metadata(value, base_url)
         rendered = _html_to_markdown(value, base_url) if output == "markdown" else _visible_html(value)
     elif selected == "markdown":
-        source_metadata = _markdown_metadata(value, base_url)
-        rendered = sanitize_markdown(value, base_url).strip() if output == "markdown" else _markdown_to_text(value, base_url)
+        sanitized = sanitize_markdown(value, base_url)
+        source_metadata = _markdown_metadata(sanitized, base_url)
+        rendered = sanitized.strip() if output == "markdown" else _markdown_to_text(sanitized, base_url)
     else:
-        rendered = _escape_plain_markdown(value) if output == "markdown" else _normalise_text(value)
+        if output == "markdown":
+            rendered = value if coerced.preserve_markup else _escape_plain_markdown(value)
+        else:
+            rendered = _normalise_text(value)
 
     web_metadata = _metadata_web(
         artifact,

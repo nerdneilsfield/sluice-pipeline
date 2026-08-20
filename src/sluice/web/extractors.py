@@ -2,7 +2,8 @@
 
 The web coordinator owns provider fallback and quality selection.  This module
 only transforms representations already present on a :class:`DocumentArtifact`.
-In particular, none of the extractors call a URL or download a document.
+In particular, no extractor fetches a URL; newspaper4k's compatibility
+``download(input_html=...)`` call only loads the supplied body in memory.
 """
 
 from __future__ import annotations
@@ -30,7 +31,19 @@ EXTRACTOR_FORMATS: dict[str, str] = {
     "beautifulsoup": "text",
 }
 
-_HIDDEN_TAGS = ("script", "style", "template", "noscript", "svg", "canvas")
+_HIDDEN_TAGS = (
+    "script",
+    "style",
+    "template",
+    "noscript",
+    "svg",
+    "canvas",
+    "head",
+    "title",
+    "iframe",
+    "object",
+    "embed",
+)
 _BLOCK_TAGS = frozenset(
     {
         "address",
@@ -160,6 +173,29 @@ def _provider_original(artifact: DocumentArtifact) -> bool:
     }
 
 
+def _identity_representation_allowed(artifact: DocumentArtifact, candidate: str) -> bool:
+    """Check provenance before identity reuses a representation.
+
+    Provider artifacts must explicitly advertise every representation they
+    expose.  Direct/local candidates have no provider identity, so the
+    explicit ``input`` extraction marker is the provenance that permits an
+    empty capability set; if capabilities are present they still constrain
+    the field so stale values cannot leak across formats.
+    """
+
+    if (
+        artifact.extraction == "input"
+        and artifact.provider_instance is None
+        and artifact.provider_type is None
+    ):
+        if artifact.selected_format == "raw_html":
+            return False
+        if artifact.selected_format in {"markdown", "text"}:
+            return candidate == artifact.selected_format
+        return not artifact.capabilities or candidate in artifact.capabilities
+    return candidate in artifact.capabilities
+
+
 def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
     if not isinstance(artifact, DocumentArtifact) or not _provider_original(artifact):
         return NO_MATCH
@@ -172,7 +208,7 @@ def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
     if selected in {"markdown", "text"}:
         candidates = (selected, "text" if selected == "markdown" else "markdown")
     for candidate in candidates:
-        if artifact.capabilities and candidate not in artifact.capabilities:
+        if not _identity_representation_allowed(artifact, candidate):
             continue
         if candidate == "markdown" and isinstance(artifact.markdown, str) and artifact.markdown.strip():
             try:
@@ -283,6 +319,18 @@ def _beautifulsoup_text(
     content_selector: str | None = None,
     remove_selectors: tuple[str, ...] = (),
 ) -> tuple[str, str | None]:
+    # Keep the document title as extractor provenance, but never let head or
+    # title text enter the visible plain/article representation.  Selector
+    # removal applies to metadata as well as body content, matching the
+    # previous behavior where a caller could explicitly remove ``title``.
+    try:
+        title_soup = BeautifulSoup(html, "html.parser")
+    except Exception:
+        raise _failure() from None
+    _remove_selectors(title_soup, remove_selectors)
+    title_node = title_soup.find("title")
+    title = _normalise_text(title_node.get_text(" ", strip=True)) if isinstance(title_node, Tag) else None
+
     soup = _soup_for_html(html)
     _remove_selectors(soup, remove_selectors)
     root: Tag | BeautifulSoup | None
@@ -294,8 +342,6 @@ def _beautifulsoup_text(
         text = ""
     else:
         text = _node_text(root) if isinstance(root, Tag) else _normalise_text(root.get_text("\n", strip=True))
-    title_node = soup.find("title")
-    title = _normalise_text(title_node.get_text(" ", strip=True)) if isinstance(title_node, Tag) else None
     return text, title
 
 
@@ -373,28 +419,75 @@ def _newspaper_article(module: Any, language: str | None) -> Any | None:
         article_cls = getattr(module, "Article", None)
     if article_cls is None:
         return None
-    kwargs: dict[str, Any] = {"fetch_images": False}
+    # Both options are important when parsing caller-supplied HTML: older
+    # newspaper releases may follow a read-more/meta-refresh URL from
+    # ``download`` even though no network fetch was requested explicitly.
+    kwargs: dict[str, Any] = {"fetch_images": False, "follow_meta_refresh": False}
     if language:
         kwargs["language"] = language
     try:
         return article_cls(url="", **kwargs)
     except TypeError:
         try:
-            article = article_cls("")
+            # Older releases may reject follow_meta_refresh while still
+            # accepting the image flag.  Keep that compatibility path before
+            # falling back to the minimal constructor.
+            fallback_kwargs = {key: value for key, value in kwargs.items() if key != "follow_meta_refresh"}
+            article = article_cls("", **fallback_kwargs)
         except Exception:
-            return None
-        # Some old versions expose fetch_images as a mutable attribute instead
-        # of a constructor option.  Keep it disabled either way.
-        try:
-            article.fetch_images = False
-        except Exception:
-            pass
+            try:
+                article = article_cls("")
+            except Exception:
+                return None
+        config = getattr(article, "config", None)
+        if config is not None:
+            for key, value in kwargs.items():
+                try:
+                    setattr(config, key, value)
+                except Exception:
+                    pass
         if language:
             try:
                 article.config.language = language
             except Exception:
                 pass
-        return article
+    return article
+
+
+def _disable_newspaper_image_fetch(article: Any) -> None:
+    """Prevent Article.parse from fetching image URLs from supplied HTML.
+
+    newspaper4k 0.9.3 calls ``Article.fetch_images`` unconditionally from
+    ``parse``; that helper probes every image URL even when the constructor's
+    ``fetch_images`` configuration flag is false.  Shadowing it with a local
+    no-op keeps parsing deterministic and offline while preserving the normal
+    text/title extraction path.  The configuration flag is also set for older
+    releases that consult it directly.
+    """
+
+    config = getattr(article, "config", None)
+    if config is not None:
+        try:
+            setattr(config, "fetch_images", False)
+        except Exception:
+            pass
+
+    # Keep compatibility shims and test doubles from following a configured
+    # read-more selector when they implement ``download`` themselves.
+    try:
+        setattr(article, "read_more_link", "")
+    except Exception:
+        pass
+
+    def no_fetch_images(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    try:
+        article.fetch_images = no_fetch_images
+    except Exception:
+        # If an old implementation exposes a read-only method, its config
+        # flag above is still the safest available guard.
+        pass
 
 
 def _date_value(value: Any) -> str | None:
@@ -418,12 +511,33 @@ def _extract_newspaper(artifact: DocumentArtifact, options: Mapping[str, Any]) -
     if language is not None and not isinstance(language, str):
         raise ExecutionError("newspaper4k.language must be a string")
     article = _newspaper_article(module, language)
-    if article is None or not callable(getattr(article, "set_html", None)):
+    if article is None:
         return NO_MATCH
     try:
-        # set_html + parse is the offline newspaper4k path.  Never invoke
-        # download(), which would perform a second network operation.
-        article.set_html(artifact.raw_html)
+        _disable_newspaper_image_fetch(article)
+        # newspaper4k 0.9.3 exposes ``download(input_html=...)`` rather than
+        # set_html.  Passing the fetched body explicitly keeps this path
+        # offline; ignore_read_more prevents a supplied page from triggering
+        # another target request.  Retain set_html for older compatible
+        # versions and test doubles.
+        download = getattr(article, "download", None)
+        if callable(download):
+            try:
+                download(input_html=artifact.raw_html, ignore_read_more=True)
+            except TypeError:
+                try:
+                    download(input_html=artifact.raw_html)
+                except TypeError:
+                    download = None
+        if not callable(download):
+            set_html = getattr(article, "set_html", None)
+            if not callable(set_html):
+                return NO_MATCH
+            set_html(artifact.raw_html)
+        # A compatibility download implementation may rebuild its parser and
+        # restore the class image method; reapply the no-op immediately before
+        # parse so this boundary remains offline regardless of that detail.
+        _disable_newspaper_image_fetch(article)
         parse = getattr(article, "parse", None)
         if callable(parse):
             parse()

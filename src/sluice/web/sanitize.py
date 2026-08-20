@@ -6,11 +6,12 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 import json
 import re
+import warnings
 from itertools import islice
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-from bs4 import BeautifulSoup, Comment
+from bs4 import BeautifulSoup, Comment, MarkupResemblesLocatorWarning
 from markdown_it import MarkdownIt
 
 from ..errors import WebSafetyError
@@ -33,14 +34,18 @@ _SAFE_WARNINGS = frozenset(
     }
 )
 _RE_HTML = re.compile(r"<!--.*?-->|<[^>]*>", re.S)
-_RE_SCRIPT = re.compile(r"<(script|style|template|noscript|svg)\b[^>]*>.*?</\1\s*>", re.I | re.S)
+_RE_SCRIPT = re.compile(r"<(script|style|template|noscript|svg|canvas)\b[^>]*>.*?</\1\s*>", re.I | re.S)
 _RE_RAW_BLOCK = re.compile(
-    r"<(?P<tag>address|article|aside|blockquote|body|div|fieldset|footer|form|h[1-6]|header|hr|iframe|main|nav|ol|p|pre|section|table|ul)\b[^>]*>.*?</(?P=tag)\s*>",
+    r"<(?P<tag>address|article|aside|blockquote|body|canvas|div|embed|fieldset|footer|form|h[1-6]|head|header|hr|iframe|main|nav|object|ol|p|pre|section|table|title|ul)\b[^>]*>.*?</(?P=tag)\s*>",
     re.I | re.S,
 )
-_RE_IMAGE = re.compile(r"!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+['\"]([^'\"]*)['\"])?\)")
-_RE_LINK = re.compile(r"(?<!!)\[([^\]]+)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+['\"]([^'\"]*)['\"])?\)")
-_RE_AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^>\s]+)>", re.I)
+_RE_EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+_RE_AUTOLINK = re.compile(
+    r"<((?:[A-Za-z][A-Za-z0-9+.-]*:)[^>\s]+|"
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)>",
+    re.I,
+)
 _RE_REFERENCE = re.compile(r"^(\s*\[[^\]]+\]:\s*)(\S+)(.*)$", re.M)
 _RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[Tt ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:[Zz]|[+-][0-9]{2}:?[0-9]{2})?)?$")
 _RE_RFC3339 = re.compile(
@@ -48,6 +53,8 @@ _RE_RFC3339 = re.compile(
 )
 _RE_FENCED_CODE = re.compile(r"(?P<fence>`{3,}|~{3,})[^\n]*\n.*?(?P=fence)\s*", re.S)
 _RE_INLINE_CODE = re.compile(r"(?<!`)`+[^`\n]+`+(?!`)")
+_RE_IMAGE_START = re.compile(r"!\[([^\]\n]*)\]\(")
+_RE_LINK_START = re.compile(r"(?<!!)\[([^\]\n]+)\]\(")
 
 
 def _visible_text(value: Any) -> str:
@@ -55,9 +62,22 @@ def _visible_text(value: Any) -> str:
         return ""
     text = str(value)
     try:
-        soup = BeautifulSoup(text, "html.parser")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MarkupResemblesLocatorWarning)
+            soup = BeautifulSoup(text, "html.parser")
         for node in soup.find_all(
-            ["script", "style", "template", "noscript", "svg", "head", "title"]
+            [
+                "script",
+                "style",
+                "template",
+                "noscript",
+                "svg",
+                "head",
+                "title",
+                "iframe",
+                "object",
+                "embed",
+            ]
         ):
             node.decompose()
         for comment in list(soup.find_all(string=lambda item: isinstance(item, Comment))):
@@ -67,7 +87,13 @@ def _visible_text(value: Any) -> str:
         return ""
 
 
-def _normalise_destination(destination: str, base_url: str | None, *, image: bool = False) -> str | None:
+def _normalise_destination(
+    destination: str,
+    base_url: str | None,
+    *,
+    image: bool = False,
+    allow_email: bool = False,
+) -> str | None:
     destination = destination.strip()
     if not destination:
         return None
@@ -79,6 +105,8 @@ def _normalise_destination(destination: str, base_url: str | None, *, image: boo
     except ValueError:
         return None
     scheme = parsed.scheme.casefold()
+    if allow_email and not scheme and not image and _RE_EMAIL.fullmatch(destination):
+        return destination
     if scheme in {"javascript", "data", "file", "vbscript", "about"}:
         return None
     if not parsed.scheme and base_url:
@@ -134,6 +162,124 @@ def _strip_html_blocks(value: str) -> str:
     )
 
 
+def _scan_markdown_destination(value: str, start: int) -> tuple[str, int] | None:
+    """Read one Markdown destination and return it plus the consumed end.
+
+    A regular expression cannot safely distinguish the closing delimiter from
+    parentheses nested inside a destination (for example
+    ``javascript:alert(1)``).  This bounded scanner follows the inline-link
+    shape used by the sanitizer and consumes the complete token before URL
+    validation, so an unsafe destination cannot leave a trailing ``)``.
+    """
+
+    if start >= len(value) or value[start].isspace():
+        return None
+    index = start
+    if value[index] == "<":
+        close = value.find(">", index + 1)
+        if close < 0:
+            return None
+        destination = value[index + 1 : close]
+        index = close + 1
+    else:
+        chars: list[str] = []
+        depth = 0
+        while index < len(value):
+            char = value[index]
+            if char == "\\" and index + 1 < len(value):
+                chars.append(value[index : index + 2])
+                index += 2
+                continue
+            if char == "(":
+                depth += 1
+                chars.append(char)
+                index += 1
+                continue
+            if char == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+                chars.append(char)
+                index += 1
+                continue
+            if char.isspace() and depth == 0:
+                break
+            chars.append(char)
+            index += 1
+        if not chars or depth:
+            return None
+        destination = "".join(chars)
+
+    # Optional Markdown link titles are deliberately discarded by the
+    # canonical sanitizer, but must still be consumed as part of this token.
+    if index < len(value) and value[index] != ")":
+        title_index = index
+        while title_index < len(value) and value[title_index].isspace():
+            title_index += 1
+        if title_index >= len(value) or value[title_index] not in "'\"":
+            return None
+        quote = value[title_index]
+        title_index += 1
+        while title_index < len(value):
+            if value[title_index] == "\\":
+                title_index += 2
+                continue
+            if value[title_index] == quote:
+                break
+            title_index += 1
+        if title_index >= len(value) or value[title_index] != quote:
+            return None
+        index = title_index + 1
+        while index < len(value) and value[index].isspace():
+            index += 1
+
+    if index >= len(value) or value[index] != ")":
+        return None
+    return destination, index + 1
+
+
+def _rewrite_markdown_destinations(
+    value: str,
+    base_url: str | None,
+    *,
+    image: bool,
+    warnings: list[str] | None = None,
+) -> str:
+    pattern = _RE_IMAGE_START if image else _RE_LINK_START
+    output: list[str] = []
+    cursor = 0
+    search = 0
+    while True:
+        match = pattern.search(value, search)
+        if match is None:
+            output.append(value[cursor:])
+            return "".join(output)
+        output.append(value[cursor : match.start()])
+        parsed = _scan_markdown_destination(value, match.end())
+        if parsed is None:
+            # Preserve malformed syntax for the later raw-markup pass rather
+            # than dropping text or looping on the same opener.
+            output.append(value[match.start() : match.end()])
+            cursor = match.end()
+            search = match.end()
+            continue
+        destination, end = parsed
+        safe = _normalise_destination(destination, base_url, image=image)
+        if safe is None:
+            if warnings is not None:
+                warning = "sanitizer_rejected_image" if image else "sanitizer_rejected_link"
+                if warning not in warnings:
+                    warnings.append(warning)
+            replacement = match.group(1)
+        elif image:
+            replacement = f"![{match.group(1)}]({safe})"
+        else:
+            replacement = f"[{match.group(1)}]({safe})"
+        output.append(replacement)
+        cursor = end
+        search = end
+
+
 def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
     """Remove raw HTML and unsafe links/images from provider Markdown."""
 
@@ -164,25 +310,13 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
     # markup text behind in the sanitized representation.
     value = _RE_RAW_BLOCK.sub("", value)
 
-    def image_replacement(match: re.Match[str]) -> str:
-        alt = match.group(1)
-        destination = match.group(2) or match.group(3) or ""
-        safe = _normalise_destination(destination, base_url, image=True)
-        if safe is None:
-            return alt
-        return f"![{alt}]({safe})"
-
-    value = _RE_IMAGE.sub(image_replacement, value)
-
-    def link_replacement(match: re.Match[str]) -> str:
-        label = match.group(1)
-        destination = match.group(2) or match.group(3) or ""
-        safe = _normalise_destination(destination, base_url)
-        if safe is None:
-            return label
-        return f"[{label}]({safe})"
-
-    value = _RE_LINK.sub(link_replacement, value)
+    value = _rewrite_markdown_destinations(
+        value,
+        base_url,
+        image=True,
+        warnings=None,
+    )
+    value = _rewrite_markdown_destinations(value, base_url, image=False)
 
     def reference_replacement(match: re.Match[str]) -> str:
         destination = match.group(2)
@@ -193,14 +327,24 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
 
     value = _RE_REFERENCE.sub(reference_replacement, value)
 
+    autolinks: list[str] = []
+
     def autolink_replacement(match: re.Match[str]) -> str:
-        safe = _normalise_destination(match.group(1), base_url)
-        return safe if safe is not None else match.group(1).replace(":", "")
+        safe = _normalise_destination(match.group(1), base_url, allow_email=True)
+        # Keep approved autolinks as Markdown autolinks so projection and
+        # metadata extraction retain their link semantics.  Unsafe values are
+        # unwrapped to visible text without their angle delimiters.
+        rendered = f"<{safe}>" if safe is not None else match.group(1)
+        token = f"\x00SLUICE_AUTOLINK_{len(autolinks)}\x00"
+        autolinks.append(rendered)
+        return token
 
     value = _RE_AUTOLINK.sub(autolink_replacement, value)
     # Remove ordinary raw HTML tags after link/image handling.  Script content
     # was removed above; stripping comments and tags leaves no executable DOM.
     value = _RE_HTML.sub("", value)
+    for index, autolink in enumerate(autolinks):
+        value = value.replace(f"\x00SLUICE_AUTOLINK_{index}\x00", autolink)
     for index, code in enumerate(protected):
         value = value.replace(f"\x00SLUICE_CODE_{index}\x00", code)
     return value
@@ -215,15 +359,29 @@ def _bounded_string(value: Any) -> str:
     return _visible_text(value)[:MAX_FIELD_STRING]
 
 
-def _safe_url(value: Any, base_url: str | None, warnings: list[str], warning: str) -> str | None:
+def _safe_url(
+    value: Any,
+    base_url: str | None,
+    warnings: list[str],
+    warning: str,
+    *,
+    allow_mailto_fragment: bool = False,
+) -> str | None:
     if not isinstance(value, str):
         return None
     destination = _normalise_destination(value, base_url)
-    if destination is None or not destination.lower().startswith(("http://", "https://")):
+    if destination is None:
         if warning in _SAFE_WARNINGS and warning not in warnings:
             warnings.append(warning)
         return None
-    return destination
+    lowered = destination.lower()
+    if lowered.startswith(("http://", "https://")):
+        return destination
+    if allow_mailto_fragment and (lowered.startswith("mailto:") or destination.startswith("#")):
+        return destination
+    if warning in _SAFE_WARNINGS and warning not in warnings:
+        warnings.append(warning)
+    return None
 
 
 def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
@@ -419,7 +577,13 @@ def _sanitize_links(raw: Any, base_url: str | None, warnings: list[str]) -> list
     for item in raw[:MAX_FIELD_LIST]:
         if not isinstance(item, Mapping):
             continue
-        destination = _safe_url(item.get("url", item.get("href")), base_url, warnings, "sanitizer_rejected_link")
+        destination = _safe_url(
+            item.get("url", item.get("href")),
+            base_url,
+            warnings,
+            "sanitizer_rejected_link",
+            allow_mailto_fragment=True,
+        )
         if destination is None or destination in seen:
             continue
         text = _bounded_string(item.get("text", item.get("title", "")))
