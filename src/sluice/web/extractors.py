@@ -19,7 +19,7 @@ from typing import Any, Protocol
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
-from ..errors import ExecutionError, WebSafetyError
+from ..errors import DefinitionError, ExecutionError, WebSafetyError
 from .contracts import DocumentArtifact, ExtractorBinding, NO_MATCH
 from .sanitize import sanitize_markdown
 
@@ -401,13 +401,13 @@ def _extract_trafilatura(artifact: DocumentArtifact, options: Mapping[str, Any])
         # Crucially this is the supplied body, never a URL/fetch_url call.
         value = module.extract(artifact.raw_html, **kwargs)
     except Exception:
-        raise _failure() from None
+        return NO_MATCH
     if not isinstance(value, str) or not value.strip():
         return NO_MATCH
     try:
         value = sanitize_markdown(value, artifact.final_url or artifact.source_url)
     except Exception:
-        raise _failure() from None
+        return NO_MATCH
     if not value.strip():
         return NO_MATCH
     return _with_result(artifact, selected_format="markdown", extraction="trafilatura", value=value)
@@ -542,7 +542,7 @@ def _extract_newspaper(artifact: DocumentArtifact, options: Mapping[str, Any]) -
         if callable(parse):
             parse()
     except Exception:
-        raise _failure() from None
+        return NO_MATCH
     value = getattr(article, "text", None)
     if not isinstance(value, str) or not value.strip():
         return NO_MATCH
@@ -596,7 +596,7 @@ def _extract_resiliparse(artifact: DocumentArtifact, options: Mapping[str, Any])
             preserve_formatting=preserve_formatting,
         )
     except Exception:
-        raise _failure() from None
+        return NO_MATCH
     if not isinstance(value, str) or not value.strip():
         return NO_MATCH
     value = _normalise_text(value)
@@ -629,7 +629,41 @@ class _ConfiguredExtractor:
 
 
 def _configured(name: str, extractor_type: str, options: Mapping[str, Any] | None = None) -> _ConfiguredExtractor:
-    return _ConfiguredExtractor(name, extractor_type, dict(options or {}))
+    # Reuse the contract freezer so runtime instances cannot mutate even the
+    # top-level options mapping (and direct helpers receive the same recursive
+    # tuple/mapping treatment as catalog-built extractors).
+    frozen_options = ExtractorBinding(
+        name=name,
+        type=extractor_type,
+        options=options or {},
+    ).options
+    return _ConfiguredExtractor(name, extractor_type, frozen_options)
+
+
+def validate_extractor_runtime(binding: ExtractorBinding) -> None:
+    """Require configured optional extractor APIs without running extraction."""
+
+    if not isinstance(binding, ExtractorBinding):
+        raise DefinitionError("extractor binding must be an ExtractorBinding")
+    available = True
+    if binding.type == "trafilatura":
+        available = trafilatura is not None and callable(
+            getattr(trafilatura, "extract", None)
+        )
+    elif binding.type == "newspaper4k":
+        article_class = getattr(getattr(newspaper, "article", None), "Article", None)
+        if article_class is None:
+            article_class = getattr(newspaper, "Article", None)
+        available = newspaper is not None and callable(article_class)
+    elif binding.type == "resiliparse":
+        available = resiliparse is not None and callable(
+            _resiliparse_extract_function(resiliparse)
+        )
+    if not available:
+        raise DefinitionError(
+            f"{binding.type} dependency is unavailable for extractor "
+            f"{binding.name!r}"
+        )
 
 
 identity = _configured("identity", "identity")
@@ -697,6 +731,7 @@ __all__ = [
     "extract_newspaper4k",
     "extract_resiliparse",
     "extract_beautifulsoup",
+    "validate_extractor_runtime",
     "trafilatura",
     "newspaper",
     "resiliparse",

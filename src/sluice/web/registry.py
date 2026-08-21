@@ -7,9 +7,11 @@ credentials remain in process memory and are never part of those keys.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field
 import importlib
+import inspect
+import ipaddress
 import logging
 import os
 import re
@@ -18,11 +20,21 @@ import time
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
-from ..errors import DefinitionError
-from .contracts import ExtractorBinding, ProviderBinding, WebBinding
-from .extractors import EXTRACTOR_FORMATS, build_extractor
-from .http import _PooledPinnedHTTPXClient
-from .providers import CORE_PROVIDER_BUILDERS, WebProvider, build_provider
+from ..errors import DefinitionError, WebSafetyError
+from .contracts import ExtractorBinding, FetchRequest, ProviderBinding, WebBinding
+from .extractors import (
+    EXTRACTOR_FORMATS,
+    build_extractor,
+    validate_extractor_runtime,
+)
+from .http import DirectResponse, MAX_BODY_BYTES, _PooledPinnedHTTPXClient
+from .providers import (
+    CORE_PROVIDER_BUILDERS,
+    WebProvider,
+    _curl_remote_dns_proxy,
+    build_provider,
+)
+from .url import NormalizedURL
 
 
 _ENV_REFERENCE = re.compile(r"^env:[A-Z_][A-Z0-9_]*$")
@@ -78,6 +90,37 @@ def _resolve_secret(value: Any, *, field: str, allow_missing: bool = False) -> A
     return value
 
 
+_SECRET_OPTION_FIELDS = frozenset(
+    {
+        "api_key",
+        "zone",
+        "proxy",
+        "service_headers",
+        "target_headers",
+        "target_cookies",
+    }
+)
+
+
+def _resolve_provider_options(
+    binding: ProviderBinding,
+    *,
+    allow_missing: bool,
+) -> dict[str, Any]:
+    """Resolve only option fields whose configuration schema permits secrets."""
+
+    resolved: dict[str, Any] = {}
+    for key, value in binding.options.items():
+        if key in _SECRET_OPTION_FIELDS:
+            value = _resolve_secret(
+                value,
+                field=f"provider {binding.name}.{key}",
+                allow_missing=allow_missing,
+            )
+        resolved[str(key)] = value
+    return resolved
+
+
 def resolve_provider_binding(
     binding: ProviderBinding,
     *,
@@ -91,7 +134,10 @@ def resolve_provider_binding(
         return ProviderBinding(
             name=binding.name,
             type=binding.type,
-            options=_resolve_secret(binding.options, field=f"provider {binding.name}", allow_missing=allow_missing_secrets),
+            options=_resolve_provider_options(
+                binding,
+                allow_missing=allow_missing_secrets,
+            ),
             base_url=binding.base_url,
             timeout=binding.timeout,
             connect_timeout=binding.connect_timeout,
@@ -108,7 +154,7 @@ def resolve_provider_binding(
             timeout_seconds=binding.timeout_seconds,
             only_main_content=binding.only_main_content,
             wait_for_selector=binding.wait_for_selector,
-            wait_for=_resolve_secret(binding.wait_for, field=f"provider {binding.name}.wait_for", allow_missing=allow_missing_secrets),
+            wait_for=binding.wait_for,
             mobile=binding.mobile,
             actions=binding.actions,
         )
@@ -157,15 +203,108 @@ class ProviderLimiter:
 class _ThreadLocalCurlSession:
     """Catalog-owned curl sessions, isolated per worker thread."""
 
-    def __init__(self, module: object, impersonate: object) -> None:
+    def __init__(
+        self,
+        module: object,
+        curl_module: object,
+        *,
+        provider_name: str,
+        impersonate: object,
+        http_version: object,
+    ) -> None:
         self._module = module
+        self._provider_name = provider_name
         self._impersonate = impersonate
+        self._http_version = (
+            None if http_version == "auto" else f"v{http_version}"
+        )
+        curl_options = getattr(curl_module, "CurlOpt", None)
+        self._resolve_option = getattr(curl_options, "RESOLVE", None)
+        self._fresh_connect_option = getattr(curl_options, "FRESH_CONNECT", None)
+        self._forbid_reuse_option = getattr(curl_options, "FORBID_REUSE", None)
+        if any(
+            option is None
+            for option in (
+                self._resolve_option,
+                self._fresh_connect_option,
+                self._forbid_reuse_option,
+            )
+        ):
+            raise DefinitionError(
+                f"curl_cffi runtime cannot enforce pinned streaming for provider "
+                f"{provider_name!r}"
+            )
         self._lock = threading.RLock()
         self._sessions: dict[int, object] = {}
         self._closed = False
         # Construct the registering thread's session eagerly.  Other worker
         # threads get their own session on first use.
-        self._session_for_current_thread()
+        try:
+            self._session_for_current_thread()
+        except BaseException:
+            self.close()
+            raise
+
+    def _invalid_runtime(self) -> DefinitionError:
+        return DefinitionError(
+            f"curl_cffi runtime cannot enforce pinned streaming for provider "
+            f"{self._provider_name!r}"
+        )
+
+    def _new_session(self) -> object:
+        factory = getattr(self._module, "Session", None)
+        if not callable(factory):
+            raise self._invalid_runtime()
+        options: dict[object, object] = {}
+        kwargs: dict[str, object] = {
+            "impersonate": self._impersonate,
+            "trust_env": False,
+            "allow_redirects": False,
+            "retry": 0,
+            "curl_options": options,
+        }
+        if self._http_version is not None:
+            kwargs["http_version"] = self._http_version
+        try:
+            session = factory(**kwargs)
+        except Exception:
+            raise self._invalid_runtime() from None
+        requester = getattr(session, "request", None)
+        configured_options = getattr(session, "curl_options", None)
+        if not callable(requester) or not isinstance(
+            configured_options, MutableMapping
+        ):
+            close = getattr(session, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            raise self._invalid_runtime()
+        try:
+            parameters = inspect.signature(requester).parameters.values()
+        except (TypeError, ValueError):
+            raise self._invalid_runtime() from None
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        names = {parameter.name for parameter in parameters}
+        required = {
+            "allow_redirects",
+            "accept_encoding",
+            "content_callback",
+            "proxy",
+        }
+        if not accepts_kwargs and not required.issubset(names):
+            close = getattr(session, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            raise self._invalid_runtime()
+        return session
 
     def _session_for_current_thread(self) -> object:
         thread_id = threading.get_ident()
@@ -174,19 +313,130 @@ class _ThreadLocalCurlSession:
                 raise DefinitionError("curl session is closed")
             session = self._sessions.get(thread_id)
             if session is None:
-                factory = getattr(self._module, "Session", None)
-                if not callable(factory):
-                    raise DefinitionError("curl_cffi dependency is unavailable")
-                session = factory(impersonate=self._impersonate)
+                session = self._new_session()
                 self._sessions[thread_id] = session
             return session
 
-    def get(self, *args: object, **kwargs: object) -> object:
+    @staticmethod
+    def _web_error(reason: str) -> WebSafetyError:
+        error = WebSafetyError(reason)
+        try:
+            setattr(error, "reason", reason)
+        except Exception:
+            pass
+        return error
+
+    @staticmethod
+    def _resolve_rule(
+        target: NormalizedURL, addresses: tuple[str, ...]
+    ) -> str | None:
+        try:
+            ipaddress.ip_address(target.host)
+        except ValueError:
+            formatted = [
+                f"[{address}]" if ":" in address else address
+                for address in addresses
+            ]
+            if not formatted:
+                raise _ThreadLocalCurlSession._web_error("ssrf_blocked")
+            return f"{target.host}:{target.port}:{','.join(formatted)}"
+        return None
+
+    def get_pinned(
+        self,
+        target: NormalizedURL,
+        addresses: tuple[str, ...],
+        request: FetchRequest,
+        binding: ProviderBinding,
+    ) -> DirectResponse:
         session = self._session_for_current_thread()
-        getter = getattr(session, "get", None)
-        if not callable(getter):
-            raise DefinitionError("curl session has no GET operation")
-        return getter(*args, **kwargs)
+        requester = getattr(session, "request", None)
+        options = getattr(session, "curl_options", None)
+        if not callable(requester) or not isinstance(options, MutableMapping):
+            raise self._web_error("provider_error")
+        try:
+            remote_proxy = _curl_remote_dns_proxy(binding)
+        except DefinitionError:
+            raise self._web_error("provider_error") from None
+        options.clear()
+        if not remote_proxy:
+            rule = self._resolve_rule(target, addresses)
+            if rule is not None:
+                options[self._resolve_option] = [rule]
+        # A retained Session still owns per-worker cookies and browser state,
+        # but each guarded hop opens a fresh connection so a prior DNS answer
+        # cannot be reused after a rebind.
+        options[self._fresh_connect_option] = 1
+        options[self._forbid_reuse_option] = 1
+
+        limit = min(
+            binding.max_body_bytes,
+            request.quality.max_body_bytes,
+            MAX_BODY_BYTES,
+        )
+        chunks: list[bytes] = []
+        total = 0
+        overflowed = False
+
+        class BodyTooLarge(Exception):
+            pass
+
+        def receive(chunk: object) -> None:
+            nonlocal overflowed, total
+            try:
+                piece = bytes(chunk)
+            except Exception:
+                raise self._web_error("provider_error") from None
+            next_total = total + len(piece)
+            if next_total > limit:
+                overflowed = True
+                raise BodyTooLarge
+            total = next_total
+            chunks.append(piece)
+
+        kwargs: dict[str, object] = {
+            "headers": dict(request.target_headers),
+            "allow_redirects": False,
+            "accept_encoding": "gzip, deflate, br",
+            "content_callback": receive,
+        }
+        if binding.timeout is not None:
+            kwargs["timeout"] = binding.timeout.total_seconds()
+        if binding.proxy is not None:
+            kwargs["proxy"] = binding.proxy
+        try:
+            response = requester("GET", str(target), **kwargs)
+        except BodyTooLarge:
+            raise self._web_error("body_too_large") from None
+        except WebSafetyError:
+            raise
+        except BaseException:
+            if overflowed:
+                raise self._web_error("body_too_large") from None
+            raise self._web_error("provider_error") from None
+        try:
+            status_code = int(getattr(response, "status_code", 0) or 0)
+            headers = dict(getattr(response, "headers", {}) or {})
+            response_url = getattr(response, "url", None)
+            peer = None
+            if binding.proxy is None:
+                primary_ip = getattr(response, "primary_ip", None)
+                if primary_ip:
+                    peer = str(primary_ip)
+            return DirectResponse(
+                status_code=status_code,
+                headers=headers,
+                body=b"".join(chunks),
+                peer=peer,
+                url=str(response_url) if response_url is not None else str(target),
+                final_url=(
+                    str(response_url) if response_url is not None else str(target)
+                ),
+            )
+        except WebSafetyError:
+            raise
+        except BaseException:
+            raise self._web_error("provider_error") from None
 
     def close(self) -> None:
         with self._lock:
@@ -201,7 +451,7 @@ class _ThreadLocalCurlSession:
                 try:
                     close()
                 except Exception:
-                    _LOG.debug("curl session close failed", exc_info=True)
+                    _LOG.debug("curl_session_close_failed")
 
 
 def _binding_runtime_key(binding: ProviderBinding) -> str:
@@ -362,6 +612,16 @@ class WebRuntimeCatalog:
                 if warning not in self._warnings:
                     self._warnings.append(warning)
                     self._logger.warning(warning)
+            if binding.type == "curl_cffi" and _curl_remote_dns_proxy(
+                runtime_binding
+            ):
+                warning = (
+                    f"curl_cffi provider {binding.name} uses a remote-DNS proxy; "
+                    "target DNS/peer pinning cannot be verified"
+                )
+                if warning not in self._warnings:
+                    self._warnings.append(warning)
+                    self._logger.warning(warning)
             return provider
 
     def _configured_transport(self, binding: ProviderBinding) -> object | None:
@@ -420,10 +680,16 @@ class WebRuntimeCatalog:
         elif binding.type == "curl_cffi":
             try:
                 module = importlib.import_module("curl_cffi.requests")
+                curl_module = importlib.import_module("curl_cffi")
                 transport = _ThreadLocalCurlSession(
                     module,
-                    binding.options.get("impersonate", "chrome"),
+                    curl_module,
+                    provider_name=binding.name,
+                    impersonate=binding.options.get("impersonate", "chrome"),
+                    http_version=binding.options.get("http_version", "auto"),
                 )
+            except DefinitionError:
+                raise
             except Exception:
                 raise DefinitionError(
                     f"curl_cffi dependency is unavailable for provider {binding.name!r}"
@@ -435,18 +701,34 @@ class WebRuntimeCatalog:
             # precise missing-boundary error.
             transport = None
             owned = False
+        discard: object | None = None
+        reject_closed = False
+        result = transport
         with self._lock:
-            existing = self._transports.get(key)
-            if existing is not None:
-                if owned and existing is not transport:
-                    close = getattr(transport, "close", None)
-                    if callable(close):
-                        close()
-                return existing
-            self._transports[key] = transport
-            if owned and transport is not None:
-                self._owned_transports[id(transport)] = transport
-            return transport
+            if self._closed or self._closing:
+                reject_closed = True
+                if owned:
+                    discard = transport
+            else:
+                existing = self._transports.get(key)
+                if existing is not None:
+                    result = existing
+                    if owned and existing is not transport:
+                        discard = transport
+                else:
+                    self._transports[key] = transport
+                    if owned and transport is not None:
+                        self._owned_transports[id(transport)] = transport
+        if discard is not None:
+            close = getattr(discard, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    self._logger.debug("web_runtime_close_failed")
+        if reject_closed:
+            raise DefinitionError("web runtime catalog is closed")
+        return result
 
     def transport_for(self, binding: ProviderBinding) -> object | None:
         """Resolve a provider's already-owned transport for direct callers."""
@@ -472,7 +754,7 @@ class WebRuntimeCatalog:
             raise DefinitionError(
                 f"unsupported web provider type {binding.type!r} for {binding.name!r}"
             )
-        if binding.proxy is not None:
+        if binding.proxy is not None and binding.type != "curl_cffi":
             raise DefinitionError(
                 f"provider {binding.name!r} configures proxy, but direct provider "
                 "proxy transport is unavailable"
@@ -484,6 +766,12 @@ class WebRuntimeCatalog:
             raise DefinitionError(
                 f"startup_http provider {binding.name!r} requires trusted: true"
             )
+        if (
+            binding.type == "curl_cffi"
+            and binding.proxy is not None
+            and not str(binding.proxy).startswith("env:")
+        ):
+            _curl_remote_dns_proxy(binding)
 
     validate_provider = validate_provider_binding
 
@@ -502,6 +790,7 @@ class WebRuntimeCatalog:
     def extractor(self, binding: ExtractorBinding) -> object:
         if not isinstance(binding, ExtractorBinding):
             raise DefinitionError("extractor binding must be an ExtractorBinding")
+        validate_extractor_runtime(binding)
         key = (binding.name, _canonical_json(binding.semantic_projection() if hasattr(binding, "semantic_projection") else {"name": binding.name, "type": binding.type, "options": binding.options}))
         with self._lock:
             if self._closed or self._closing:
@@ -575,7 +864,7 @@ class WebRuntimeCatalog:
                     try:
                         close()
                     except Exception:
-                        self._logger.debug("web runtime close failed", exc_info=True)
+                        self._logger.debug("web_runtime_close_failed")
         finally:
             with self._lock:
                 self._closing = False

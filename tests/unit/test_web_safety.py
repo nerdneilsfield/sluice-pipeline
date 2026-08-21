@@ -63,6 +63,35 @@ def test_allowlisted_target_still_rejects_mixed_public_private_dns(monkeypatch):
         guard_resolved_addresses("example.test", policy)
 
 
+def test_non_public_literal_ip_requires_cidr_not_exact_host_allowlist(monkeypatch):
+    policy = {"allow_hosts": ["127.0.0.1"]}
+
+    with pytest.raises(WebSafetyError, match="ssrf_blocked"):
+        normalize_target_url("http://127.0.0.1/article", policy)
+
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["127.0.0.1"])
+    with pytest.raises(WebSafetyError, match="ssrf_blocked"):
+        guard_resolved_addresses("127.0.0.1", policy)
+
+
+def test_non_public_literal_ip_matching_cidr_is_allowed_by_static_and_dns_guards(
+    monkeypatch,
+):
+    policy = {"allow_cidrs": ["127.0.0.0/8"]}
+    target = normalize_target_url("http://127.0.0.1/article", policy)
+    assert target.host == "127.0.0.1"
+
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["127.0.0.1"])
+    assert guard_resolved_addresses("127.0.0.1", policy) == ("127.0.0.1",)
+
+
+def test_exact_hostname_allowlist_still_applies_to_private_dns_answer(monkeypatch):
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
+    assert guard_resolved_addresses(
+        "internal.example", {"allow_hosts": ["internal.example"]}
+    ) == ("10.0.0.8",)
+
+
 def test_protected_target_headers_are_rejected():
     with pytest.raises(WebSafetyError, match="forbidden_header"):
         validate_target_headers({"Host": "internal.test"})

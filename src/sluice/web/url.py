@@ -356,7 +356,13 @@ def resolve_host(host: str) -> list[str]:
 
 def _address_allowed(host: str, address: ipaddress._BaseAddress, policy: TargetPolicy) -> bool:
     normalized_host = host.lower().rstrip(".")
-    if normalized_host in policy.allow_hosts:
+    # Host allowlists name DNS identities.  A literal non-public address must
+    # be authorized by an explicit CIDR so the network scope is visible in
+    # configuration rather than smuggled through the hostname exception.
+    if (
+        _normalise_ip_for_policy(normalized_host) is None
+        and normalized_host in policy.allow_hosts
+    ):
         return True
     for cidr in policy.allow_cidrs:
         network = ipaddress.ip_network(cidr)

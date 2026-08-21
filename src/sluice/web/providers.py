@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import importlib
 import re
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup
 
@@ -20,7 +21,7 @@ from .contracts import (
 )
 from .extractors import build_extractor as _build_extractor
 from .http import DirectResponse, bounded_manual_get
-from .url import normalize_target_url
+from .url import TargetPolicy, normalize_target_url
 
 
 class WebProvider(Protocol):
@@ -258,76 +259,85 @@ class CurlCffiProvider:
     session: object | None = None
 
     def __post_init__(self) -> None:
-        if self.session is not None or _runtime_value(self.runtime, "curl_session") is not None:
-            return
-        try:
-            importlib.import_module("curl_cffi.requests")
-        except Exception:
-            raise DefinitionError(
-                f"curl_cffi dependency is unavailable for provider {self.binding.name!r}"
-            ) from None
-
-    def fetch(self, request: FetchRequest) -> DocumentArtifact:
-        session = (
+        transport = (
             self.session
             or _runtime_value(self.runtime, "curl_session")
             or _transport_for(self.runtime, self.binding)
         )
-        if session is None:
-            try:
-                module = importlib.import_module("curl_cffi.requests")
-                session = module.Session(impersonate=self.binding.options.get("impersonate", "chrome"))
-            except Exception:
-                raise DefinitionError(f"curl_cffi dependency is unavailable for provider {self.binding.name!r}") from None
-        adapter = _CurlTransport(
-            session,
-            timeout=None
-            if self.binding.timeout is None
-            else self.binding.timeout.total_seconds(),
+        if transport is None or not callable(getattr(transport, "get_pinned", None)):
+            raise DefinitionError(
+                f"curl_cffi runtime cannot enforce pinned streaming for provider "
+                f"{self.binding.name!r}"
+            ) from None
+        _curl_remote_dns_proxy(self.binding)
+
+    def fetch(self, request: FetchRequest) -> DocumentArtifact:
+        transport = (
+            self.session
+            or _runtime_value(self.runtime, "curl_session")
+            or _transport_for(self.runtime, self.binding)
         )
+        if transport is None or not callable(getattr(transport, "get_pinned", None)):
+            raise DefinitionError(
+                f"curl_cffi runtime cannot enforce pinned streaming for provider "
+                f"{self.binding.name!r}"
+            )
         response = _safe_fetch(
-            lambda: bounded_manual_get(request, self.binding, transport=adapter)
+            lambda: bounded_manual_get(request, self.binding, transport=transport)
         )
         return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
 
 
-@dataclass(frozen=True, slots=True)
-class _CurlTransport:
-    """Adapt curl_cffi's ``allow_redirects`` spelling to bounded_manual_get."""
+def _curl_remote_dns_proxy(binding: ProviderBinding) -> bool:
+    """Validate curl's proxy mode and report whether target DNS is remote."""
 
-    session: object
-    timeout: float | None
-
-    def get(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str] | None = None,
-        follow_redirects: bool = False,
-    ) -> object:
-        if follow_redirects:
-            raise WebSafetyError("provider_error")
-        getter = getattr(self.session, "get", None)
-        if not callable(getter):
-            raise WebSafetyError("provider_error")
-        try:
-            return getter(
-                url,
-                headers=dict(headers or {}),
-                allow_redirects=False,
-                timeout=self.timeout,
-            )
-        except TypeError:
-            # A deterministic test double may only expose ``get(url)``.  It
-            # remains inside the bounded transport boundary; redirects are
-            # not accepted from a call that cannot receive the explicit guard.
-            raise WebSafetyError("provider_error") from None
+    proxy = binding.proxy
+    if proxy is None:
+        return False
+    try:
+        parsed = urlsplit(proxy)
+        _ = parsed.port
+    except (TypeError, ValueError):
+        raise DefinitionError(
+            f"invalid proxy configuration for provider {binding.name!r}"
+        ) from None
+    if (
+        parsed.scheme not in {"http", "https", "socks5", "socks5h"}
+        or not parsed.hostname
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DefinitionError(
+            f"invalid proxy configuration for provider {binding.name!r}"
+        )
+    remote_dns = parsed.scheme in {"http", "https", "socks5h"}
+    policy = TargetPolicy.from_value(binding.target_policy)
+    if remote_dns and not policy.allow_remote_dns_proxy:
+        raise DefinitionError(
+            f"curl_cffi provider {binding.name!r} requires "
+            "allow_remote_dns_proxy: true for this proxy mode"
+        )
+    return remote_dns
 
 
 @dataclass(frozen=True, slots=True)
 class TrafilaturaProvider:
     binding: ProviderBinding
     runtime: object | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            module = importlib.import_module("trafilatura")
+        except Exception:
+            raise DefinitionError(
+                f"trafilatura dependency is unavailable for provider "
+                f"{self.binding.name!r}"
+            ) from None
+        if not callable(getattr(module, "extract", None)):
+            raise DefinitionError(
+                f"trafilatura dependency is unavailable for provider "
+                f"{self.binding.name!r}"
+            )
 
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
         internal = request
@@ -417,11 +427,13 @@ def build_provider(binding: ProviderBinding, runtime: object | None = None) -> W
     builder = CORE_PROVIDER_BUILDERS.get(binding.type)
     if builder is None:
         raise DefinitionError(f"unsupported web provider type {binding.type!r} for {binding.name!r}")
-    if binding.proxy is not None:
+    if binding.proxy is not None and binding.type != "curl_cffi":
         raise DefinitionError(
             f"provider {binding.name!r} configures proxy, but direct provider "
             "proxy transport is unavailable"
         )
+    if binding.type == "curl_cffi":
+        _curl_remote_dns_proxy(binding)
     try:
         return builder(binding, runtime)
     except DefinitionError:

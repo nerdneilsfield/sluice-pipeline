@@ -135,6 +135,48 @@ def test_terminal_missing_secret_does_not_block_startup_but_rebuild_fails(tmp_pa
     app.close()
 
 
+def test_terminal_optional_provider_is_structural_until_explicit_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                name="retired-article",
+                type="trafilatura",
+                capabilities=frozenset({"raw_html", "text", "markdown"}),
+                timeout=timedelta(seconds=30),
+                connect_timeout=timedelta(seconds=10),
+                timeout_seconds=30,
+            ),
+        ),
+        fetch_chain_name="retired",
+        extract_chain=(ExtractorBinding(name="identity", type="identity"),),
+        extract_chain_name="article",
+        output="artifact",
+    )
+    definition_path, execution_id = _retained_stage(
+        tmp_path=tmp_path, binding=binding
+    )
+    original_import = __import__("importlib").import_module
+
+    def missing(name: str, *args: object, **kwargs: object):
+        if name == "trafilatura":
+            raise ImportError("retired optional dependency is unavailable")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("sluice.web.providers.importlib.import_module", missing)
+    app = open_app(definition_path, tmp_path / "state.db")
+    try:
+        assert app.web_runtime_catalog is not None
+        assert dict(app.web_runtime_catalog.providers) == {}
+        with pytest.raises(DefinitionError, match="retired-article"):
+            from sluice.stage_runtime import rebuild_stage
+
+            rebuild_stage(app, execution_id, datetime.now(timezone.utc))
+    finally:
+        app.close()
+
+
 def test_queued_missing_secret_blocks_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("QUEUED_KEY", raising=False)
     binding = WebBinding(
