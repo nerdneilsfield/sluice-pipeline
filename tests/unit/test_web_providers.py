@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from threading import Event, Thread
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from sluice.web.contracts import (
     NO_MATCH,
     ProviderBinding,
     QualityPolicy,
+    WebBinding,
 )
 from sluice.web.http import DirectResponse
 from sluice.web.providers import build_provider
@@ -194,15 +196,205 @@ def test_catalog_httpx_uses_pinned_stream_and_decompressed_cap(monkeypatch) -> N
         catalog.close()
 
 
-def test_httpx_provider_rejects_configured_proxy_at_startup() -> None:
+@pytest.mark.parametrize("provider_type", ["httpx", "trafilatura"])
+def test_httpx_profiles_require_remote_dns_proxy_opt_in(
+    monkeypatch, provider_type: str
+) -> None:
+    if provider_type == "trafilatura":
+        monkeypatch.setattr(
+            "sluice.web.providers.importlib.import_module",
+            lambda name: type(
+                "TrafilaturaModule",
+                (),
+                {"extract": staticmethod(lambda *args, **kwargs: "body")},
+            )()
+            if name == "trafilatura"
+            else __import__(name),
+        )
     binding = ProviderBinding(
-        name="direct",
-        type="httpx",
-        capabilities=frozenset({"text"}),
+        name=f"{provider_type}-direct",
+        type=provider_type,
+        capabilities=(
+            frozenset({"text"})
+            if provider_type == "httpx"
+            else frozenset({"raw_html", "text", "markdown"})
+        ),
         proxy="http://proxy.example:8080",
     )
-    with pytest.raises(DefinitionError, match="proxy"):
+    with pytest.raises(DefinitionError, match="allow_remote_dns_proxy"):
         WebRuntimeCatalog((binding,))
+
+
+@pytest.mark.parametrize("provider_type", ["httpx", "trafilatura"])
+def test_httpx_profiles_use_resolved_proxy_but_guard_every_redirect_locally(
+    monkeypatch, caplog, provider_type: str
+) -> None:
+    secret = "credential-that-must-not-be-logged"
+    resolved_proxy = f"http://proxy-user:{secret}@proxy.example:8080"
+    monkeypatch.setenv("DIRECT_PROXY", resolved_proxy)
+    if provider_type == "trafilatura":
+        monkeypatch.setattr(
+            "sluice.web.providers.importlib.import_module",
+            lambda name: type(
+                "TrafilaturaModule",
+                (),
+                {"extract": staticmethod(lambda *args, **kwargs: "body")},
+            )()
+            if name == "trafilatura"
+            else __import__(name),
+        )
+
+    requests: list[object] = []
+    created: list[object] = []
+
+    class Stream:
+        def get_extra_info(self, name: str):
+            return ("10.0.0.8", 8080) if name == "server_addr" else None
+
+    class Response:
+        status_code = 302
+        headers = {"location": "http://127.0.0.1/metadata"}
+
+        def __init__(self, request: object) -> None:
+            self.url = getattr(request, "url")
+            self.extensions = {"network_stream": Stream()}
+
+        def iter_bytes(self):
+            yield b""
+
+        def close(self) -> None:
+            pass
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            created.append(self)
+
+        def send(self, request: object, *, stream: bool = False):
+            assert stream is True
+            requests.append(request)
+            return Response(request)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.Client", Client)
+    resolutions: list[str] = []
+
+    def resolve(host: str) -> list[str]:
+        resolutions.append(host)
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr("sluice.web.url.resolve_host", resolve)
+    binding = ProviderBinding(
+        name=f"{provider_type}-remote-proxy",
+        type=provider_type,
+        capabilities=(
+            frozenset({"text"})
+            if provider_type == "httpx"
+            else frozenset({"raw_html", "text", "markdown"})
+        ),
+        proxy="env:DIRECT_PROXY",
+        target_policy={"allow_remote_dns_proxy": True},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="sluice.web.registry"):
+        catalog = WebRuntimeCatalog((binding,))
+    try:
+        with pytest.raises(WebSafetyError, match="ssrf_blocked"):
+            catalog.provider(binding).fetch(
+                _request(acceptable=frozenset({"text"}))
+            )
+
+        assert resolutions == ["example.test"]
+        assert len(requests) == 1
+        assert str(getattr(requests[0], "url")) == "https://example.test/article"
+        assert "sluice.addresses" not in getattr(requests[0], "extensions")
+        assert created[0].kwargs["proxy"] == resolved_proxy
+        assert any(
+            provider_type in warning
+            and "pinning cannot be verified" in warning
+            for warning in catalog.warnings
+        )
+        persisted = str(WebBinding(fetch_chain=(binding,)).semantic_projection())
+        assert "env:DIRECT_PROXY" in persisted
+        assert secret not in persisted
+        assert secret not in str(catalog.warnings)
+        assert secret not in caplog.text
+    finally:
+        catalog.close()
+
+
+def test_httpx_socks5_proxy_keeps_approved_target_address_and_original_identity(
+    monkeypatch,
+) -> None:
+    requests: list[object] = []
+    created: list[object] = []
+
+    class Stream:
+        def get_extra_info(self, name: str):
+            return ("10.0.0.8", 1080) if name == "server_addr" else None
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "text/plain"}
+
+        def __init__(self, request: object) -> None:
+            self.url = getattr(request, "url")
+            self.extensions = {"network_stream": Stream()}
+
+        def iter_bytes(self):
+            yield b"ok"
+
+        def close(self) -> None:
+            pass
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            created.append(self)
+
+        def send(self, request: object, *, stream: bool = False):
+            assert stream is True
+            requests.append(request)
+            if len(requests) == 1:
+                raise OSError("first approved target address is unavailable")
+            return Response(request)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.Client", Client)
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host",
+        lambda host: ["93.184.216.34", "93.184.216.35"],
+    )
+    binding = ProviderBinding(
+        name="httpx-local-proxy",
+        type="httpx",
+        capabilities=frozenset({"text"}),
+        proxy="socks5://proxy.example:1080",
+    )
+
+    catalog = WebRuntimeCatalog((binding,))
+    try:
+        artifact = catalog.provider(binding).fetch(
+            _request(acceptable=frozenset({"text"}))
+        )
+
+        assert artifact.text == "ok"
+        assert artifact.final_url == "https://example.test/article"
+        assert created[0].kwargs["proxy"] == "socks5://proxy.example:1080"
+        assert [str(getattr(sent, "url")) for sent in requests] == [
+            "https://93.184.216.34/article",
+            "https://93.184.216.35/article",
+        ]
+        sent = requests[-1]
+        assert getattr(sent, "headers")["host"] == "example.test"
+        assert getattr(sent, "extensions")["sni_hostname"] == "example.test"
+        assert not catalog.warnings
+    finally:
+        catalog.close()
 
 
 def test_startup_http_requires_trust_and_has_no_peer_claim() -> None:

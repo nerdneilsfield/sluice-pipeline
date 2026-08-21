@@ -34,6 +34,20 @@ def test_unsafe_target_urls_are_rejected(url):
         normalize_target_url(url)
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "0x7f000001",
+        "0x7f.0.0.1",
+        "127.0x0.0.1",
+        "0177.0.0.1",
+    ],
+)
+def test_noncanonical_mixed_base_ipv4_aliases_are_rejected_before_dns(host):
+    with pytest.raises(WebSafetyError, match="bad_url"):
+        normalize_target_url(f"http://{host}/metadata")
+
+
 def test_url_normalization_is_idna_canonical_and_diagnostics_are_redacted():
     target = normalize_target_url("HTTPS://Bücher.Example.:443/a%20b?q=one&token=secret#frag")
     assert target.host == "xn--bcher-kva.example"

@@ -28,6 +28,7 @@ _PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTROL = re.compile(r"[\x00-\x20\x7f]")
 _HEADER_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _NUMERIC_HOST = re.compile(r"^(?:0[xX][0-9A-Fa-f]+|[0-9]+|[0-9.]+)$")
+_NUMERIC_IPV4_COMPONENT = re.compile(r"^(?:0[xX][0-9A-Fa-f]+|[0-9]+)$")
 _SAFE_HEADER_NAME = re.compile(r"^[^\x00-\x20\x7f:]+$")
 _FORBIDDEN_HEADERS = frozenset(
     {
@@ -89,10 +90,13 @@ def _idna_host(host: str) -> str:
     # literals.  Canonical dotted decimal IPv4 is handled by ipaddress below.
     if _NUMERIC_HOST.fullmatch(host) and "." not in host:
         raise _error("bad_url")
-    if "." in host and all(label.isdigit() for label in host.split(".")):
-        # Numeric dotted hosts must be canonical four-octet IPv4.  Reject
-        # shortened (127.1), overflow (1.2.3.999), and zero-padded spellings
-        # which can otherwise be interpreted differently by resolvers.
+    if "." in host and all(
+        _NUMERIC_IPV4_COMPONENT.fullmatch(label) for label in host.split(".")
+    ):
+        # Numeric dotted hosts must be canonical four-octet decimal IPv4.
+        # Reject shortened (127.1), overflow (1.2.3.999), zero-padded, and
+        # mixed-base spellings (0x7f.0.0.1) which libc resolvers may interpret
+        # as an address even though ``ipaddress`` correctly refuses them.
         try:
             parsed_ip = ipaddress.ip_address(host)
         except ValueError:

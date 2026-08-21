@@ -291,6 +291,12 @@ class CurlCffiProvider:
 def _curl_remote_dns_proxy(binding: ProviderBinding) -> bool:
     """Validate curl's proxy mode and report whether target DNS is remote."""
 
+    return _direct_remote_dns_proxy(binding)
+
+
+def _direct_remote_dns_proxy(binding: ProviderBinding) -> bool:
+    """Validate a direct-provider proxy and report its target DNS mode."""
+
     proxy = binding.proxy
     if proxy is None:
         return False
@@ -314,7 +320,7 @@ def _curl_remote_dns_proxy(binding: ProviderBinding) -> bool:
     policy = TargetPolicy.from_value(binding.target_policy)
     if remote_dns and not policy.allow_remote_dns_proxy:
         raise DefinitionError(
-            f"curl_cffi provider {binding.name!r} requires "
+            f"{binding.type} provider {binding.name!r} requires "
             "allow_remote_dns_proxy: true for this proxy mode"
         )
     return remote_dns
@@ -427,13 +433,13 @@ def build_provider(binding: ProviderBinding, runtime: object | None = None) -> W
     builder = CORE_PROVIDER_BUILDERS.get(binding.type)
     if builder is None:
         raise DefinitionError(f"unsupported web provider type {binding.type!r} for {binding.name!r}")
-    if binding.proxy is not None and binding.type != "curl_cffi":
-        raise DefinitionError(
-            f"provider {binding.name!r} configures proxy, but direct provider "
-            "proxy transport is unavailable"
-        )
-    if binding.type == "curl_cffi":
-        _curl_remote_dns_proxy(binding)
+    if binding.proxy is not None:
+        if binding.type not in {"httpx", "curl_cffi", "trafilatura"}:
+            raise DefinitionError(
+                f"provider {binding.name!r} configures proxy, but direct provider "
+                "proxy transport is unavailable"
+            )
+        _direct_remote_dns_proxy(binding)
     try:
         return builder(binding, runtime)
     except DefinitionError:

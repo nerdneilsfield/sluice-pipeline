@@ -32,6 +32,7 @@ from .providers import (
     CORE_PROVIDER_BUILDERS,
     WebProvider,
     _curl_remote_dns_proxy,
+    _direct_remote_dns_proxy,
     build_provider,
 )
 from .url import NormalizedURL
@@ -596,7 +597,9 @@ class WebRuntimeCatalog:
             # Construct the direct transport once at registration time.  A
             # provider fetch must never fall back to constructing an unowned
             # HTTPX client or curl session for an individual Item.
-            transport = self._transport_for_binding(binding, key)
+            transport = self._transport_for_binding(
+                binding, key, runtime_binding=runtime_binding
+            )
             provider_runtime = SimpleNamespace(
                 http_client=self._http_client,
                 curl_session=transport if binding.type == "curl_cffi" else None,
@@ -612,11 +615,12 @@ class WebRuntimeCatalog:
                 if warning not in self._warnings:
                     self._warnings.append(warning)
                     self._logger.warning(warning)
-            if binding.type == "curl_cffi" and _curl_remote_dns_proxy(
-                runtime_binding
+            if (
+                binding.type in {"httpx", "curl_cffi", "trafilatura"}
+                and _direct_remote_dns_proxy(runtime_binding)
             ):
                 warning = (
-                    f"curl_cffi provider {binding.name} uses a remote-DNS proxy; "
+                    f"{binding.type} provider {binding.name} uses a remote-DNS proxy; "
                     "target DNS/peer pinning cannot be verified"
                 )
                 if warning not in self._warnings:
@@ -651,13 +655,20 @@ class WebRuntimeCatalog:
                 return found
         return None
 
-    def _transport_for_binding(self, binding: ProviderBinding, key: str) -> object | None:
+    def _transport_for_binding(
+        self,
+        binding: ProviderBinding,
+        key: str,
+        *,
+        runtime_binding: ProviderBinding | None = None,
+    ) -> object | None:
         with self._lock:
             if self._closed or self._closing:
                 raise DefinitionError("web runtime catalog is closed")
             if key in self._transports:
                 return self._transports[key]
         configured = self._configured_transport(binding)
+        executable_binding = runtime_binding or binding
         if configured is not None:
             transport = configured
             owned = False
@@ -666,16 +677,26 @@ class WebRuntimeCatalog:
                 import httpx
 
                 timeout = None
-                if binding.timeout is not None:
+                if executable_binding.timeout is not None:
                     timeout = httpx.Timeout(
-                        binding.timeout.total_seconds(),
-                        connect=(binding.connect_timeout or binding.timeout).total_seconds(),
+                        executable_binding.timeout.total_seconds(),
+                        connect=(
+                            executable_binding.connect_timeout
+                            or executable_binding.timeout
+                        ).total_seconds(),
                     )
-                transport = _PooledPinnedHTTPXClient(timeout=timeout)
-            except Exception as error:
+                remote_dns_proxy = _direct_remote_dns_proxy(executable_binding)
+                transport = _PooledPinnedHTTPXClient(
+                    timeout=timeout,
+                    proxy=executable_binding.proxy,
+                    remote_dns_proxy=remote_dns_proxy,
+                )
+            except DefinitionError:
+                raise
+            except Exception:
                 raise DefinitionError(
                     f"cannot create HTTPX client for provider {binding.name!r}"
-                ) from error
+                ) from None
             owned = True
         elif binding.type == "curl_cffi":
             try:
@@ -754,7 +775,11 @@ class WebRuntimeCatalog:
             raise DefinitionError(
                 f"unsupported web provider type {binding.type!r} for {binding.name!r}"
             )
-        if binding.proxy is not None and binding.type != "curl_cffi":
+        if binding.proxy is not None and binding.type not in {
+            "httpx",
+            "curl_cffi",
+            "trafilatura",
+        }:
             raise DefinitionError(
                 f"provider {binding.name!r} configures proxy, but direct provider "
                 "proxy transport is unavailable"
@@ -766,12 +791,8 @@ class WebRuntimeCatalog:
             raise DefinitionError(
                 f"startup_http provider {binding.name!r} requires trusted: true"
             )
-        if (
-            binding.type == "curl_cffi"
-            and binding.proxy is not None
-            and not str(binding.proxy).startswith("env:")
-        ):
-            _curl_remote_dns_proxy(binding)
+        if binding.proxy is not None and not str(binding.proxy).startswith("env:"):
+            _direct_remote_dns_proxy(binding)
 
     validate_provider = validate_provider_binding
 

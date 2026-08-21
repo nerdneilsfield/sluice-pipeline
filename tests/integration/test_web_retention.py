@@ -177,6 +177,45 @@ def test_terminal_optional_provider_is_structural_until_explicit_rebuild(
         app.close()
 
 
+@pytest.mark.parametrize("provider_type", ["httpx", "trafilatura"])
+def test_terminal_supported_proxy_is_structural_without_secret_resolution_or_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_type: str,
+) -> None:
+    monkeypatch.delenv("RETIRED_PROXY", raising=False)
+    binding = WebBinding(
+        fetch_chain=(
+            ProviderBinding(
+                name=f"retired-{provider_type}",
+                type=provider_type,
+                proxy="env:RETIRED_PROXY",
+                target_policy={"allow_remote_dns_proxy": True},
+                capabilities=(
+                    frozenset({"text"})
+                    if provider_type == "httpx"
+                    else frozenset({"raw_html", "text", "markdown"})
+                ),
+                timeout=timedelta(seconds=30),
+                connect_timeout=timedelta(seconds=10),
+                timeout_seconds=30,
+            ),
+        ),
+        fetch_chain_name="retired-proxy",
+        extract_chain=(ExtractorBinding(name="identity", type="identity"),),
+        extract_chain_name="article",
+        output="artifact",
+    )
+    definition_path, _ = _retained_stage(tmp_path=tmp_path, binding=binding)
+
+    app = open_app(definition_path, tmp_path / "state.db")
+    try:
+        assert app.web_runtime_catalog is not None
+        assert dict(app.web_runtime_catalog.providers) == {}
+    finally:
+        app.close()
+
+
 def test_queued_missing_secret_blocks_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("QUEUED_KEY", raising=False)
     binding = WebBinding(

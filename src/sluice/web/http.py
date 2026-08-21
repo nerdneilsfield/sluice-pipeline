@@ -12,7 +12,7 @@ import ipaddress
 from types import MappingProxyType
 import threading
 from typing import Any, Callable, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import httpcore
@@ -174,14 +174,27 @@ class _PooledPinnedHTTPXClient:
     preserving the target hostname for HTTP Host/TLS/SNI.
     """
 
-    def __init__(self, *, timeout: Any = None):
-        self._transport = _PinnedHTTPTransport()
-        self._client = httpx.Client(
-            transport=self._transport,
-            follow_redirects=False,
-            timeout=timeout,
-            trust_env=False,
-        )
+    def __init__(
+        self,
+        *,
+        timeout: Any = None,
+        proxy: str | None = None,
+        remote_dns_proxy: bool = False,
+    ):
+        self._proxy = proxy is not None
+        self._remote_dns_proxy = bool(remote_dns_proxy)
+        client_options: dict[str, Any] = {
+            "follow_redirects": False,
+            "timeout": timeout,
+            "trust_env": False,
+        }
+        if proxy is None:
+            self._transport: _PinnedHTTPTransport | None = _PinnedHTTPTransport()
+            client_options["transport"] = self._transport
+        else:
+            self._transport = None
+            client_options["proxy"] = proxy
+        self._client = httpx.Client(**client_options)
         self._lock = threading.RLock()
         self._closed = False
 
@@ -199,30 +212,76 @@ class _PooledPinnedHTTPXClient:
         outgoing_headers = _validate_transport_headers(
             request.target_headers, binding
         )
-        http_request = httpx.Request(
-            "GET",
-            str(target),
-            headers=outgoing_headers,
-            extensions={"sluice.addresses": tuple(addresses)},
+        local_proxy = self._proxy and not self._remote_dns_proxy
+        if local_proxy and not addresses:
+            raise _error("ssrf_blocked")
+        candidates: tuple[str | None, ...] = (
+            tuple(addresses) if local_proxy else (None,)
         )
-        try:
-            response = client.send(http_request, stream=True)
-        except WebSafetyError:
-            raise
-        except httpx.TimeoutException:
-            raise _error("timeout") from None
-        except (httpx.HTTPError, OSError):
-            raise _error("network") from None
-        except Exception:
-            raise _error("provider_error") from None
+        response: Any = None
+        for index, address in enumerate(candidates):
+            request_url = str(target)
+            extensions: dict[str, Any] = {}
+            candidate_headers = dict(outgoing_headers)
+            if not self._proxy:
+                extensions["sluice.addresses"] = tuple(addresses)
+            elif address is not None:
+                address_host = f"[{address}]" if ":" in address else address
+                default_port = (
+                    target.scheme == "http" and target.port == 80
+                ) or (target.scheme == "https" and target.port == 443)
+                netloc = (
+                    address_host
+                    if default_port
+                    else f"{address_host}:{target.port}"
+                )
+                request_url = urlunsplit(
+                    (target.scheme, netloc, target.path or "/", target.query, "")
+                )
+                # SOCKS receives only an approved literal address.  HTTP
+                # still identifies the original target, and HTTPS verifies
+                # it with the original TLS SNI name.
+                candidate_headers["Host"] = target.netloc
+                if target.scheme == "https":
+                    extensions["sni_hostname"] = target.host
+            http_request = httpx.Request(
+                "GET",
+                request_url,
+                headers=candidate_headers,
+                extensions=extensions,
+            )
+            try:
+                response = client.send(http_request, stream=True)
+                break
+            except WebSafetyError:
+                raise
+            except httpx.TimeoutException:
+                if local_proxy and index + 1 < len(candidates):
+                    continue
+                raise _error("timeout") from None
+            except (httpx.HTTPError, OSError):
+                if local_proxy and index + 1 < len(candidates):
+                    continue
+                raise _error("network") from None
+            except Exception:
+                raise _error("provider_error") from None
+        if response is None:
+            raise _error("network")
         try:
             # The cap is applied while iterating the decompressed response
             # stream; HTTPX never gets a chance to buffer an unbounded body.
             try:
-                return read_decompressed_limited(
+                detached = read_decompressed_limited(
                     response,
                     min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES),
                 )
+                if self._proxy:
+                    # The observable socket peer is the declared proxy, not
+                    # the target.  Do not misrepresent it as target evidence.
+                    detached.peer = None
+                    detached.url = str(target)
+                    detached.final_url = str(target)
+                return detached
             except WebSafetyError:
                 raise
             except httpx.TimeoutException:
