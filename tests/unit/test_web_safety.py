@@ -327,6 +327,28 @@ def test_service_get_rejects_target_protected_headers_and_allows_private_http(mo
     ).body == b"ok"
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "10.0.0.8"])
+def test_service_get_allows_operator_controlled_private_literal_endpoint(host):
+    transport = _FakeTransport(
+        [
+            DirectResponse(
+                status_code=200,
+                headers={"content-type": "text/plain"},
+                body=b"ok",
+                peer=host,
+            )
+        ],
+        requests=[],
+    )
+    base_url = f"http://{host}:8080"
+    binding = ProviderBinding("local", "crawl4ai", base_url=base_url)
+
+    response = bounded_service_get(f"{base_url}/v1", binding, transport=transport)
+
+    assert response.body == b"ok"
+    assert transport.requests == [(f"{base_url}/v1", {})]
+
+
 def test_public_service_requires_https_and_transport_errors_are_safe(monkeypatch):
     monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     binding = ProviderBinding("cloud", "firecrawl", base_url="http://api.example.test")

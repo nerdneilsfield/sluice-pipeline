@@ -8,6 +8,7 @@ adapter, while production calls use an HTTPX client with redirects disabled.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ipaddress
 from types import MappingProxyType
 import threading
 from typing import Any, Callable, Mapping
@@ -565,10 +566,21 @@ def _service_endpoint(value: str) -> tuple[NormalizedURL, TargetPolicy]:
         raise _error("bad_url") from None
     if not host:
         raise _error("bad_url")
-    # ``TargetPolicy`` is intentionally exact-host based: this permits a
-    # private localhost/self-host service while still rejecting all other
-    # private target URLs.
-    policy = TargetPolicy(allow_hosts=(host,))
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if isinstance(literal, ipaddress.IPv6Address) and literal.ipv4_mapped is not None:
+        literal = literal.ipv4_mapped
+    # Service bases are operator-controlled.  Give a private literal only its
+    # exact /32 or /128 service exception; target ``allow_hosts`` semantics
+    # continue to require an explicitly configured CIDR for literal targets.
+    service_cidrs = (
+        (str(literal),)
+        if literal is not None and is_non_public_address(str(literal))
+        else ()
+    )
+    policy = TargetPolicy(allow_hosts=(host,), allow_cidrs=service_cidrs)
     return normalize_target_url(value, policy), policy
 
 
