@@ -11,7 +11,13 @@ from typing import Any, Protocol
 from bs4 import BeautifulSoup
 
 from ..errors import DefinitionError, ExecutionError, WebSafetyError
-from .contracts import DocumentArtifact, ExtractorBinding, FetchRequest, ProviderBinding
+from .contracts import (
+    DocumentArtifact,
+    ExtractorBinding,
+    FetchRequest,
+    NO_MATCH,
+    ProviderBinding,
+)
 from .extractors import build_extractor as _build_extractor
 from .http import DirectResponse, bounded_manual_get
 from .url import normalize_target_url
@@ -339,6 +345,8 @@ class TrafilaturaProvider:
         if not {"markdown", "text"}.intersection(request.acceptable):
             return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
         markdown = _trafilatura_markdown(base.raw_html, self.binding.options)
+        if markdown is NO_MATCH:
+            return NO_MATCH
         fields: dict[str, Any] = {"source_url": base.source_url, "final_url": base.final_url, "status_code": base.status_code, "content_type": base.content_type, "provider_instance": self.binding.name, "provider_type": self.binding.type, "capabilities": frozenset()}
         if "raw_html" in request.acceptable:
             fields["raw_html"] = base.raw_html
@@ -364,19 +372,18 @@ def _visible_text(value: str) -> str:
         return " ".join(value.split())
 
 
-def _trafilatura_markdown(raw_html: str, options: Mapping[str, Any]) -> str:
+def _trafilatura_markdown(raw_html: str, options: Mapping[str, Any]) -> str | object:
     try:
         module = importlib.import_module("trafilatura")
     except Exception:
-        module = None
-    if module is not None:
-        try:
-            result = module.extract(raw_html, output_format="markdown", include_tables=bool(options.get("include_tables", True)), include_comments=bool(options.get("include_comments", False)), favor_precision=bool(options.get("favor_precision", False)), favor_recall=bool(options.get("favor_recall", False)))
-            if isinstance(result, str) and result.strip():
-                return result.strip()
-        except Exception:
-            pass
-    return _visible_text(raw_html)
+        return NO_MATCH
+    try:
+        result = module.extract(raw_html, output_format="markdown", include_tables=bool(options.get("include_tables", True)), include_comments=bool(options.get("include_comments", False)), favor_precision=bool(options.get("favor_precision", False)), favor_recall=bool(options.get("favor_recall", False)))
+    except Exception:
+        return NO_MATCH
+    if isinstance(result, str) and result.strip():
+        return result.strip()
+    return NO_MATCH
 
 
 def build_httpx_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
@@ -410,6 +417,11 @@ def build_provider(binding: ProviderBinding, runtime: object | None = None) -> W
     builder = CORE_PROVIDER_BUILDERS.get(binding.type)
     if builder is None:
         raise DefinitionError(f"unsupported web provider type {binding.type!r} for {binding.name!r}")
+    if binding.proxy is not None:
+        raise DefinitionError(
+            f"provider {binding.name!r} configures proxy, but direct provider "
+            "proxy transport is unavailable"
+        )
     try:
         return builder(binding, runtime)
     except DefinitionError:

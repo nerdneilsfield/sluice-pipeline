@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
+import threading
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
@@ -91,10 +92,46 @@ class _PinnedResponseStream(httpx.SyncByteStream):
 class _PinnedHTTPTransport(httpx.BaseTransport):
     """Small HTTPX adapter retaining the original host for Host/TLS/SNI."""
 
-    def __init__(self, addresses: tuple[str, ...]):
-        self._pool = httpcore.ConnectionPool(network_backend=_PinnedSyncBackend(addresses))
+    def __init__(self, addresses: tuple[str, ...] | None = None):
+        self._lock = threading.RLock()
+        self._closed = False
+        self._addresses = tuple(addresses or ())
+        self._pools: dict[tuple[str, ...], httpcore.ConnectionPool] = {}
+        # Keep the historical attribute for fixed-address callers while the
+        # catalog-owned transport lazily creates one pooled connection pool
+        # per approved DNS answer set.
+        self._pool: httpcore.ConnectionPool | None = None
+        if self._addresses:
+            self._pool = self._pool_for(self._addresses)
+
+    def _pool_for(self, addresses: tuple[str, ...]) -> httpcore.ConnectionPool:
+        addresses = tuple(addresses)
+        if not addresses:
+            raise OSError("no approved peer address")
+        with self._lock:
+            if self._closed:
+                raise OSError("pinned transport is closed")
+            existing = self._pools.get(addresses)
+            if existing is not None:
+                return existing
+            pool = httpcore.ConnectionPool(
+                network_backend=_PinnedSyncBackend(addresses)
+            )
+            self._pools[addresses] = pool
+            if self._pool is None:
+                self._pool = pool
+            return pool
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        extension_addresses = request.extensions.get("sluice.addresses")
+        if extension_addresses is None:
+            addresses = self._addresses
+        else:
+            try:
+                addresses = tuple(str(address) for address in extension_addresses)
+            except (TypeError, ValueError):
+                raise OSError("invalid approved peer addresses") from None
+        pool = self._pool_for(addresses)
         core_request = httpcore.Request(
             method=request.method,
             url=httpcore.URL(
@@ -107,7 +144,7 @@ class _PinnedHTTPTransport(httpx.BaseTransport):
             content=request.stream,
             extensions=request.extensions,
         )
-        response = self._pool.handle_request(core_request)
+        response = pool.handle_request(core_request)
         return httpx.Response(
             status_code=response.status,
             headers=response.headers,
@@ -117,7 +154,92 @@ class _PinnedHTTPTransport(httpx.BaseTransport):
         )
 
     def close(self) -> None:
-        self._pool.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            pools = tuple(self._pools.values())
+            self._pools.clear()
+            self._pool = None
+        for pool in pools:
+            pool.close()
+
+
+class _PooledPinnedHTTPXClient:
+    """Reusable HTTPX client that streams through the pinned transport.
+
+    DNS answers are supplied by :func:`bounded_manual_get` for every redirect
+    hop.  The transport keeps a connection pool per approved answer set while
+    preserving the target hostname for HTTP Host/TLS/SNI.
+    """
+
+    def __init__(self, *, timeout: Any = None):
+        self._transport = _PinnedHTTPTransport()
+        self._client = httpx.Client(
+            transport=self._transport,
+            follow_redirects=False,
+            timeout=timeout,
+            trust_env=False,
+        )
+        self._lock = threading.RLock()
+        self._closed = False
+
+    def get_pinned(
+        self,
+        target: NormalizedURL,
+        addresses: tuple[str, ...],
+        request: FetchRequest,
+        binding: ProviderBinding,
+    ) -> DirectResponse:
+        with self._lock:
+            if self._closed:
+                raise OSError("pinned HTTPX client is closed")
+            client = self._client
+        outgoing_headers = _validate_transport_headers(
+            request.target_headers, binding
+        )
+        http_request = httpx.Request(
+            "GET",
+            str(target),
+            headers=outgoing_headers,
+            extensions={"sluice.addresses": tuple(addresses)},
+        )
+        try:
+            response = client.send(http_request, stream=True)
+        except WebSafetyError:
+            raise
+        except httpx.TimeoutException:
+            raise _error("timeout") from None
+        except (httpx.HTTPError, OSError):
+            raise _error("network") from None
+        except Exception:
+            raise _error("provider_error") from None
+        try:
+            # The cap is applied while iterating the decompressed response
+            # stream; HTTPX never gets a chance to buffer an unbounded body.
+            try:
+                return read_decompressed_limited(
+                    response,
+                    min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES),
+                )
+            except WebSafetyError:
+                raise
+            except httpx.TimeoutException:
+                raise _error("timeout") from None
+            except (httpx.HTTPError, OSError):
+                raise _error("network") from None
+            except Exception:
+                raise _error("provider_error") from None
+        finally:
+            response.close()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            client = self._client
+        client.close()
 
 
 def _error(reason: str) -> WebSafetyError:
@@ -484,6 +606,12 @@ def _send_injected(
     request: FetchRequest,
     binding: ProviderBinding,
 ) -> Any:
+    pinned_get = getattr(transport, "get_pinned", None)
+    if callable(pinned_get):
+        # Catalog-owned HTTPX clients must use this path.  Passing their
+        # ordinary ``Client.get`` would let HTTPX resolve the target again
+        # and would buffer the response before the decompressed cap runs.
+        return pinned_get(target, addresses, request, binding)
     if callable(transport):
         return _invoke_callable(transport, target, addresses, request, binding)
     getter = getattr(transport, "get", None)

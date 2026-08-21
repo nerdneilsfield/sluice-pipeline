@@ -21,6 +21,7 @@ from typing import Any
 from ..errors import DefinitionError
 from .contracts import ExtractorBinding, ProviderBinding, WebBinding
 from .extractors import EXTRACTOR_FORMATS, build_extractor
+from .http import _PooledPinnedHTTPXClient
 from .providers import CORE_PROVIDER_BUILDERS, WebProvider, build_provider
 
 
@@ -410,11 +411,7 @@ class WebRuntimeCatalog:
                         binding.timeout.total_seconds(),
                         connect=(binding.connect_timeout or binding.timeout).total_seconds(),
                     )
-                transport = httpx.Client(
-                    follow_redirects=False,
-                    timeout=timeout,
-                    trust_env=False,
-                )
+                transport = _PooledPinnedHTTPXClient(timeout=timeout)
             except Exception as error:
                 raise DefinitionError(
                     f"cannot create HTTPX client for provider {binding.name!r}"
@@ -474,6 +471,11 @@ class WebRuntimeCatalog:
         if binding.type not in CORE_PROVIDER_BUILDERS:
             raise DefinitionError(
                 f"unsupported web provider type {binding.type!r} for {binding.name!r}"
+            )
+        if binding.proxy is not None:
+            raise DefinitionError(
+                f"provider {binding.name!r} configures proxy, but direct provider "
+                "proxy transport is unavailable"
             )
         # Reconstruct the immutable binding so malformed nested values are
         # rejected while unresolved env references remain untouched.
