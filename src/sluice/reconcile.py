@@ -1317,12 +1317,49 @@ def reconcile(app: App, pipeline_name: str, node_name: str, at: datetime) -> Non
 def recover_startup(app: App, at: datetime) -> None:
     """Recover interrupted Source/Stage attempts exactly once per startup."""
 
+    from .config import decode_stage_snapshot
+    from .stage_runtime import _fail_execution
+    from .delivery import _recover_deliveries
+
+    # Remove legacy waiters before releasing any superseded owner claim.  This
+    # prevents normal claim promotion from turning a retained legacy waiter
+    # into a newly queued execution during the same startup transition.
+    waiter_rows = app.conn.execute(
+        "SELECT stage_name,lookup_key,waiting_sequence,config_json "
+        "FROM materialization_waiters"
+    ).fetchall()
+    with write_transaction(app.conn):
+        for waiter in waiter_rows:
+            try:
+                snapshot = decode_stage_snapshot(json.loads(str(waiter["config_json"])))
+                legacy = any(
+                    task.use
+                    in {
+                        "sluice.tasks.fetch_webpage",
+                        "sluice.tasks.extract_content",
+                        "sluice.tasks.to_markdown",
+                        "sluice.tasks.to_text",
+                    }
+                    and task.web_binding is None
+                    for task in snapshot.tasks
+                )
+            except Exception:
+                legacy = False
+            if legacy:
+                app.conn.execute(
+                    "DELETE FROM materialization_waiters WHERE stage_name=? AND lookup_key=? "
+                    "AND waiting_sequence=?",
+                    (
+                        waiter["stage_name"],
+                        waiter["lookup_key"],
+                        waiter["waiting_sequence"],
+                    ),
+                )
+
     rows = app.conn.execute(
         "SELECT id,kind,state,source_name,config_json,binding_digest FROM executions "
         "WHERE state IN ('queued','running') ORDER BY id"
     ).fetchall()
-    from .stage_runtime import _fail_execution
-    from .delivery import _recover_deliveries
 
     for row in rows:
         execution_id = int(row["id"])
@@ -1331,8 +1368,6 @@ def recover_startup(app: App, at: datetime) -> None:
         binding_changed = False
         if kind == "stage":
             try:
-                from .config import decode_stage_snapshot
-
                 snapshot = decode_stage_snapshot(json.loads(str(row["config_json"])))
                 legacy = any(
                     task.use
@@ -1359,6 +1394,15 @@ def recover_startup(app: App, at: datetime) -> None:
             else:
                 binding_changed = str(row["binding_digest"] or "") != source_binding_digest(str(source_name), configured)
                 legacy = configured.use in {"sluice.sources.rss", "sluice.sources.webpage"} and configured.web_binding is None
+        if kind == "stage" and legacy:
+            _fail_execution(
+                app,
+                execution_id,
+                ExecutionError("superseded legacy web snapshot"),
+                at,
+                supersede=True,
+            )
+            continue
         if legacy or binding_changed:
             with write_transaction(app.conn):
                 app.conn.execute(
@@ -1381,32 +1425,6 @@ def recover_startup(app: App, at: datetime) -> None:
         else:
             _fail_execution(app, execution_id, ExecutionError("startup recovery"), at)
 
-    # Waiters do not have execution rows yet.  Drop legacy web waiters before
-    # a future claim promotion can execute them under guessed current YAML.
-    waiter_rows = app.conn.execute("SELECT stage_name,lookup_key,waiting_sequence,config_json FROM materialization_waiters").fetchall()
-    for waiter in waiter_rows:
-        try:
-            from .config import decode_stage_snapshot
-
-            snapshot = decode_stage_snapshot(json.loads(str(waiter["config_json"])))
-            legacy = any(
-                task.use
-                in {
-                    "sluice.tasks.fetch_webpage",
-                    "sluice.tasks.extract_content",
-                    "sluice.tasks.to_markdown",
-                    "sluice.tasks.to_text",
-                }
-                and task.web_binding is None
-                for task in snapshot.tasks
-            )
-        except Exception:
-            legacy = False
-        if legacy:
-            app.conn.execute(
-                "DELETE FROM materialization_waiters WHERE stage_name=? AND lookup_key=? AND waiting_sequence=?",
-                (waiter["stage_name"], waiter["lookup_key"], waiter["waiting_sequence"]),
-            )
     _recover_deliveries(app, at)
 
 

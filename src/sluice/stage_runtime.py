@@ -1298,8 +1298,14 @@ def _fail_execution(
     at: datetime,
     *,
     drop_invalid: bool = False,
+    supersede: bool = False,
 ) -> int | None:
-    """Guard a queued/running attempt and transfer its stable claim."""
+    """Guard a queued/running attempt and transfer its stable claim.
+
+    ``supersede`` is reserved for startup invalidation of retained web
+    snapshots.  It finalizes the current attempt without creating a retry,
+    while reusing the normal claim/member/waiter cleanup below.
+    """
 
     message = str(error) or error.__class__.__name__
     at_text = _ts(at)
@@ -1325,7 +1331,7 @@ def _fail_execution(
         )
         if guard.rowcount != 1:
             return None
-        if int(row["retry_count"]) < policy.retries:
+        if not supersede and int(row["retry_count"]) < policy.retries:
             request = _StageRequest(
                 stage_name=str(row["stage_name"]),
                 envelope=StageEnvelope(
@@ -1429,6 +1435,12 @@ def _fail_execution(
             )
             if row["batch_id"] is not None:
                 app.conn.execute("UPDATE batches SET state='failed' WHERE id=? AND state='frozen'", (row["batch_id"],))
+                if supersede:
+                    app.conn.execute(
+                        "UPDATE node_state SET current_frozen_batch_id=NULL WHERE "
+                        "pipeline_name=? AND node_name=? AND current_frozen_batch_id=?",
+                        (row["pipeline_name"], row["node_name"], row["batch_id"]),
+                    )
                 # Keep the member rows frozen.  The durable failed batch is
                 # intentionally still the node's current envelope so a later
                 # explicit retry/rebuild can attach its result and clear it.

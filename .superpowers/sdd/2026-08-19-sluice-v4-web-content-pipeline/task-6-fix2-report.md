@@ -34,3 +34,17 @@
 The broader integration suite still contains unrelated baseline Task 7 and
 legacy fixture failures; no later coordinator behavior or fixture migration was
 changed here.
+
+## Fix round 3 addendum
+
+Startup recovery previously finalized a legacy queued/running Stage by hand,
+releasing only `materialization_claims.owner_execution_id`.  Its claimed
+`node_members` and waiting rows were left behind, so the materialization could
+not advance.  Recovery now removes legacy waiters before claim release and
+routes legacy Stage supersession through `_fail_execution` in a no-retry mode,
+reusing atomic member, batch, claim, and waiter cleanup/promotion.  Ordinary
+retry behavior is unchanged.
+
+The queued/running DB-backed regression is parameterized over both states and
+verifies failed owner, promoted waiter, claim ownership, terminal member state,
+and waiter removal.
