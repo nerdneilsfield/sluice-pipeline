@@ -17,9 +17,12 @@ from sluice.stage_runtime import run_stage_tasks
 from sluice.tasks.content import fetch_webpage
 from sluice.web.client import WebContentClient
 from sluice.web.contracts import (
+    DocumentArtifact,
     ExtractorBinding,
+    FetchRequest,
     PrivateWebInvocation,
     ProviderBinding,
+    QualityPolicy,
     WebBinding,
 )
 
@@ -508,3 +511,68 @@ def test_private_web_task_receives_expanded_binding_while_custom_task_gets_mappi
         web_content_client=web_spy,
     )
     assert seen == [{"nested": {"x": 1}}]
+
+
+def test_passing_provider_markdown_never_runs_local_extractor() -> None:
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="article",
+        acceptable=frozenset({"markdown", "raw_html", "text"}),
+        preferred=("markdown", "raw_html", "text"),
+        quality=QualityPolicy(min_chars=1),
+    )
+    binding = ProviderBinding(
+        name="reader",
+        type="startup_http",
+        options={"trusted": True},
+        capabilities=frozenset({"markdown", "raw_html", "text"}),
+    )
+    artifact = DocumentArtifact(
+        source_url=request.url,
+        final_url=request.url,
+        content_type="text/markdown",
+        markdown='provider <script>alert("private")</script> supplied markdown',
+        selected_format="markdown",
+        capabilities=frozenset({"markdown"}),
+        provider_instance="reader",
+        provider_type="startup_http",
+    )
+
+    class Provider:
+        def fetch(self, received):
+            assert received is request
+            return artifact
+
+    class ExplodingExtractor:
+        def extract(self, received):
+            raise AssertionError("local extractor must not run")
+
+    class Catalog:
+        def provider(self, received):
+            assert received is binding
+            return Provider()
+
+        def limiter(self, received):
+            class Limiter:
+                def acquire(self, timeout=None):
+                    return True
+
+                def release(self):
+                    pass
+
+            return Limiter()
+
+        def extractor(self, received):
+            assert received.type == "identity"
+            return ExplodingExtractor()
+
+    result = WebContentClient(Catalog()).resolve(
+        request,
+        (binding,),
+        (ExtractorBinding(name="identity", type="identity"),),
+    )
+
+    assert result.selected_format == "markdown"
+    assert result.markdown == "provider  supplied markdown"
+    assert result.extraction == "identity"
+    assert result.extract_binding_digest is not None

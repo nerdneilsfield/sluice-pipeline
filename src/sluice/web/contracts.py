@@ -737,6 +737,24 @@ class DocumentArtifact:
 
 
 @dataclass(frozen=True, slots=True)
+class ValidatedFeedRoot:
+    """A bounded, defused XML feed root retained only for projection.
+
+    The parsed element tree is intentionally kept out of ``DocumentArtifact``:
+    a raw feed is a source-only representation and must not cross a Stage
+    projector boundary.  ``kind`` is the fixed root classification used by
+    the RSS/Atom Source implementation.
+    """
+
+    root: Any
+    kind: str
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"rss2", "rss1", "atom"}:
+            raise ValueError("unsupported validated feed kind")
+
+
+@dataclass(frozen=True, slots=True)
 class WebAttemptFailure:
     """Redacted provider failure summary safe for durable errors/logs."""
 
@@ -904,6 +922,7 @@ __all__ = [
     "PrivateWebInvocation",
     "ProviderBinding",
     "QualityPolicy",
+    "ValidatedFeedRoot",
     "WebAttemptCancelled",
     "WebAttemptFailure",
     "WebBinding",
