@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import replace
 import hashlib
 import json
+import re
 import time
 from typing import Any
 
@@ -28,6 +29,11 @@ from .feed import validate_raw_feed
 from .quality import QualityEvaluation, QualityMetrics, evaluate_quality
 from .sanitize import sanitize_web_error
 from .select import select_list_records
+
+
+_MIME_TYPE = re.compile(
+    r"[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+)
 
 
 def _json_value(value: object) -> object:
@@ -441,44 +447,70 @@ class WebContentClient:
         # quality-passing representation from being processed twice.  The
         # shared identity implementation still sanitizes Markdown and records
         # the selected representation deterministically.
-        identity_capabilities = set(artifact.capabilities)
-        identity_fields: dict[str, object] = {}
-        for representation in ("markdown", "text"):
-            if representation not in request.acceptable:
-                identity_capabilities.discard(representation)
-                identity_fields[representation] = None
-        if artifact.selected_format not in request.acceptable:
-            identity_fields["selected_format"] = None
-        identity_input = replace(
-            artifact,
-            capabilities=frozenset(identity_capabilities),
-            **identity_fields,
+        #
+        # Request preference orders provider originals.  The provider's
+        # selected format is only a fallback when the request did not order it,
+        # followed by a stable default for acceptable-but-unpreferred fields.
+        identity_order = dict.fromkeys(
+            (*request.preferred, artifact.selected_format, "markdown", "text")
         )
-        try:
-            fast = extract_identity(identity_input)
-        except Exception as error:
-            fast = NO_MATCH
-            last_reason = sanitize_web_error(error)
-        if isinstance(fast, DocumentArtifact):
-            selected = fast.selected_format
-            if selected in request.acceptable:
-                evaluation = self._evaluate_selected(fast, request)
-                if evaluation.passed:
-                    return (
-                        self._finalize_article(
-                            replace(fast, quality=evaluation.quality),
-                            request,
-                            extract_chain,
-                        ),
-                        "",
-                    )
-                last_reason = evaluation.reason or "too_short"
-        elif last_reason == "missing_capability":
-            for representation in ("markdown", "text"):
-                value = self._field_for(artifact, representation)
-                if representation in artifact.capabilities and isinstance(value, str):
-                    last_reason = "empty" if not value.strip() else "extract_failed"
-                    break
+        for representation in identity_order:
+            if (
+                representation not in {"markdown", "text"}
+                or representation not in request.acceptable
+                or representation not in artifact.capabilities
+            ):
+                continue
+            value = self._field_for(artifact, representation)
+            if not isinstance(value, str) or not value.strip():
+                last_reason = "empty"
+                continue
+
+            identity_input = replace(
+                artifact,
+                markdown=value if representation == "markdown" else None,
+                text=value if representation == "text" else None,
+                selected_format=representation,
+                capabilities=frozenset(
+                    capability
+                    for capability in artifact.capabilities
+                    if capability not in {"markdown", "text"}
+                    or capability == representation
+                ),
+            )
+            try:
+                fast = extract_identity(identity_input)
+            except Exception as error:
+                last_reason = sanitize_web_error(error)
+                continue
+            if not isinstance(fast, DocumentArtifact):
+                last_reason = "extract_failed"
+                continue
+
+            fast = replace(
+                fast,
+                markdown=(
+                    fast.markdown
+                    if representation == "markdown"
+                    else artifact.markdown
+                ),
+                text=fast.text if representation == "text" else artifact.text,
+                capabilities=artifact.capabilities,
+            )
+            if fast.selected_format != representation:
+                last_reason = "extract_failed"
+                continue
+            evaluation = self._evaluate_selected(fast, request)
+            if evaluation.passed:
+                return (
+                    self._finalize_article(
+                        replace(fast, quality=evaluation.quality),
+                        request,
+                        extract_chain,
+                    ),
+                    "",
+                )
+            last_reason = evaluation.reason or "too_short"
 
         original = artifact
         if (
@@ -487,8 +519,8 @@ class WebContentClient:
             or not isinstance(artifact.raw_html, str)
         ):
             return None, last_reason
-        # Expanded chains are identity-first.  The pure fast path above is that
-        # one identity evaluation; only the remaining local extractors run.
+        # Expanded chains are identity-first.  The pure candidate loop above
+        # owns that identity step; only the remaining local extractors run.
         for extractor_binding in extract_chain[1:]:
             self._check_probe()
             try:
@@ -566,6 +598,29 @@ class WebContentClient:
             return "http_status"
         if len(artifact.raw_source) > request.quality.max_body_bytes:
             return "body_too_large"
+        content_type = (
+            (artifact.content_type or "").split(";", 1)[0].strip().casefold()
+        )
+        xml_type = (
+            content_type in {"application/xml", "text/xml"}
+            or content_type.endswith("+xml")
+        )
+        malformed_type = (
+            bool(content_type) and _MIME_TYPE.fullmatch(content_type) is None
+        )
+        text_or_generic_type = (
+            malformed_type
+            or content_type.startswith("text/")
+            or content_type in {
+                "",
+                "application/octet-stream",
+                "binary/octet-stream",
+            }
+        )
+        if content_type in {"text/html", "application/xhtml+xml", "text/markdown"}:
+            return "bad_content_type"
+        if not xml_type and not text_or_generic_type:
+            return "bad_content_type"
         return None if validate_raw_feed(artifact.raw_source) is not None else "unsafe_xml"
 
     def resolve(

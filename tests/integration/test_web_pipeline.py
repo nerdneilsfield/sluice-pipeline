@@ -225,6 +225,68 @@ def test_raw_source_rejects_markdown_and_accepts_zero_entry_atom() -> None:
     assert catalog.calls == ["feed"]
 
 
+def test_raw_source_rejects_non_generic_binary_mime_and_falls_back() -> None:
+    first = _provider("image", "raw_source")
+    second = _provider("feed", "raw_source")
+    feed = b'<feed xmlns="http://www.w3.org/2005/Atom" />'
+    catalog = _FakeCatalog(
+        {
+            "image": DocumentArtifact(
+                final_url="https://example.test/feed.xml",
+                content_type="image/png",
+                raw_source=feed,
+                capabilities=frozenset({"raw_source"}),
+            ),
+            "feed": DocumentArtifact(
+                final_url="https://example.test/feed.xml",
+                content_type="application/atom+xml",
+                raw_source=feed,
+                capabilities=frozenset({"raw_source"}),
+            ),
+        }
+    )
+
+    result = WebContentClient(catalog).resolve(
+        _raw_source_request(), (first, second), None
+    )
+
+    assert result.provider_instance == "feed"
+    assert catalog.calls == ["image", "feed"]
+    assert [attempt.reason for attempt in result.attempts] == ["bad_content_type"]
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "application/rss+xml",
+        "text/plain; charset=utf-8",
+        "application/octet-stream",
+        None,
+        "not a mime",
+    ],
+)
+def test_raw_source_parses_supported_advisory_mime(
+    content_type: str | None,
+) -> None:
+    binding = _provider("feed", "raw_source")
+    catalog = _FakeCatalog(
+        {
+            "feed": DocumentArtifact(
+                final_url="https://example.test/feed.xml",
+                content_type=content_type,
+                raw_source=b"<rss><channel /></rss>",
+                capabilities=frozenset({"raw_source"}),
+            )
+        }
+    )
+
+    result = WebContentClient(catalog).resolve(
+        _raw_source_request(), (binding,), None
+    )
+
+    assert result.provider_instance == "feed"
+
+
 def test_article_exhaustion_keeps_redacted_ordered_attempts() -> None:
     first = _provider("first", "markdown")
     second = _provider("second", "markdown")
@@ -647,6 +709,40 @@ def test_identity_ignores_unacceptable_markdown_and_uses_provider_text() -> None
     assert result.selected_format == "text"
     assert result.text == "acceptable provider text"
     assert result.extraction == "identity"
+
+
+def test_identity_tries_provider_originals_in_preferred_order() -> None:
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="article",
+        acceptable=frozenset({"markdown", "text"}),
+        preferred=("markdown", "text"),
+        quality=QualityPolicy(min_chars=20),
+    )
+    binding = _provider("reader", "markdown", "text")
+    catalog = _FakeCatalog(
+        {
+            "reader": DocumentArtifact(
+                final_url=request.url,
+                content_type="text/plain",
+                markdown="too short",
+                text="The provider text representation passes quality.",
+                selected_format="markdown",
+                capabilities=frozenset({"markdown", "text"}),
+            )
+        }
+    )
+
+    result = WebContentClient(catalog).resolve(
+        request,
+        (binding,),
+        (ExtractorBinding(name="identity", type="identity"),),
+    )
+
+    assert result.selected_format == "text"
+    assert result.text == "The provider text representation passes quality."
+    assert result.extraction == "identity"
+    assert catalog.extractor_calls == []
 
 
 def test_extract_binding_digest_is_canonical_for_equivalent_options() -> None:
