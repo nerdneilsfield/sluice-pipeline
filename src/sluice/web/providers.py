@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import importlib
+import json
 import re
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -20,8 +21,9 @@ from .contracts import (
     ProviderBinding,
 )
 from .extractors import build_extractor as _build_extractor
+from .feed import validate_raw_feed
 from .http import DirectResponse, bounded_manual_get
-from .url import TargetPolicy, normalize_target_url
+from .url import TargetPolicy, normalize_target_url, validate_target_headers
 
 
 class WebProvider(Protocol):
@@ -402,6 +404,567 @@ def _trafilatura_markdown(raw_html: str, options: Mapping[str, Any]) -> str | ob
     return NO_MATCH
 
 
+def _thaw_json(value: Any) -> Any:
+    """Convert the immutable binding view to ordinary JSON-compatible values."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
+def firecrawl_actions(actions: tuple[Any, ...] | list[Any]) -> list[dict[str, Any]]:
+    """Translate the validated Firecrawl action subset to vendor JSON."""
+
+    translated: list[dict[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, Mapping) or len(action) != 1:
+            # Configuration loading validates this shape.  Keep direct
+            # construction safe as well and avoid forwarding arbitrary JSON.
+            raise DefinitionError("invalid Firecrawl action")
+        kind, payload = next(iter(action.items()))
+        if kind not in {"wait", "click", "write", "press", "scroll"}:
+            raise DefinitionError(f"unsupported firecrawl action {kind!r}")
+        if not isinstance(payload, Mapping):
+            raise DefinitionError("invalid Firecrawl action payload")
+        translated.append({"type": str(kind), **_thaw_json(payload)})
+    return translated
+
+
+def firecrawl_payload(binding: ProviderBinding, request: FetchRequest) -> dict[str, Any]:
+    """Build one Firecrawl v2 scrape request.
+
+    The formats are deliberately selected from the request mode instead of
+    asking the service for multiple operations.  ``rawHtml`` is the only
+    DOM-preserving format accepted for list and raw-feed requests.
+    """
+
+    options = binding.options
+    only_main_content = options.get("only_main_content", binding.only_main_content)
+    wait_for = options.get("wait_for", binding.wait_for)
+    wait_for_selector = options.get(
+        "wait_for_selector", binding.wait_for_selector
+    )
+    mobile = options.get("mobile", binding.mobile)
+    actions = options.get("actions", binding.actions)
+    formats = ["markdown", "rawHtml"] if request.mode == "article" else ["rawHtml"]
+    return {
+        "url": request.url,
+        "formats": formats,
+        "onlyMainContent": bool(only_main_content),
+        "waitFor": wait_for,
+        "waitForSelector": wait_for_selector,
+        "mobile": bool(mobile),
+        "actions": firecrawl_actions(actions),
+        "maxAge": 0,
+        "storeInCache": False,
+        "skipTlsVerification": False,
+    }
+
+
+def _service_transport(runtime: object | None, binding: ProviderBinding) -> Any:
+    """Find the startup-injected service boundary for a remote provider."""
+
+    candidates: list[Any] = []
+    if runtime is not None:
+        candidates.append(runtime)
+        for name in ("service", "service_client", "http_client", "transport"):
+            value = _runtime_value(runtime, name)
+            if value is not None:
+                candidates.append(value)
+        # Catalogs expose a binding-specific resolver.  It may return the
+        # same fake service used by tests or an operator-owned HTTP client.
+        resolved = _transport_for(runtime, binding)
+        if resolved is not None:
+            candidates.append(resolved)
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if callable(getattr(candidate, "post", None)):
+            return candidate
+        if callable(getattr(candidate, "request", None)):
+            return candidate
+        if callable(candidate):
+            return candidate
+        if isinstance(candidate, Mapping) and (
+            callable(candidate.get("post")) or callable(candidate.get("request"))
+        ):
+            return candidate
+    return None
+
+
+def _service_endpoint_url(binding: ProviderBinding, path: str) -> str:
+    defaults = {
+        "firecrawl": "https://api.firecrawl.dev",
+        "crawl4ai": "http://localhost:11235",
+    }
+    base = binding.base_url or defaults.get(binding.type)
+    if not base:
+        raise DefinitionError(
+            f"{binding.type} provider {binding.name!r} requires a service endpoint"
+        )
+    return f"{str(base).rstrip('/')}{path}"
+
+
+def _service_headers(binding: ProviderBinding) -> dict[str, str]:
+    headers = {str(name): str(value) for name, value in binding.service_headers.items()}
+    api_key = binding.options.get("api_key")
+    if api_key is not None:
+        # ``api_key`` is either resolved by WebRuntimeCatalog or an explicit
+        # test value when an adapter is constructed directly.
+        for name in headers:
+            if name.casefold() == "authorization":
+                break
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        return validate_target_headers(headers)
+    except WebSafetyError:
+        raise
+    except Exception:
+        raise WebSafetyError("provider_error") from None
+
+
+def _service_call_target(transport: Any, binding: ProviderBinding, path: str) -> str:
+    """Use relative paths for small fake boundaries and absolute URLs for clients."""
+
+    module = str(getattr(type(transport), "__module__", ""))
+    if module.startswith(("httpx", "requests", "urllib3")) or getattr(
+        transport, "base_url", None
+    ):
+        return _service_endpoint_url(binding, path)
+    return path
+
+
+def _call_service_post(
+    transport: Any,
+    target: str,
+    payload: Mapping[str, Any],
+    headers: Mapping[str, str],
+) -> Any:
+    post = getattr(transport, "post", None)
+    request = getattr(transport, "request", None)
+    if callable(post):
+        attempts = (
+            lambda: post(target, json=dict(payload), headers=dict(headers)),
+            lambda: post(target, json=dict(payload)),
+            lambda: post(target, dict(payload), dict(headers)),
+            lambda: post(target, dict(payload)),
+        )
+    elif callable(request):
+        attempts = (
+            lambda: request("POST", target, json=dict(payload), headers=dict(headers)),
+            lambda: request("POST", target, json=dict(payload)),
+            lambda: request("POST", target, dict(payload), dict(headers)),
+            lambda: request("POST", target, dict(payload)),
+        )
+    elif callable(transport):
+        attempts = (
+            lambda: transport(target, json=dict(payload), headers=dict(headers)),
+            lambda: transport(target, json=dict(payload)),
+            lambda: transport(target, dict(payload), dict(headers)),
+            lambda: transport(target, dict(payload)),
+        )
+    elif isinstance(transport, Mapping):
+        callback = transport.get("post") or transport.get("request")
+        if not callable(callback):
+            raise TypeError("service transport has no POST boundary")
+        attempts = (
+            lambda: callback(target, json=dict(payload), headers=dict(headers)),
+            lambda: callback(target, json=dict(payload)),
+            lambda: callback("POST", target, json=dict(payload), headers=dict(headers)),
+            lambda: callback("POST", target, json=dict(payload)),
+        )
+    else:
+        raise TypeError("service transport has no POST boundary")
+    last_type_error: TypeError | None = None
+    for attempt in attempts:
+        try:
+            return attempt()
+        except TypeError as error:
+            last_type_error = error
+            continue
+    if last_type_error is not None:
+        raise last_type_error
+    raise TypeError("service transport POST failed")
+
+
+def _json_from_response(response: Any) -> tuple[int, Mapping[str, str], Any, str | None]:
+    """Detach and decode a service response without leaking vendor errors."""
+
+    # A tiny fake boundary often returns the decoded object directly.  Mapping
+    # response envelopes are handled here too, including ``json=...`` values,
+    # so tests need not construct an HTTPX response object.
+    if isinstance(response, Mapping):
+        status_value = response.get("status_code", response.get("status", 200))
+        status = int(status_value) if isinstance(status_value, int) else 200
+        headers_value = response.get("headers", {})
+        headers = (
+            {str(key): str(item) for key, item in headers_value.items()}
+            if isinstance(headers_value, Mapping)
+            else {}
+        )
+        final_value = response.get("final_url", response.get("url"))
+        final = None if final_value is None else str(final_value)
+        if "json" in response:
+            return status, headers, response["json"], final
+        if "body" in response or "content" in response:
+            raw = response.get("body", response.get("content", b""))
+            if isinstance(raw, (Mapping, list, tuple)):
+                return status, headers, raw, final
+            if isinstance(raw, str):
+                raw = raw.encode("utf-8")
+            if isinstance(raw, (bytes, bytearray, memoryview)):
+                try:
+                    return status, headers, json.loads(bytes(raw).decode("utf-8")), final
+                except (UnicodeError, ValueError, TypeError):
+                    raise WebSafetyError("provider_error") from None
+        if "data" in response or "results" in response or "success" in response:
+            return status, headers, response, final
+        if "markdown" in response or "html" in response or "rawHtml" in response:
+            return status, headers, response, final
+    if isinstance(response, tuple) and len(response) >= 3:
+        status_value = response[0]
+        status = int(status_value) if isinstance(status_value, int) else 200
+        headers_value = response[1]
+        headers = (
+            {str(key): str(item) for key, item in headers_value.items()}
+            if isinstance(headers_value, Mapping)
+            else {}
+        )
+        raw = response[2]
+        if isinstance(raw, Mapping):
+            return status, headers, raw, None
+        if isinstance(raw, str):
+            raw = raw.encode("utf-8")
+        if isinstance(raw, (bytes, bytearray, memoryview)):
+            try:
+                return status, headers, json.loads(bytes(raw).decode("utf-8")), None
+            except (UnicodeError, ValueError, TypeError):
+                raise WebSafetyError("provider_error") from None
+    json_method = getattr(response, "json", None)
+    if callable(json_method):
+        try:
+            value = json_method()
+            status = int(getattr(response, "status_code", getattr(response, "status", 200)) or 0)
+            headers = {
+                str(key): str(item)
+                for key, item in dict(getattr(response, "headers", {}) or {}).items()
+            }
+            final = getattr(response, "url", None) or getattr(response, "final_url", None)
+            return status, headers, value, None if final is None else str(final)
+        except Exception:
+            raise WebSafetyError("provider_error") from None
+    if isinstance(json_method, (Mapping, list, tuple)):
+        status = int(getattr(response, "status_code", getattr(response, "status", 200)) or 0)
+        headers = {
+            str(key): str(item)
+            for key, item in dict(getattr(response, "headers", {}) or {}).items()
+        }
+        final = getattr(response, "url", None) or getattr(response, "final_url", None)
+        return status, headers, json_method, None if final is None else str(final)
+    status, headers, body, final = _response_body(response)
+    if not body:
+        raise WebSafetyError("provider_error")
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeError, ValueError, TypeError):
+        raise WebSafetyError("provider_error") from None
+    return status, headers, value, final
+
+
+def _post_service_json(
+    binding: ProviderBinding,
+    runtime: object | None,
+    path: str,
+    payload: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], int, Mapping[str, str], str | None]:
+    transport = _service_transport(runtime, binding)
+    if transport is None:
+        raise WebSafetyError("provider_error")
+    target = _service_call_target(transport, binding, path)
+    try:
+        response = _call_service_post(
+            transport, target, payload, _service_headers(binding)
+        )
+        status, headers, value, response_url = _json_from_response(response)
+    except WebSafetyError:
+        raise
+    except BaseException:
+        raise WebSafetyError("provider_error") from None
+    if status < 200 or status >= 300:
+        raise WebSafetyError("http_status")
+    if not isinstance(value, Mapping):
+        raise WebSafetyError("provider_error")
+    return value, status, headers, response_url
+
+
+def _remote_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    for key in ("data", "result"):
+        value = payload.get(key)
+        if isinstance(value, Mapping):
+            return value
+    values = payload.get("results")
+    if isinstance(values, (list, tuple)) and values and isinstance(values[0], Mapping):
+        return values[0]
+    return payload
+
+
+def _first_string(mapping: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _remote_final_url(
+    binding: ProviderBinding, request: FetchRequest, data: Mapping[str, Any]
+) -> str:
+    metadata = data.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    reported = _first_string(
+        data,
+        "final_url",
+        "finalUrl",
+        "url",
+        "sourceURL",
+        "source_url",
+    ) or _first_string(metadata_map, "sourceURL", "sourceUrl", "url", "finalUrl")
+    candidate = reported or request.url
+    try:
+        return str(normalize_target_url(candidate, TargetPolicy.from_value(binding.target_policy)))
+    except WebSafetyError:
+        raise
+    except Exception:
+        raise WebSafetyError("provider_error") from None
+
+
+def _validate_remote_request_url(
+    binding: ProviderBinding, request: FetchRequest
+) -> FetchRequest:
+    """Apply the local target URL boundary before submitting to a service."""
+
+    try:
+        normalized = normalize_target_url(
+            request.url, TargetPolicy.from_value(binding.target_policy)
+        )
+    except WebSafetyError:
+        raise
+    except Exception:
+        raise WebSafetyError("provider_error") from None
+    if str(normalized) == request.url:
+        return request
+    # ``FetchRequest`` is frozen; reconstructing it retains the same quality
+    # and mode contract while ensuring the service receives the canonical URL.
+    return FetchRequest(
+        url=str(normalized),
+        mode=request.mode,
+        acceptable=request.acceptable,
+        preferred=request.preferred,
+        list_selector=request.list_selector,
+        target_headers=request.target_headers,
+        quality=request.quality,
+        stage_deadline=request.stage_deadline,
+    )
+
+
+def _remote_status(data: Mapping[str, Any], response_status: int) -> int | None:
+    metadata = data.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    for key in ("status_code", "statusCode", "status"):
+        for mapping in (data, metadata_map):
+            value = mapping.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+    # A service success response is not proof of the target status.  Keep
+    # ``null`` unless the remote adapter explicitly reports one.
+    del response_status
+    return None
+
+
+def _remote_title(data: Mapping[str, Any]) -> str | None:
+    metadata = data.get("metadata")
+    metadata_map = metadata if isinstance(metadata, Mapping) else {}
+    return _first_string(data, "title") or _first_string(metadata_map, "title")
+
+
+def _remote_value(data: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            if isinstance(value, Mapping):
+                nested = _first_string(value, "raw_markdown", "rawMarkdown", "fit_markdown", "fitMarkdown", "value")
+                if nested is not None:
+                    return nested
+            return value
+    return None
+
+
+def _remote_artifact(
+    binding: ProviderBinding,
+    request: FetchRequest,
+    data: Mapping[str, Any],
+    *,
+    response_status: int,
+    response_headers: Mapping[str, str],
+    raw_html_keys: tuple[str, ...] = (
+        "rawHtml",
+        "raw_html",
+        "html",
+        "cleaned_html",
+        "cleanedHtml",
+    ),
+) -> DocumentArtifact:
+    final_url = _remote_final_url(binding, request, data)
+    status_code = _remote_status(data, response_status)
+    metadata = data.get("metadata")
+    metadata_map = dict(metadata) if isinstance(metadata, Mapping) else {}
+    title = _remote_title(data)
+    raw_html_value = _remote_value(data, *raw_html_keys)
+    markdown_value = _remote_value(data, "markdown", "fit_markdown", "fitMarkdown")
+    raw_html = raw_html_value if isinstance(raw_html_value, str) else None
+    markdown = markdown_value if isinstance(markdown_value, str) else None
+    # The HTTP response is a service JSON envelope; its Content-Type is not
+    # the target document MIME.  Prefer a vendor-reported target MIME and
+    # otherwise derive it from the representation we retained.
+    content_type = _first_string(data, "content_type", "contentType")
+    metadata_content_type = _first_string(
+        metadata_map, "content_type", "contentType", "mimeType"
+    )
+    content_type = content_type or metadata_content_type
+    if content_type:
+        content_type = content_type.split(";", 1)[0].strip().lower()
+    if request.mode == "raw_source":
+        raw_source: bytes | None
+        if isinstance(raw_html_value, bytes):
+            raw_source = raw_html_value
+        elif isinstance(raw_html_value, str):
+            raw_source = raw_html_value.encode("utf-8")
+        else:
+            raw_source = None
+        if raw_source is not None and validate_raw_feed(raw_source) is not None:
+            return DocumentArtifact(
+                source_url=request.url,
+                final_url=final_url,
+                status_code=status_code,
+                # The service envelope is JSON, so its Content-Type does not
+                # describe the raw feed bytes.  Sniff the returned body.
+                content_type=_sniff_content_type(raw_source, None),
+                raw_source=raw_source,
+                provider_instance=binding.name,
+                provider_type=binding.type,
+                capabilities=frozenset({"raw_source"}),
+                metadata=metadata_map,
+            )
+        return DocumentArtifact(
+            source_url=request.url,
+            final_url=final_url,
+            status_code=status_code,
+            content_type=content_type or "text/html",
+            provider_instance=binding.name,
+            provider_type=binding.type,
+            capabilities=frozenset(),
+            metadata=metadata_map,
+        )
+
+    capabilities: set[str] = set()
+    if "rendered_js" in binding.capabilities:
+        capabilities.add("rendered_js")
+    if raw_html is not None:
+        capabilities.add("raw_html")
+    if markdown is not None and request.mode == "article":
+        capabilities.add("markdown")
+    if content_type is None or content_type == "application/json":
+        content_type = "text/html" if raw_html is not None else "text/markdown"
+    return DocumentArtifact(
+        source_url=request.url,
+        final_url=final_url,
+        status_code=status_code,
+        content_type=content_type,
+        raw_html=raw_html,
+        markdown=markdown if request.mode == "article" else None,
+        title=title,
+        metadata=metadata_map,
+        provider_instance=binding.name,
+        provider_type=binding.type,
+        capabilities=frozenset(capabilities),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FirecrawlProvider:
+    """Synchronous Firecrawl v2 ``/scrape`` adapter."""
+
+    binding: ProviderBinding
+    runtime: object | None = None
+
+    def __post_init__(self) -> None:
+        if self.binding.options.get("api_version", "v2") != "v2":
+            raise DefinitionError(
+                f"firecrawl provider {self.binding.name!r} supports api_version v2 only"
+            )
+
+    def fetch(self, request: FetchRequest) -> DocumentArtifact:
+        request = _validate_remote_request_url(self.binding, request)
+        payload = firecrawl_payload(self.binding, request)
+        data, status, headers, _response_url = _post_service_json(
+            self.binding,
+            self.runtime,
+            "/v2/scrape",
+            payload,
+        )
+        if data.get("success") is False:
+            raise WebSafetyError("provider_error")
+        return _remote_artifact(
+            self.binding,
+            request,
+            _remote_data(data),
+            response_status=status,
+            response_headers=headers,
+            raw_html_keys=("rawHtml", "raw_html"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Crawl4AIProvider:
+    """Synchronous Crawl4AI ``/crawl`` adapter (no job polling)."""
+
+    binding: ProviderBinding
+    runtime: object | None = None
+
+    def fetch(self, request: FetchRequest) -> DocumentArtifact:
+        request = _validate_remote_request_url(self.binding, request)
+        options = self.binding.options
+        payload: dict[str, Any] = {
+            "url": request.url,
+            "browser_type": options.get("browser_type", "chromium"),
+            "headless": bool(options.get("headless", True)),
+            "wait_until": options.get("wait_until", "domcontentloaded"),
+            "wait_for": options.get(
+                "wait_for_selector", self.binding.wait_for_selector
+            ),
+            "delay_before_return_html": options.get("delay_before_return_html", 0),
+            "cache_mode": "bypass",
+        }
+        data, status, headers, _response_url = _post_service_json(
+            self.binding,
+            self.runtime,
+            "/crawl",
+            payload,
+        )
+        if data.get("success") is False:
+            raise WebSafetyError("provider_error")
+        return _remote_artifact(
+            self.binding,
+            request,
+            _remote_data(data),
+            response_status=status,
+            response_headers=headers,
+        )
+
+
 def build_httpx_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
     return HTTPXProvider(binding, runtime)
 
@@ -418,11 +981,21 @@ def build_trafilatura_provider(binding: ProviderBinding, runtime: object | None 
     return TrafilaturaProvider(binding, runtime)
 
 
+def build_firecrawl_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+    return FirecrawlProvider(binding, runtime)
+
+
+def build_crawl4ai_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+    return Crawl4AIProvider(binding, runtime)
+
+
 CORE_PROVIDER_BUILDERS = {
     "httpx": build_httpx_provider,
     "startup_http": build_startup_http_provider,
     "curl_cffi": build_curl_cffi_provider,
     "trafilatura": build_trafilatura_provider,
+    "firecrawl": build_firecrawl_provider,
+    "crawl4ai": build_crawl4ai_provider,
 }
 PROVIDER_BUILDERS = CORE_PROVIDER_BUILDERS
 
@@ -455,4 +1028,29 @@ def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] 
         raise DefinitionError(f"unsupported web extractor {binding!r}") from error
 
 
-__all__ = ["CORE_PROVIDER_BUILDERS", "PROVIDER_BUILDERS", "CurlCffiProvider", "HTTPXProvider", "HttpxProvider", "StartupHTTPProvider", "StartupHttpProvider", "StartupHttp", "TrafilaturaProvider", "TrafilaturaProviderProfile", "Trafilatura", "WebProvider", "build_curl_cffi_provider", "build_extractor", "build_httpx_provider", "build_provider", "build_startup_http_provider", "build_trafilatura_provider"]
+__all__ = [
+    "CORE_PROVIDER_BUILDERS",
+    "PROVIDER_BUILDERS",
+    "Crawl4AIProvider",
+    "CurlCffiProvider",
+    "FirecrawlProvider",
+    "HTTPXProvider",
+    "HttpxProvider",
+    "StartupHTTPProvider",
+    "StartupHttpProvider",
+    "StartupHttp",
+    "TrafilaturaProvider",
+    "TrafilaturaProviderProfile",
+    "Trafilatura",
+    "WebProvider",
+    "build_crawl4ai_provider",
+    "build_curl_cffi_provider",
+    "build_extractor",
+    "build_firecrawl_provider",
+    "build_httpx_provider",
+    "build_provider",
+    "build_startup_http_provider",
+    "build_trafilatura_provider",
+    "firecrawl_actions",
+    "firecrawl_payload",
+]

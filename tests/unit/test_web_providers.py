@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -22,7 +23,11 @@ from sluice.web.contracts import (
     WebBinding,
 )
 from sluice.web.http import DirectResponse
-from sluice.web.providers import build_provider
+from sluice.web.providers import (
+    Crawl4AIProvider,
+    FirecrawlProvider,
+    build_provider,
+)
 from sluice.web.registry import WebRuntimeCatalog, resolve_provider_binding
 
 
@@ -54,6 +59,191 @@ def _request(*, acceptable: frozenset[str] = frozenset({"text", "raw_html", "mar
         preferred=preferred,
         quality=QualityPolicy(min_chars=1),
     )
+
+
+@dataclass
+class _ServiceRequest:
+    path: str
+    json: dict[str, object]
+    headers: dict[str, str]
+
+
+class _FakeService:
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+        self.requests: list[_ServiceRequest] = []
+
+    def post(
+        self,
+        path: str,
+        *,
+        json: dict[str, object],
+        headers: dict[str, str],
+        **kwargs: object,
+    ) -> DirectResponse:
+        del kwargs
+        self.requests.append(_ServiceRequest(path, json, headers))
+        return DirectResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=json_module_dumps(self.payload),
+            url=f"https://service.example{path}",
+            final_url=f"https://service.example{path}",
+        )
+
+
+def json_module_dumps(value: object) -> bytes:
+    return json.dumps(value).encode("utf-8")
+
+
+def test_firecrawl_article_requests_markdown_and_raw_html_once() -> None:
+    service = _FakeService(
+        {
+            "success": True,
+            "data": {
+                "markdown": "article markdown",
+                "rawHtml": "<html><body>article</body></html>",
+                "metadata": {"sourceURL": "https://example.test/article"},
+            },
+        }
+    )
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+        only_main_content=True,
+        wait_for_selector="main",
+        wait_for=2,
+        mobile=True,
+        actions=(
+            {"wait": {"milliseconds": 10}},
+            {"click": {"selector": "#load"}},
+            {"write": {"text": "sluice"}},
+            {"press": {"key": "Enter"}},
+            {"scroll": {"direction": "down"}},
+        ),
+        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+    )
+
+    artifact = FirecrawlProvider(binding, service).fetch(_request())
+
+    assert [request.path for request in service.requests] == ["/v2/scrape"]
+    payload = service.requests[0].json
+    assert payload["url"] == "https://example.test/article"
+    assert payload["formats"] == ["markdown", "rawHtml"]
+    assert payload["onlyMainContent"] is True
+    assert payload["waitForSelector"] == "main"
+    assert payload["waitFor"] == 2
+    assert payload["mobile"] is True
+    assert payload["actions"] == [
+        {"type": "wait", "milliseconds": 10},
+        {"type": "click", "selector": "#load"},
+        {"type": "write", "text": "sluice"},
+        {"type": "press", "key": "Enter"},
+        {"type": "scroll", "direction": "down"},
+    ]
+    assert payload["maxAge"] == 0
+    assert payload["storeInCache"] is False
+    assert payload["skipTlsVerification"] is False
+    assert artifact.markdown == "article markdown"
+    assert artifact.raw_html == "<html><body>article</body></html>"
+
+
+def test_firecrawl_list_requests_raw_html_only() -> None:
+    service = _FakeService(
+        {"success": True, "data": {"rawHtml": "<html><body>list</body></html>"}}
+    )
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+    )
+    request = FetchRequest(
+        url="https://example.test/releases",
+        mode="list_html",
+        acceptable=frozenset({"raw_html"}),
+        preferred=("raw_html",),
+        list_selector="article",
+        quality=QualityPolicy(min_chars=1),
+    )
+
+    artifact = FirecrawlProvider(binding, service).fetch(request)
+
+    assert service.requests[0].json["formats"] == ["rawHtml"]
+    assert artifact.raw_html == "<html><body>list</body></html>"
+    assert artifact.markdown is None
+
+
+def test_crawl4ai_uses_sync_crawl_never_legacy_poll_paths() -> None:
+    service = _FakeService(
+        {
+            "success": True,
+            "url": "https://example.test/article",
+            "html": "<html><body>article</body></html>",
+            "markdown": "article markdown",
+            "status_code": 200,
+        }
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="http://crawl4ai.internal:11235",
+        options={
+            "api_key": "service-secret",
+            "browser_type": "firefox",
+            "headless": False,
+            "wait_until": "networkidle",
+            "wait_for_selector": ".ready",
+            "delay_before_return_html": 3,
+        },
+        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+    )
+
+    artifact = Crawl4AIProvider(binding, service).fetch(_request())
+
+    assert [request.path for request in service.requests] == ["/crawl"]
+    payload = service.requests[0].json
+    assert payload["url"] == "https://example.test/article"
+    assert payload["cache_mode"] == "bypass"
+    assert payload["browser_type"] == "firefox"
+    assert payload["headless"] is False
+    assert payload["wait_until"] == "networkidle"
+    assert payload["wait_for"] == ".ready"
+    assert payload["delay_before_return_html"] == 3
+    assert service.requests[0].headers == {"Authorization": "Bearer service-secret"}
+    assert artifact.raw_html == "<html><body>article</body></html>"
+    assert artifact.markdown == "article markdown"
+
+
+def test_crawl4ai_self_host_can_omit_bearer_authentication() -> None:
+    service = _FakeService(
+        {"success": True, "html": "<article>body</article>", "markdown": "body"}
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="http://crawl4ai.internal:11235",
+        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+    )
+
+    Crawl4AIProvider(binding, service).fetch(_request())
+
+    assert service.requests[0].headers == {}
+
+
+def test_firecrawl_rejects_v1_before_sending_a_request() -> None:
+    service = _FakeService({"success": True, "data": {}})
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+        options={"api_version": "v1"},
+    )
+
+    with pytest.raises(DefinitionError, match="v2"):
+        FirecrawlProvider(binding, service)
+    assert service.requests == []
 
 
 def test_trafilatura_provider_returns_raw_html_and_provider_original_markdown(monkeypatch) -> None:

@@ -17,6 +17,7 @@ from sluice.web.contracts import (
     ProviderBinding,
     QualityPolicy,
 )
+from sluice.web.providers import FirecrawlProvider
 
 
 def _provider(name: str, *capabilities: str) -> ProviderBinding:
@@ -57,6 +58,26 @@ def _raw_source_request() -> FetchRequest:
         preferred=("raw_source",),
         quality=QualityPolicy(min_chars=1),
     )
+
+
+class _RemoteService:
+    def __init__(self, payload: object) -> None:
+        self.payload = payload
+        self.paths: list[str] = []
+
+    def post(self, path: str, **kwargs: object) -> object:
+        del kwargs
+        self.paths.append(path)
+        return self.payload
+
+
+class _ProviderCatalog:
+    def __init__(self, provider: object) -> None:
+        self._provider = provider
+
+    def provider(self, binding: object) -> object:
+        del binding
+        return self._provider
 
 
 @dataclass
@@ -253,6 +274,53 @@ def test_raw_source_rejects_non_generic_binary_mime_and_falls_back() -> None:
     assert result.provider_instance == "feed"
     assert catalog.calls == ["image", "feed"]
     assert [attempt.reason for attempt in result.attempts] == ["bad_content_type"]
+
+
+def test_firecrawl_raw_source_is_conditional_on_feed_validation() -> None:
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+        capabilities=frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
+    )
+    service = _RemoteService(
+        {
+            "success": True,
+            "data": {
+                "rawHtml": '<feed xmlns="http://www.w3.org/2005/Atom"><title>empty</title></feed>'
+            },
+        }
+    )
+    provider = FirecrawlProvider(binding, service)
+
+    result = WebContentClient(_ProviderCatalog(provider)).resolve(
+        _raw_source_request(), (binding,), None
+    )
+
+    assert result.raw_source is not None
+    assert result.capabilities == frozenset({"raw_source"})
+    assert service.paths == ["/v2/scrape"]
+
+
+def test_firecrawl_raw_source_rejects_article_html_and_exhausts_chain() -> None:
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+        capabilities=frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
+    )
+    service = _RemoteService(
+        {
+            "success": True,
+            "data": {"rawHtml": "<html><body>not a feed</body></html>"},
+        }
+    )
+    provider = FirecrawlProvider(binding, service)
+
+    with pytest.raises(ExecutionError, match="provider chain exhausted"):
+        WebContentClient(_ProviderCatalog(provider)).resolve(
+            _raw_source_request(), (binding,), None
+        )
 
 
 @pytest.mark.parametrize(
