@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import base64
+from dataclasses import dataclass, replace
+from datetime import timedelta
 import json
 import logging
 from threading import Event, Thread
@@ -11,8 +13,11 @@ from urllib.parse import urlsplit
 
 import pytest
 
+import sluice.web as web_module
 from sluice.errors import DefinitionError, WebSafetyError
 from sluice.web import extractors as extractor_module
+from sluice.web import http as http_module
+from sluice.web import providers as provider_module
 from sluice.web import registry as registry_module
 from sluice.web.contracts import (
     DocumentArtifact,
@@ -21,7 +26,11 @@ from sluice.web.contracts import (
     NO_MATCH,
     ProviderBinding,
     QualityPolicy,
+    WebAttemptCancelled,
     WebBinding,
+    WebExecutionProbe,
+    reset_web_execution_probe,
+    set_web_execution_probe,
 )
 from sluice.web.http import DirectResponse
 from sluice.web.providers import (
@@ -30,6 +39,7 @@ from sluice.web.providers import (
     build_provider,
 )
 from sluice.web.registry import WebRuntimeCatalog, resolve_provider_binding
+from sluice.web.url import normalize_target_url
 
 
 @dataclass
@@ -72,8 +82,18 @@ class _ServiceRequest:
 
 
 class _FakeService:
-    def __init__(self, payload: object) -> None:
+    def __init__(
+        self,
+        payload: object,
+        *,
+        status_code: int = 200,
+        response_headers: dict[str, str] | None = None,
+    ) -> None:
         self.payload = payload
+        self.status_code = status_code
+        self.response_headers = response_headers or {
+            "content-type": "application/json"
+        }
         self.requests: list[_ServiceRequest] = []
 
     def post(
@@ -90,8 +110,8 @@ class _FakeService:
         )
         peer = "10.0.0.8" if ".internal" in url else "93.184.216.34"
         return DirectResponse(
-            status_code=200,
-            headers={"content-type": "application/json"},
+            status_code=self.status_code,
+            headers=self.response_headers,
             body=json_module_dumps(self.payload),
             url=url if "://" in url else f"https://service.example{path}",
             final_url=url if "://" in url else f"https://service.example{path}",
@@ -307,6 +327,686 @@ def test_crawl4ai_self_host_can_omit_bearer_authentication(monkeypatch) -> None:
     Crawl4AIProvider(binding, service).fetch(_request())
 
     assert service.requests[0].headers == {}
+
+
+def test_jina_reader_posts_for_json_markdown_with_declared_reader_headers(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {
+            "code": 200,
+            "data": {
+                "url": "https://example.test/article",
+                "title": "Reader title",
+                "content": "# Reader markdown\n\nUseful body.",
+            },
+        }
+    )
+    binding = ProviderBinding(
+        name="reader",
+        type="jina_reader",
+        base_url="https://r.jina.ai",
+        options={
+            "api_key": "jina-secret",
+            "target_selector": "article",
+            "with_generated_alt": True,
+            "remove_selectors": ("nav", ".ads"),
+        },
+        capabilities=frozenset({"markdown"}),
+    )
+
+    provider = getattr(provider_module, "JinaReaderProvider")(binding, service)
+    artifact = provider.fetch(_request())
+
+    assert [request.path for request in service.requests] == ["/"]
+    assert service.requests[0].json == {"url": "https://example.test/article"}
+    assert service.requests[0].headers == {
+        "Accept": "application/json",
+        "Authorization": "Bearer jina-secret",
+        "X-Remove-Selector": "nav,.ads",
+        "X-Target-Selector": "article",
+        "X-With-Generated-Alt": "true",
+    }
+    assert artifact.markdown == "# Reader markdown\n\nUseful body."
+    assert artifact.raw_html is None
+    assert artifact.text is None
+    assert artifact.title == "Reader title"
+    assert artifact.capabilities == frozenset({"markdown"})
+
+
+def test_zyte_browser_mode_maps_page_content_type_action_and_basic_auth(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {
+            "url": "https://example.test/article",
+            "statusCode": 200,
+            "browserHtml": "<article>Rendered article</article>",
+            "pageContent": {
+                "title": "Rendered title",
+                "itemMain": "Rendered article",
+            },
+        }
+    )
+    binding = ProviderBinding(
+        name="zyte-browser",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        options={
+            "api_key": "zyte-secret",
+            "mode": "browser",
+            "automatic_content": True,
+            "actions": (
+                {"write": {"selector": "#q", "text": "sluice"}},
+            ),
+        },
+        capabilities=frozenset({"raw_html", "text"}),
+    )
+
+    provider = getattr(provider_module, "ZyteProvider")(binding, service)
+    artifact = provider.fetch(_request())
+
+    assert [request.path for request in service.requests] == ["/v1/extract"]
+    payload = service.requests[0].json
+    assert payload["url"] == "https://example.test/article"
+    assert payload["browserHtml"] is True
+    assert payload["pageContent"] is True
+    assert payload["pageContentOptions"] == {"extractFrom": "browserHtml"}
+    assert payload["actions"] == [
+        {
+            "action": "type",
+            "selector": {"type": "css", "value": "#q"},
+            "text": "sluice",
+        }
+    ]
+    encoded = base64.b64encode(b"zyte-secret:").decode("ascii")
+    assert service.requests[0].headers == {"Authorization": f"Basic {encoded}"}
+    assert artifact.raw_html == "<article>Rendered article</article>"
+    assert artifact.text == "Rendered article"
+    assert artifact.title == "Rendered title"
+    assert artifact.status_code == 200
+    assert artifact.capabilities == frozenset({"raw_html", "text"})
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (
+            "auto",
+            {
+                "url": "https://example.test/article",
+                "browserHtml": True,
+                "pageContent": True,
+            },
+        ),
+        (
+            "http",
+            {
+                "url": "https://example.test/article",
+                "httpResponseBody": True,
+                "pageContent": True,
+                "pageContentOptions": {"extractFrom": "httpResponseBody"},
+            },
+        ),
+        (
+            "browser",
+            {
+                "url": "https://example.test/article",
+                "browserHtml": True,
+                "pageContent": True,
+                "pageContentOptions": {"extractFrom": "browserHtml"},
+            },
+        ),
+    ],
+)
+def test_zyte_mode_mapping_is_exact(
+    mode: str,
+    expected: dict[str, object],
+) -> None:
+    binding = ProviderBinding(
+        name=f"zyte-{mode}",
+        type="zyte",
+        options={"mode": mode, "automatic_content": True},
+    )
+
+    assert provider_module.zyte_payload(binding, _request()) == expected
+
+
+def test_zyte_translates_the_complete_validated_action_subset() -> None:
+    assert provider_module.zyte_actions(
+        [
+            {"wait": {"milliseconds": 1500}},
+            {"click": {"selector": "#open"}},
+            {"write": {"selector": "#q", "text": "sluice"}},
+            {"press": {"key": "Enter"}},
+            {"scroll": {"x": 12, "y": 34}},
+        ]
+    ) == [
+        {"action": "waitForTimeout", "timeout": 1.5},
+        {
+            "action": "click",
+            "selector": {"type": "css", "value": "#open"},
+        },
+        {
+            "action": "type",
+            "selector": {"type": "css", "value": "#q"},
+            "text": "sluice",
+        },
+        {"action": "keyPress", "key": "Enter"},
+        {"action": "scrollTo", "x": 12, "y": 34},
+    ]
+
+
+@pytest.mark.parametrize(
+    (
+        "output",
+        "expected_payload",
+        "field",
+        "response_content_type",
+        "artifact_content_type",
+    ),
+    [
+        (
+            "markdown",
+            {
+                "url": "https://example.test/article",
+                "zone": "unlocker-zone",
+                "format": "raw",
+                "data_format": "markdown",
+                "country": "US",
+            },
+            "markdown",
+            "text/html",
+            "text/markdown",
+        ),
+        (
+            "html",
+            {
+                "url": "https://example.test/article",
+                "zone": "unlocker-zone",
+                "format": "raw",
+                "country": "US",
+            },
+            "raw_html",
+            "text/html",
+            "text/html",
+        ),
+    ],
+)
+def test_bright_data_uses_raw_sync_envelope_and_only_requests_markdown_when_configured(
+    monkeypatch,
+    output: str,
+    expected_payload: dict[str, object],
+    field: str,
+    response_content_type: str,
+    artifact_content_type: str,
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    body = "# Bright markdown" if output == "markdown" else "<main>Bright HTML</main>"
+    service = _FakeService(
+        {
+            "status_code": 200,
+            "headers": {"content-type": response_content_type},
+            "body": body,
+        }
+    )
+    binding = ProviderBinding(
+        name=f"bright-{output}",
+        type="bright_data",
+        base_url="https://api.brightdata.com",
+        options={
+            "api_key": "bright-secret",
+            "zone": "unlocker-zone",
+            "output": output,
+            "country": "US",
+            "async": False,
+        },
+        capabilities=frozenset({field}),
+    )
+
+    provider = getattr(provider_module, "BrightDataProvider")(binding, service)
+    artifact = provider.fetch(_request())
+
+    assert [request.path for request in service.requests] == ["/request"]
+    assert service.requests[0].json == expected_payload
+    assert service.requests[0].headers == {
+        "Authorization": "Bearer bright-secret"
+    }
+    assert getattr(artifact, field) == body
+    assert artifact.capabilities == frozenset({field})
+    assert artifact.status_code == 200
+    assert artifact.content_type == artifact_content_type
+
+
+def test_provider_deadline_bounds_service_body_stream(monkeypatch) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(
+        http_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0]),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+
+    class StreamingResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        url = "https://api.zyte.com/v1/extract"
+        peer = "93.184.216.34"
+
+        def iter_bytes(self):
+            yield b'{"browserHtml":"partial'
+            clock[0] = 106.0
+            yield b' body"}'
+
+    class Service:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> StreamingResponse:
+            del url, kwargs
+            self.calls += 1
+            return StreamingResponse()
+
+    binding = ProviderBinding(
+        name="zyte",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        timeout=timedelta(seconds=60),
+        connect_timeout=timedelta(seconds=10),
+    )
+    service = Service()
+
+    with pytest.raises(WebSafetyError, match="timeout"):
+        http_module.bounded_service_post(
+            "https://api.zyte.com/v1/extract",
+            binding,
+            {"url": "https://example.test/article", "browserHtml": True},
+            transport=service,
+            deadline=105.0,
+        )
+
+    assert service.calls == 1
+
+
+def test_probe_is_checked_after_service_dns_and_before_send(monkeypatch) -> None:
+    stale = False
+
+    def resolve(host: str) -> list[str]:
+        nonlocal stale
+        assert host == "api.zyte.com"
+        stale = True
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr("sluice.web.url.resolve_host", resolve)
+
+    class Service:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> DirectResponse:
+            del url, kwargs
+            self.calls += 1
+            return DirectResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=b"{}",
+            )
+
+    binding = ProviderBinding(
+        name="zyte",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        timeout=timedelta(seconds=60),
+        connect_timeout=timedelta(seconds=10),
+    )
+    service = Service()
+
+    def check() -> None:
+        if stale:
+            raise WebAttemptCancelled()
+
+    token = set_web_execution_probe(WebExecutionProbe(check))
+    try:
+        with pytest.raises(WebAttemptCancelled):
+            http_module.bounded_service_post(
+                "https://api.zyte.com/v1/extract",
+                binding,
+                {"url": "https://example.test/article"},
+                transport=service,
+            )
+    finally:
+        reset_web_execution_probe(token)
+
+    assert service.calls == 0
+
+
+def test_deadline_is_rechecked_after_service_dns_and_before_send(monkeypatch) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(
+        http_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: clock[0]),
+        raising=False,
+    )
+
+    def resolve(host: str) -> list[str]:
+        assert host == "api.zyte.com"
+        clock[0] = 106.0
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr("sluice.web.url.resolve_host", resolve)
+
+    class Service:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> DirectResponse:
+            del url, kwargs
+            self.calls += 1
+            return DirectResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=b"{}",
+            )
+
+    binding = ProviderBinding(
+        name="zyte",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        timeout=timedelta(seconds=60),
+        connect_timeout=timedelta(seconds=10),
+    )
+    service = Service()
+
+    with pytest.raises(WebSafetyError, match="timeout"):
+        http_module.bounded_service_post(
+            "https://api.zyte.com/v1/extract",
+            binding,
+            {"url": "https://example.test/article"},
+            transport=service,
+            deadline=105.0,
+        )
+
+    assert service.calls == 0
+
+
+def test_curl_connect_read_and_callback_share_the_absolute_deadline(
+    monkeypatch,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(
+        registry_module.time,
+        "monotonic",
+        lambda: clock[0],
+    )
+    request_kwargs: dict[str, object] = {}
+
+    class CurlOpt:
+        RESOLVE = 1
+        FRESH_CONNECT = 2
+        FORBID_REUSE = 3
+
+    class Session:
+        def __init__(self, **kwargs: object) -> None:
+            self.curl_options = dict(kwargs.get("curl_options", {}))
+
+        def request(self, method: str, url: str, **kwargs: object) -> object:
+            del method, url
+            request_kwargs.update(kwargs)
+            callback = kwargs["content_callback"]
+            assert callable(callback)
+            callback(b"first")
+            clock[0] = 106.0
+            try:
+                callback(b"late")
+            except Exception:
+                raise RuntimeError("curl callback aborted") from None
+            raise AssertionError("the deadline must abort callback streaming")
+
+        def close(self) -> None:
+            pass
+
+    transport = registry_module._ThreadLocalCurlSession(
+        SimpleNamespace(Session=Session),
+        SimpleNamespace(CurlOpt=CurlOpt),
+        provider_name="curl",
+        impersonate="chrome",
+        http_version="auto",
+    )
+    binding = ProviderBinding(
+        name="curl",
+        type="curl_cffi",
+        timeout=timedelta(seconds=60),
+        connect_timeout=timedelta(seconds=10),
+    )
+    request = replace(_request(), stage_deadline=105.0)
+    try:
+        with pytest.raises(WebSafetyError, match="timeout"):
+            transport.get_pinned(
+                normalize_target_url("https://example.test/article"),
+                ("93.184.216.34",),
+                request,
+                binding,
+            )
+    finally:
+        transport.close()
+
+    assert request_kwargs["timeout"] == (5.0, 5.0)
+
+
+def test_pooled_httpx_request_clamps_connect_and_read_to_remaining_budget(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        http_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: 100.0),
+        raising=False,
+    )
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        url = "https://api.zyte.com/v1/extract"
+        extensions: dict[str, object] = {}
+
+        def iter_bytes(self):
+            yield b"{}"
+
+        def close(self) -> None:
+            pass
+
+    class Client:
+        request_extensions: dict[str, object] | None = None
+
+        def send(self, request, *, stream: bool):
+            assert stream is True
+            self.request_extensions = dict(request.extensions)
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    binding = ProviderBinding(
+        name="zyte",
+        type="zyte",
+        timeout=timedelta(seconds=60),
+        connect_timeout=timedelta(seconds=10),
+    )
+    request = FetchRequest(
+        url="https://api.zyte.com/v1/extract",
+        mode="article",
+        acceptable=frozenset({"text"}),
+        stage_deadline=105.0,
+    )
+    pooled = http_module._PooledPinnedHTTPXClient(
+        timeout=None,
+    )
+    pooled._client.close()
+    client = Client()
+    pooled._client = client
+    try:
+        pooled.post_pinned(
+            normalize_target_url("https://api.zyte.com/v1/extract"),
+            ("93.184.216.34",),
+            request,
+            binding,
+            {"url": "https://example.test/article"},
+        )
+    finally:
+        pooled.close()
+
+    assert client.request_extensions is not None
+    assert client.request_extensions["timeout"] == {
+        "connect": 5.0,
+        "read": 5.0,
+        "write": 5.0,
+        "pool": 5.0,
+    }
+
+
+def test_service_429_exposes_only_safe_status_and_retry_after(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {"detail": "vendor-body-with-zyte-secret"},
+        status_code=429,
+        response_headers={
+            "content-type": "application/json",
+            "retry-after": "23",
+        },
+    )
+    binding = ProviderBinding(
+        name="zyte",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        options={"api_key": "zyte-secret", "mode": "browser"},
+        capabilities=frozenset({"raw_html", "text"}),
+    )
+
+    with pytest.raises(WebSafetyError) as raised:
+        getattr(provider_module, "ZyteProvider")(binding, service).fetch(_request())
+
+    assert raised.value.args == ("rate_limited",)
+    assert raised.value.status_code == 429
+    assert raised.value.status_kind == "service"
+    assert raised.value.retry_after_seconds == 23.0
+    assert "zyte-secret" not in str(raised.value)
+    assert "vendor-body" not in str(raised.value)
+
+
+def test_service_429_ignores_an_unbounded_retry_after_value(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {"detail": "vendor error"},
+        status_code=429,
+        response_headers={
+            "content-type": "application/json",
+            "retry-after": "9" * 5000,
+        },
+    )
+    binding = ProviderBinding(
+        name="zyte",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        options={"api_key": "zyte-secret", "mode": "browser"},
+        capabilities=frozenset({"raw_html", "text"}),
+    )
+
+    with pytest.raises(WebSafetyError) as raised:
+        getattr(provider_module, "ZyteProvider")(binding, service).fetch(_request())
+
+    assert raised.value.args == ("rate_limited",)
+    assert raised.value.status_code == 429
+    assert raised.value.status_kind == "service"
+    assert raised.value.retry_after_seconds is None
+
+
+def test_runtime_digest_shares_provider_transport_limiter_and_cooldown() -> None:
+    binding = ProviderBinding(
+        name="zyte-shared",
+        type="zyte",
+        base_url="https://api.zyte.com",
+        options={"api_key": "zyte-secret", "mode": "browser"},
+        timeout=timedelta(seconds=60),
+        connect_timeout=timedelta(seconds=10),
+        concurrency=1,
+        cooldown=timedelta(seconds=30),
+        capabilities=frozenset({"raw_html", "text"}),
+    )
+    retained_copy = replace(binding)
+    operationally_distinct = replace(
+        binding,
+        cooldown=timedelta(seconds=31),
+    )
+    catalog = WebRuntimeCatalog(
+        (binding, retained_copy, operationally_distinct)
+    )
+    try:
+        shared_limiter = catalog.limiter(binding)
+        shared_limiter.cooldown(5)
+
+        assert catalog.provider(binding) is catalog.provider(retained_copy)
+        assert catalog.transport_for(binding) is catalog.transport_for(retained_copy)
+        assert shared_limiter is catalog.limiter(retained_copy)
+        assert catalog.limiter(retained_copy).in_cooldown() is True
+        assert catalog.provider(binding) is not catalog.provider(
+            operationally_distinct
+        )
+        assert catalog.transport_for(binding) is not catalog.transport_for(
+            operationally_distinct
+        )
+        assert shared_limiter is not catalog.limiter(operationally_distinct)
+        assert catalog.client is catalog.client
+    finally:
+        catalog.close()
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "class_name"),
+    [
+        ("jina_reader", "JinaReaderProvider"),
+        ("zyte", "ZyteProvider"),
+        ("bright_data", "BrightDataProvider"),
+    ],
+)
+def test_hosted_provider_adapters_are_in_the_public_fixed_map(
+    provider_type: str,
+    class_name: str,
+) -> None:
+    binding = ProviderBinding(
+        name=provider_type,
+        type=provider_type,
+        base_url={
+            "jina_reader": "https://r.jina.ai",
+            "zyte": "https://api.zyte.com",
+            "bright_data": "https://api.brightdata.com",
+        }[provider_type],
+        options={
+            "api_key": "service-secret",
+            **(
+                {"zone": "unlocker", "output": "markdown"}
+                if provider_type == "bright_data"
+                else {}
+            ),
+        },
+        capabilities=frozenset({"markdown"}),
+    )
+
+    provider = build_provider(binding, _FakeService({"data": {}}))
+
+    assert isinstance(provider, getattr(web_module, class_name))
 
 
 @pytest.mark.parametrize(

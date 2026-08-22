@@ -12,6 +12,7 @@ import ipaddress
 import json
 from types import MappingProxyType
 import threading
+import time
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
@@ -19,7 +20,14 @@ import httpx
 import httpcore
 
 from ..errors import WebSafetyError
-from .contracts import FetchRequest, ProviderBinding, STABLE_FAILURE_REASONS
+from .contracts import (
+    FetchRequest,
+    ProviderBinding,
+    STABLE_FAILURE_REASONS,
+    WebAttemptCancelled,
+    WebStageDeadlineExpired,
+    current_web_execution_probe,
+)
 from .url import (
     MAX_REDIRECTS,
     NormalizedURL,
@@ -275,6 +283,9 @@ class _PooledPinnedHTTPXClient:
                 "headers": candidate_headers,
                 "extensions": extensions,
             }
+            timeout_extension = _request_timeout_extension(request, binding)
+            if timeout_extension is not None:
+                extensions["timeout"] = timeout_extension
             if payload is not None:
                 request_options["json"] = dict(payload)
             http_request = httpx.Request(method, request_url, **request_options)
@@ -302,6 +313,7 @@ class _PooledPinnedHTTPXClient:
                 detached = read_decompressed_limited(
                     response,
                     min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES),
+                    deadline=request.stage_deadline,
                 )
                 if self._proxy:
                     # The observable socket peer is the declared proxy, not
@@ -445,9 +457,82 @@ def _peer_from_response(response: Any) -> str | None:
     return None
 
 
-def _read_bytes(response: Any, limit: int) -> bytes:
+def _check_absolute_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise _error("timeout")
+
+
+def _check_execution_probe() -> None:
+    probe = current_web_execution_probe()
+    if probe is not None:
+        probe.check()
+
+
+def _remaining_budget(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _error("timeout")
+    return remaining
+
+
+def _request_timeout_values(
+    request: FetchRequest,
+    binding: ProviderBinding,
+) -> tuple[float, float] | None:
+    remaining = _remaining_budget(request.stage_deadline)
+    if remaining is None:
+        if binding.timeout is None:
+            return None
+        remaining = binding.timeout.total_seconds()
+    configured_connect = binding.connect_timeout or binding.timeout
+    connect = (
+        remaining
+        if configured_connect is None
+        else min(remaining, configured_connect.total_seconds())
+    )
+    return remaining, connect
+
+
+def _request_timeout_extension(
+    request: FetchRequest,
+    binding: ProviderBinding,
+) -> dict[str, float] | None:
+    # A catalog-owned client already has the provider defaults.  Per-request
+    # extensions are needed only when the coordinator supplied an earlier
+    # absolute bound.
+    if request.stage_deadline is None:
+        return None
+    values = _request_timeout_values(request, binding)
+    if values is None:
+        return None
+    remaining, connect = values
+    return {
+        "connect": connect,
+        "read": remaining,
+        "write": remaining,
+        "pool": remaining,
+    }
+
+
+def _httpx_timeout(request: FetchRequest, binding: ProviderBinding) -> Any:
+    values = _request_timeout_values(request, binding)
+    if values is None:
+        return None
+    total, connect = values
+    return httpx.Timeout(total, connect=connect)
+
+
+def _read_bytes(
+    response: Any,
+    limit: int,
+    *,
+    deadline: float | None = None,
+) -> bytes:
     """Read a response's decompressed stream and enforce *limit* exactly."""
 
+    _check_absolute_deadline(deadline)
     content_length = _header(getattr(response, "headers", {}), "content-length")
     if content_length is not None:
         try:
@@ -466,6 +551,7 @@ def _read_bytes(response: Any, limit: int) -> bytes:
         except TypeError:
             pieces = iterator
         for chunk in pieces:
+            _check_absolute_deadline(deadline)
             if chunk is None:
                 continue
             piece = bytes(chunk)
@@ -473,6 +559,7 @@ def _read_bytes(response: Any, limit: int) -> bytes:
             if total > limit:
                 raise _error("body_too_large")
             chunks.append(piece)
+            _check_absolute_deadline(deadline)
         return b"".join(chunks)
     raw = getattr(response, "content", None)
     if raw is None:
@@ -482,18 +569,26 @@ def _read_bytes(response: Any, limit: int) -> bytes:
     raw = bytes(raw or b"")
     if len(raw) > limit:
         raise _error("body_too_large")
+    _check_absolute_deadline(deadline)
     return raw
 
 
-def read_decompressed_limited(response: Any, limit: int) -> DirectResponse:
+def read_decompressed_limited(
+    response: Any,
+    limit: int,
+    *,
+    deadline: float | None = None,
+) -> DirectResponse:
     """Detach *response* while enforcing a decompressed byte limit."""
 
+    _check_absolute_deadline(deadline)
     limit = min(int(limit), MAX_BODY_BYTES)
     if limit <= 0:
         raise _error("body_too_large")
     if isinstance(response, DirectResponse):
         if len(response.body) > limit:
             raise _error("body_too_large")
+        _check_absolute_deadline(deadline)
         return response
     if isinstance(response, Mapping):
         response = DirectResponse(
@@ -514,7 +609,7 @@ def read_decompressed_limited(response: Any, limit: int) -> DirectResponse:
         )
     headers = dict(getattr(response, "headers", {}) or {})
     peer = _peer_from_response(response)
-    body = _read_bytes(response, limit)
+    body = _read_bytes(response, limit, deadline=deadline)
     status = int(getattr(response, "status_code", 0) or 0)
     raw_url = getattr(response, "url", None)
     url = str(raw_url) if raw_url is not None else None
@@ -858,11 +953,17 @@ def send_pinned_httpx_request(
             if headers is not None:
                 request_for_transport = _request_with_headers(request, outgoing_headers)
             result = _send_injected(transport, target, addresses, request_for_transport, binding)
-            detached = read_decompressed_limited(result, min(binding.max_body_bytes, MAX_BODY_BYTES))
+            detached = read_decompressed_limited(
+                result,
+                min(binding.max_body_bytes, MAX_BODY_BYTES),
+                deadline=request.stage_deadline,
+            )
             if detached.url is None:
                 detached.url = str(target)
                 detached.final_url = str(target)
             return detached
+        except (WebAttemptCancelled, WebStageDeadlineExpired):
+            raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
         except Exception:
@@ -870,9 +971,7 @@ def send_pinned_httpx_request(
             # text and response bodies must never escape this function.
             raise _error("provider_error") from None
 
-    timeout = None
-    if binding.timeout is not None:
-        timeout = httpx.Timeout(binding.timeout.total_seconds(), connect=(binding.connect_timeout or binding.timeout).total_seconds())
+    timeout = _httpx_timeout(request, binding)
     try:
         pinned_transport = _PinnedHTTPTransport(addresses)
         with httpx.Client(
@@ -882,7 +981,13 @@ def send_pinned_httpx_request(
             trust_env=False,
         ) as client:
             with client.stream("GET", str(target), headers=outgoing_headers) as response:
-                return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
+                return read_decompressed_limited(
+                    response,
+                    min(binding.max_body_bytes, MAX_BODY_BYTES),
+                    deadline=request.stage_deadline,
+                )
+    except (WebAttemptCancelled, WebStageDeadlineExpired):
+        raise
     except WebSafetyError as error:
         raise _safe_transport_safety_error(error) from None
     except httpx.TimeoutException:
@@ -914,22 +1019,23 @@ def send_pinned_httpx_post(
                 transport, target, addresses, request, binding, payload
             )
             result = _service_mapping_response(result, target)
-            detached = read_decompressed_limited(result, limit)
+            detached = read_decompressed_limited(
+                result,
+                limit,
+                deadline=request.stage_deadline,
+            )
             if detached.url is None:
                 detached.url = str(target)
                 detached.final_url = str(target)
             return detached
+        except (WebAttemptCancelled, WebStageDeadlineExpired):
+            raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
         except Exception:
             raise _error("provider_error") from None
 
-    timeout = None
-    if binding.timeout is not None:
-        timeout = httpx.Timeout(
-            binding.timeout.total_seconds(),
-            connect=(binding.connect_timeout or binding.timeout).total_seconds(),
-        )
+    timeout = _httpx_timeout(request, binding)
     try:
         pinned_transport = _PinnedHTTPTransport(addresses)
         with httpx.Client(
@@ -944,7 +1050,13 @@ def send_pinned_httpx_post(
                 headers=outgoing_headers,
                 json=dict(payload),
             ) as response:
-                return read_decompressed_limited(response, limit)
+                return read_decompressed_limited(
+                    response,
+                    limit,
+                    deadline=request.stage_deadline,
+                )
+    except (WebAttemptCancelled, WebStageDeadlineExpired):
+        raise
     except WebSafetyError as error:
         raise _safe_transport_safety_error(error) from None
     except httpx.TimeoutException:
@@ -989,7 +1101,12 @@ def bounded_manual_get(
             service_target = None
     redirect_count = 0
     while True:
+        _check_absolute_deadline(request.stage_deadline)
         addresses = guard_resolved_addresses(current.host, target_policy)
+        _check_absolute_deadline(request.stage_deadline)
+        # DNS may block long enough for Stage ownership to be lost.  Recheck
+        # immediately before each paid/direct send, including redirect hops.
+        _check_execution_probe()
         try:
             if injected is None:
                 response = send_pinned_httpx_request(current, addresses, request, binding)
@@ -1007,18 +1124,25 @@ def bounded_manual_get(
             # network failure.
             try:
                 response = send_pinned_httpx_request(current, addresses)
+            except (WebAttemptCancelled, WebStageDeadlineExpired):
+                raise
             except WebSafetyError as error:
                 raise _safe_transport_safety_error(error) from None
             except Exception:
                 raise _error("provider_error") from None
+        except (WebAttemptCancelled, WebStageDeadlineExpired):
+            raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
         except Exception:
             raise _error("provider_error") from None
 
         response = read_decompressed_limited(
-            response, min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES)
+            response,
+            min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES),
+            deadline=request.stage_deadline,
         )
+        _check_execution_probe()
         if response.peer is not None and response.peer not in addresses:
             raise _error("peer_mismatch")
         reported = response.final_url or response.url
@@ -1084,6 +1208,8 @@ def bounded_service_get(
     binding: ProviderBinding,
     headers: Mapping[str, str] | None = None,
     transport: Any = None,
+    *,
+    deadline: float | None = None,
 ) -> DirectResponse:
     """Call a provider service endpoint exactly once (no redirects)."""
 
@@ -1108,11 +1234,14 @@ def bounded_service_get(
             not is_non_public_address(address) for address in addresses
         ):
             raise _error("service_https_required")
+        _check_absolute_deadline(deadline)
+        _check_execution_probe()
         request = FetchRequest(
             url=str(target),
             mode="article",
             acceptable=frozenset({"text"}),
             target_headers=validated_headers,
+            stage_deadline=deadline,
         )
         if transport is None:
             response = send_pinned_httpx_request(target, addresses, request, binding)
@@ -1120,6 +1249,7 @@ def bounded_service_get(
             response = send_pinned_httpx_request(
                 target, addresses, request, binding, transport=transport
             )
+        _check_execution_probe()
         if response.peer is not None and response.peer not in addresses:
             raise _error("peer_mismatch")
         reported = response.final_url or response.url
@@ -1137,7 +1267,13 @@ def bounded_service_get(
             response.final_url = str(reported_target)
         if response.is_redirect:
             raise _error("service_redirect")
-        return read_decompressed_limited(response, min(binding.max_body_bytes, MAX_BODY_BYTES))
+        return read_decompressed_limited(
+            response,
+            min(binding.max_body_bytes, MAX_BODY_BYTES),
+            deadline=deadline,
+        )
+    except (WebAttemptCancelled, WebStageDeadlineExpired):
+        raise
     except WebSafetyError as error:
         raise _safe_transport_safety_error(error) from None
     except Exception:
@@ -1151,6 +1287,8 @@ def bounded_service_post(
     payload: Mapping[str, Any],
     headers: Mapping[str, str] | None = None,
     transport: Any = None,
+    *,
+    deadline: float | None = None,
 ) -> DirectResponse:
     """POST JSON to a provider service endpoint exactly once (no redirects)."""
 
@@ -1177,11 +1315,14 @@ def bounded_service_post(
             not is_non_public_address(address) for address in addresses
         ):
             raise _error("service_https_required")
+        _check_absolute_deadline(deadline)
+        _check_execution_probe()
         request = FetchRequest(
             url=str(target),
             mode="article",
             acceptable=frozenset({"text"}),
             target_headers=validated_headers,
+            stage_deadline=deadline,
         )
         response = send_pinned_httpx_post(
             target,
@@ -1191,6 +1332,7 @@ def bounded_service_post(
             binding,
             transport=transport,
         )
+        _check_execution_probe()
         if response.peer is not None and response.peer not in addresses:
             raise _error("peer_mismatch")
         reported = response.final_url or response.url
@@ -1211,8 +1353,12 @@ def bounded_service_post(
         if response.is_redirect:
             raise _error("service_redirect")
         return read_decompressed_limited(
-            response, min(binding.max_body_bytes, MAX_BODY_BYTES)
+            response,
+            min(binding.max_body_bytes, MAX_BODY_BYTES),
+            deadline=deadline,
         )
+    except (WebAttemptCancelled, WebStageDeadlineExpired):
+        raise
     except WebSafetyError as error:
         raise _safe_transport_safety_error(error) from None
     except Exception:

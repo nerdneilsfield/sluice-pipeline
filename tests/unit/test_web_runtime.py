@@ -25,6 +25,7 @@ from sluice.web.contracts import (
     QualityPolicy,
     WebBinding,
 )
+from sluice.web.registry import ProviderLimiter
 
 
 def _stage(tasks: list[dict[str, object]]) -> dict[str, object]:
@@ -35,6 +36,27 @@ def _stage(tasks: list[dict[str, object]]) -> dict[str, object]:
         "tasks": tasks,
         "output_schema": None,
     }
+
+
+def test_limiter_rechecks_cooldown_after_a_waiting_permit_arrives() -> None:
+    limiter = ProviderLimiter(concurrency=1, cooldown_seconds=30)
+
+    class Semaphore:
+        release_calls = 0
+
+        def acquire(self, timeout: float | None = None) -> bool:
+            del timeout
+            limiter.cooldown()
+            return True
+
+        def release(self) -> None:
+            self.release_calls += 1
+
+    semaphore = Semaphore()
+    limiter._semaphore = semaphore  # type: ignore[assignment]
+
+    assert limiter.acquire(timeout=1) is False
+    assert semaphore.release_calls == 1
 
 
 def test_snapshot_decoder_preserves_canonical_bytes_for_both_task_shapes():

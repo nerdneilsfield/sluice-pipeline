@@ -28,18 +28,24 @@ from .contracts import (
 )
 from .client import WebContentClient
 from .providers import (
+    BrightDataProvider,
     CORE_PROVIDER_BUILDERS,
     PROVIDER_BUILDERS,
     CurlCffiProvider,
     HTTPXProvider,
+    JinaReaderProvider,
     StartupHTTPProvider,
     TrafilaturaProvider,
+    ZyteProvider,
+    build_bright_data_provider,
     build_curl_cffi_provider,
     build_extractor,
     build_httpx_provider,
+    build_jina_reader_provider,
     build_provider,
     build_startup_http_provider,
     build_trafilatura_provider,
+    build_zyte_provider,
 )
 from .registry import ProviderLimiter, WebRuntimeCatalog
 
@@ -65,16 +71,22 @@ __all__ = [
     "WebContentClient",
     "CORE_PROVIDER_BUILDERS",
     "PROVIDER_BUILDERS",
+    "BrightDataProvider",
     "CurlCffiProvider",
     "HTTPXProvider",
+    "JinaReaderProvider",
     "StartupHTTPProvider",
     "TrafilaturaProvider",
+    "ZyteProvider",
+    "build_bright_data_provider",
     "build_curl_cffi_provider",
     "build_extractor",
     "build_httpx_provider",
+    "build_jina_reader_provider",
     "build_provider",
     "build_startup_http_provider",
     "build_trafilatura_provider",
+    "build_zyte_provider",
     "ProviderLimiter",
     "WebRuntimeCatalog",
 ]

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import importlib
 import json
+import math
 import re
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -19,6 +24,8 @@ from .contracts import (
     FetchRequest,
     NO_MATCH,
     ProviderBinding,
+    WebAttemptCancelled,
+    WebStageDeadlineExpired,
 )
 from .extractors import build_extractor as _build_extractor
 from .feed import validate_raw_feed
@@ -202,6 +209,8 @@ def _artifact_from_response(
 def _safe_fetch(call: Any) -> Any:
     try:
         return call()
+    except (WebAttemptCancelled, WebStageDeadlineExpired):
+        raise
     except WebSafetyError:
         raise
     except ExecutionError:
@@ -541,6 +550,9 @@ def _service_endpoint_url(binding: ProviderBinding, path: str) -> str:
     defaults = {
         "firecrawl": "https://api.firecrawl.dev",
         "crawl4ai": "http://localhost:11235",
+        "jina_reader": "https://r.jina.ai",
+        "zyte": "https://api.zyte.com",
+        "bright_data": "https://api.brightdata.com",
     }
     base = binding.base_url or defaults.get(binding.type)
     if not base:
@@ -550,7 +562,12 @@ def _service_endpoint_url(binding: ProviderBinding, path: str) -> str:
     return f"{str(base).rstrip('/')}{path}"
 
 
-def _service_headers(binding: ProviderBinding) -> dict[str, str]:
+def _service_headers(
+    binding: ProviderBinding,
+    *,
+    auth_scheme: str = "bearer",
+    adapter_headers: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     headers = {str(name): str(value) for name, value in binding.service_headers.items()}
     api_key = binding.options.get("api_key")
     if api_key is not None:
@@ -560,13 +577,65 @@ def _service_headers(binding: ProviderBinding) -> dict[str, str]:
             )
         # ``api_key`` is either resolved by WebRuntimeCatalog or an explicit
         # test value when an adapter is constructed directly.
-        headers["Authorization"] = f"Bearer {api_key}"
+        if auth_scheme == "basic":
+            encoded = base64.b64encode(f"{api_key}:".encode("utf-8")).decode(
+                "ascii"
+            )
+            headers["Authorization"] = f"Basic {encoded}"
+        elif auth_scheme == "bearer":
+            headers["Authorization"] = f"Bearer {api_key}"
+        else:
+            raise DefinitionError("unsupported service authentication scheme")
+    for name, value in (adapter_headers or {}).items():
+        normalized = str(name).casefold()
+        for existing in tuple(headers):
+            if existing.casefold() == normalized:
+                del headers[existing]
+        headers[str(name)] = str(value)
     try:
         return validate_target_headers(headers)
     except WebSafetyError:
         raise
     except Exception:
         raise WebSafetyError("provider_error") from None
+
+
+def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
+    """Parse a service Retry-After value without retaining header text."""
+
+    value = _header(headers, "retry-after")
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.isdigit():
+        try:
+            seconds = float(stripped)
+        except (ValueError, OverflowError):
+            return None
+        return seconds if math.isfinite(seconds) else None
+    try:
+        parsed = parsedate_to_datetime(stripped)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(
+            0.0,
+            (parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds(),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _service_failure(status: int, headers: Mapping[str, str]) -> WebSafetyError:
+    reason = "rate_limited" if status == 429 else "http_status"
+    error = WebSafetyError(reason)
+    # These are the only values the coordinator may retain.  Raw headers and
+    # vendor bodies never cross this boundary.
+    error.reason = reason
+    error.status_code = status
+    error.status_kind = "service"
+    if status == 429:
+        error.retry_after_seconds = _retry_after_seconds(headers)
+    return error
 
 
 def _json_from_response(response: Any) -> tuple[int, Mapping[str, str], Any, str | None]:
@@ -658,6 +727,9 @@ def _post_service_json(
     runtime: object | None,
     path: str,
     payload: Mapping[str, Any],
+    *,
+    service_headers: Mapping[str, str] | None = None,
+    deadline: float | None = None,
 ) -> tuple[Mapping[str, Any], int, Mapping[str, str], str | None]:
     transport = _service_transport(runtime, binding)
     target = _service_endpoint_url(binding, path)
@@ -666,16 +738,29 @@ def _post_service_json(
             target,
             binding,
             payload,
-            headers=_service_headers(binding),
+            headers=(
+                _service_headers(binding)
+                if service_headers is None
+                else service_headers
+            ),
             transport=transport,
+            deadline=deadline,
         )
-        status, headers, value, response_url = _json_from_response(response)
+        try:
+            status, headers, value, response_url = _json_from_response(response)
+        except WebSafetyError:
+            status, headers, _body, _response_url = _response_body(response)
+            if status < 200 or status >= 300:
+                raise _service_failure(status, headers) from None
+            raise
+    except (WebAttemptCancelled, WebStageDeadlineExpired):
+        raise
     except WebSafetyError:
         raise
     except BaseException:
         raise WebSafetyError("provider_error") from None
     if status < 200 or status >= 300:
-        raise WebSafetyError("http_status")
+        raise _service_failure(status, headers)
     if not isinstance(value, Mapping):
         raise WebSafetyError("provider_error")
     return value, status, headers, response_url
@@ -931,6 +1016,7 @@ class FirecrawlProvider:
             self.runtime,
             "/v2/scrape",
             payload,
+            deadline=request.stage_deadline,
         )
         if data.get("success") is False:
             raise WebSafetyError("provider_error")
@@ -1010,6 +1096,7 @@ class Crawl4AIProvider:
             self.runtime,
             "/crawl",
             payload,
+            deadline=request.stage_deadline,
         )
         if data.get("success") is False:
             raise WebSafetyError("provider_error")
@@ -1021,6 +1108,379 @@ class Crawl4AIProvider:
             response_headers=headers,
             raw_html_keys=("rawHtml", "raw_html", "html"),
             raw_source_keys=("body", "rawHtml"),
+        )
+
+
+def _bounded_scalar(value: Any) -> str | int | float | bool | None:
+    if isinstance(value, str):
+        return value[:8192]
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class JinaReaderProvider:
+    """JSON-mode Jina Reader adapter returning Markdown only."""
+
+    binding: ProviderBinding
+    runtime: object | None = None
+
+    def fetch(self, request: FetchRequest) -> DocumentArtifact:
+        if request.mode != "article" or "markdown" not in request.acceptable:
+            raise WebSafetyError("missing_capability")
+        request = _validate_remote_request_url(self.binding, request)
+        options = self.binding.options
+        adapter_headers: dict[str, str] = {"Accept": "application/json"}
+        target_selector = options.get("target_selector")
+        if isinstance(target_selector, str) and target_selector:
+            adapter_headers["X-Target-Selector"] = target_selector
+        remove_selectors = options.get("remove_selectors", ())
+        if isinstance(remove_selectors, (tuple, list)) and remove_selectors:
+            if not all(isinstance(item, str) and item for item in remove_selectors):
+                raise DefinitionError("invalid Jina remove_selectors")
+            adapter_headers["X-Remove-Selector"] = ",".join(remove_selectors)
+        if options.get("with_generated_alt", False) is True:
+            adapter_headers["X-With-Generated-Alt"] = "true"
+        headers = _service_headers(
+            self.binding,
+            adapter_headers=adapter_headers,
+        )
+        payload, status, _headers, _response_url = _post_service_json(
+            self.binding,
+            self.runtime,
+            "/",
+            {"url": request.url},
+            service_headers=headers,
+            deadline=request.stage_deadline,
+        )
+        if payload.get("code") not in (None, 200):
+            raise WebSafetyError("provider_error")
+        data = _remote_data(payload)
+        markdown = _first_string(data, "content", "markdown")
+        title_value = _first_string(data, "title")
+        title = None if title_value is None else title_value[:8192]
+        final_url = _remote_final_url(self.binding, request, data)
+        metadata: dict[str, Any] = {}
+        for key in ("description", "publishedTime"):
+            bounded = _bounded_scalar(data.get(key))
+            if bounded is not None:
+                metadata[key] = bounded
+        return DocumentArtifact(
+            source_url=request.url,
+            final_url=final_url,
+            status_code=_remote_status(data, status),
+            content_type="text/markdown",
+            markdown=markdown,
+            title=title,
+            metadata=metadata,
+            provider_instance=self.binding.name,
+            provider_type=self.binding.type,
+            capabilities=(
+                frozenset({"markdown"})
+                if markdown is not None
+                else frozenset()
+            ),
+        )
+
+
+JinaProvider = JinaReaderProvider
+
+
+def zyte_actions(actions: tuple[Any, ...] | list[Any]) -> list[dict[str, Any]]:
+    """Translate the closed Sluice action subset into Zyte actions."""
+
+    translated: list[dict[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, Mapping) or len(action) != 1:
+            raise DefinitionError("invalid Zyte action")
+        kind, raw_payload = next(iter(action.items()))
+        if not isinstance(raw_payload, Mapping):
+            raise DefinitionError("invalid Zyte action payload")
+        payload = _thaw_json(raw_payload)
+        if kind == "wait":
+            milliseconds = payload.get("milliseconds")
+            if (
+                isinstance(milliseconds, bool)
+                or not isinstance(milliseconds, int)
+                or milliseconds < 0
+            ):
+                raise DefinitionError("invalid Zyte wait action")
+            seconds = milliseconds / 1000
+            translated.append(
+                {
+                    "action": "waitForTimeout",
+                    "timeout": int(seconds) if seconds.is_integer() else seconds,
+                }
+            )
+        elif kind in {"click", "write"}:
+            selector = payload.get("selector")
+            if not isinstance(selector, str) or not selector:
+                raise DefinitionError(f"invalid Zyte {kind} action")
+            item: dict[str, Any] = {
+                "action": "click" if kind == "click" else "type",
+                "selector": {"type": "css", "value": selector},
+            }
+            if kind == "write":
+                text = payload.get("text")
+                if not isinstance(text, str) or not text:
+                    raise DefinitionError("invalid Zyte write action")
+                item["text"] = text
+            translated.append(item)
+        elif kind == "press":
+            key = payload.get("key")
+            if not isinstance(key, str) or not key:
+                raise DefinitionError("invalid Zyte press action")
+            translated.append({"action": "keyPress", "key": key})
+        elif kind == "scroll":
+            x = payload.get("x")
+            y = payload.get("y")
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+                for value in (x, y)
+            ):
+                raise DefinitionError("invalid Zyte scroll action")
+            translated.append({"action": "scrollTo", "x": x, "y": y})
+        else:
+            raise DefinitionError(f"unsupported Zyte action {kind!r}")
+    return translated
+
+
+def zyte_payload(binding: ProviderBinding, request: FetchRequest) -> dict[str, Any]:
+    options = binding.options
+    mode = options.get("mode", "auto")
+    if mode not in {"auto", "http", "browser"}:
+        raise DefinitionError("invalid Zyte mode")
+    payload: dict[str, Any] = {"url": request.url}
+    if mode == "http":
+        payload["httpResponseBody"] = True
+    else:
+        payload["browserHtml"] = True
+    automatic_content = options.get("automatic_content", True)
+    if not isinstance(automatic_content, bool):
+        raise DefinitionError("invalid Zyte automatic_content")
+    if automatic_content:
+        payload["pageContent"] = True
+        if mode in {"http", "browser"}:
+            payload["pageContentOptions"] = {
+                "extractFrom": (
+                    "httpResponseBody" if mode == "http" else "browserHtml"
+                )
+            }
+    geolocation = options.get("geolocation")
+    if geolocation is not None:
+        payload["geolocation"] = geolocation
+    actions = options.get("actions", binding.actions)
+    translated_actions = zyte_actions(actions)
+    if translated_actions:
+        if mode == "http":
+            raise DefinitionError("Zyte HTTP mode does not support actions")
+        payload["actions"] = translated_actions
+
+    target_headers = merge_target_headers(request, binding)
+    target_headers = {
+        name: value
+        for name, value in target_headers.items()
+        if name.casefold() != "cookie"
+    }
+    if target_headers:
+        if mode == "http":
+            payload["customHttpRequestHeaders"] = [
+                {"name": name, "value": value}
+                for name, value in target_headers.items()
+            ]
+        else:
+            referers = {
+                name: value
+                for name, value in target_headers.items()
+                if name.casefold() == "referer"
+            }
+            if len(referers) != len(target_headers):
+                raise WebSafetyError("bad_url")
+            if referers:
+                payload["requestHeaders"] = {
+                    "referer": next(iter(referers.values()))
+                }
+    if binding.cookies:
+        host = urlsplit(request.url).hostname
+        if not host:
+            raise WebSafetyError("bad_url")
+        payload["requestCookies"] = [
+            {"name": str(name), "value": str(value), "domain": host}
+            for name, value in binding.cookies.items()
+        ]
+    return payload
+
+
+def _zyte_target_headers(data: Mapping[str, Any]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    raw = data.get("httpResponseHeaders")
+    if not isinstance(raw, (tuple, list)):
+        return headers
+    for item in raw[:200]:
+        if not isinstance(item, Mapping):
+            continue
+        name = item.get("name")
+        value = item.get("value")
+        if isinstance(name, str) and isinstance(value, str):
+            headers[name] = value
+    return headers
+
+
+@dataclass(frozen=True, slots=True)
+class ZyteProvider:
+    """One-shot Zyte extraction adapter using Basic authentication."""
+
+    binding: ProviderBinding
+    runtime: object | None = None
+
+    def fetch(self, request: FetchRequest) -> DocumentArtifact:
+        request = _validate_remote_request_url(self.binding, request)
+        payload, status, response_headers, _response_url = _post_service_json(
+            self.binding,
+            self.runtime,
+            "/v1/extract",
+            zyte_payload(self.binding, request),
+            service_headers=_service_headers(
+                self.binding,
+                auth_scheme="basic",
+            ),
+            deadline=request.stage_deadline,
+        )
+        final_url = _remote_final_url(self.binding, request, payload)
+        target_status = _remote_status(payload, status)
+        raw_html = _first_string(payload, "browserHtml")
+        text: str | None = None
+        target_headers = _zyte_target_headers(payload)
+        content_type = _header(target_headers, "content-type")
+        if content_type:
+            content_type = content_type.split(";", 1)[0].strip().lower()
+        encoded_body = payload.get("httpResponseBody")
+        if encoded_body is not None:
+            if not isinstance(encoded_body, str):
+                raise WebSafetyError("provider_error")
+            try:
+                decoded = base64.b64decode(encoded_body, validate=True)
+            except (binascii.Error, ValueError):
+                raise WebSafetyError("provider_error") from None
+            sniffed = _sniff_content_type(decoded, content_type)
+            if sniffed in {"text/html", "application/xhtml+xml"}:
+                raw_html = _decode(decoded, target_headers)
+                content_type = sniffed
+            else:
+                text = _decode(decoded, target_headers)
+                content_type = sniffed
+        page_content = payload.get("pageContent")
+        title: str | None = None
+        metadata: dict[str, Any] = {}
+        if isinstance(page_content, Mapping):
+            text = _first_string(page_content, "itemMain") or text
+            title_value = _first_string(page_content, "title", "headline")
+            title = None if title_value is None else title_value[:8192]
+            bounded: dict[str, Any] = {}
+            for key in ("headline", "canonicalUrl", "itemMainXPath"):
+                value = _bounded_scalar(page_content.get(key))
+                if value is not None:
+                    bounded[key] = value
+            if bounded:
+                metadata["page_content"] = bounded
+        if content_type is None:
+            content_type = "text/html" if raw_html is not None else "text/plain"
+        capabilities: set[str] = set()
+        if raw_html is not None:
+            capabilities.add("raw_html")
+        if text is not None:
+            capabilities.add("text")
+        return DocumentArtifact(
+            source_url=request.url,
+            final_url=final_url,
+            status_code=target_status,
+            content_type=content_type,
+            raw_html=raw_html,
+            text=text,
+            title=title,
+            metadata=metadata,
+            provider_instance=self.binding.name,
+            provider_type=self.binding.type,
+            capabilities=frozenset(capabilities),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class BrightDataProvider:
+    """Synchronous Bright Data Web Unlocker adapter."""
+
+    binding: ProviderBinding
+    runtime: object | None = None
+
+    def fetch(self, request: FetchRequest) -> DocumentArtifact:
+        request = _validate_remote_request_url(self.binding, request)
+        options = self.binding.options
+        if options.get("async", False) is not False:
+            raise DefinitionError("Bright Data async mode is unsupported")
+        output = options.get("output", "markdown")
+        if output not in {"html", "markdown"}:
+            raise DefinitionError("invalid Bright Data output")
+        zone = options.get("zone")
+        if not isinstance(zone, str) or not zone:
+            raise DefinitionError("Bright Data zone is required")
+        payload: dict[str, Any] = {
+            "url": request.url,
+            "zone": zone,
+            "format": "raw",
+        }
+        if output == "markdown":
+            payload["data_format"] = "markdown"
+        country = options.get("country")
+        if country is not None:
+            payload["country"] = country
+        envelope, status, _headers, _response_url = _post_service_json(
+            self.binding,
+            self.runtime,
+            "/request",
+            payload,
+            deadline=request.stage_deadline,
+        )
+        body = envelope.get("body")
+        if not isinstance(body, str):
+            raise WebSafetyError("provider_error")
+        target_headers = envelope.get("headers")
+        target_headers = (
+            {str(name): str(value) for name, value in target_headers.items()}
+            if isinstance(target_headers, Mapping)
+            else {}
+        )
+        supplied_type = _header(target_headers, "content-type")
+        content_type = (
+            "text/markdown"
+            if output == "markdown"
+            else (
+                supplied_type.split(";", 1)[0].strip().lower()
+                if supplied_type
+                else "text/html"
+            )
+        )
+        final_url = _remote_final_url(self.binding, request, envelope)
+        target_status = _remote_status(envelope, status)
+        fields: dict[str, Any] = {
+            "markdown": body if output == "markdown" else None,
+            "raw_html": body if output == "html" else None,
+        }
+        return DocumentArtifact(
+            source_url=request.url,
+            final_url=final_url,
+            status_code=target_status,
+            content_type=content_type,
+            provider_instance=self.binding.name,
+            provider_type=self.binding.type,
+            capabilities=frozenset(
+                {"markdown" if output == "markdown" else "raw_html"}
+            ),
+            **fields,
         )
 
 
@@ -1048,6 +1508,18 @@ def build_crawl4ai_provider(binding: ProviderBinding, runtime: object | None = N
     return Crawl4AIProvider(binding, runtime)
 
 
+def build_jina_reader_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+    return JinaReaderProvider(binding, runtime)
+
+
+def build_zyte_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+    return ZyteProvider(binding, runtime)
+
+
+def build_bright_data_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+    return BrightDataProvider(binding, runtime)
+
+
 CORE_PROVIDER_BUILDERS = {
     "httpx": build_httpx_provider,
     "startup_http": build_startup_http_provider,
@@ -1055,6 +1527,9 @@ CORE_PROVIDER_BUILDERS = {
     "trafilatura": build_trafilatura_provider,
     "firecrawl": build_firecrawl_provider,
     "crawl4ai": build_crawl4ai_provider,
+    "jina_reader": build_jina_reader_provider,
+    "zyte": build_zyte_provider,
+    "bright_data": build_bright_data_provider,
 }
 PROVIDER_BUILDERS = CORE_PROVIDER_BUILDERS
 
@@ -1090,11 +1565,14 @@ def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] 
 __all__ = [
     "CORE_PROVIDER_BUILDERS",
     "PROVIDER_BUILDERS",
+    "BrightDataProvider",
     "Crawl4AIProvider",
     "CurlCffiProvider",
     "FirecrawlProvider",
     "HTTPXProvider",
     "HttpxProvider",
+    "JinaProvider",
+    "JinaReaderProvider",
     "StartupHTTPProvider",
     "StartupHttpProvider",
     "StartupHttp",
@@ -1102,14 +1580,20 @@ __all__ = [
     "TrafilaturaProviderProfile",
     "Trafilatura",
     "WebProvider",
+    "ZyteProvider",
+    "build_bright_data_provider",
     "build_crawl4ai_provider",
     "build_curl_cffi_provider",
     "build_extractor",
     "build_firecrawl_provider",
     "build_httpx_provider",
+    "build_jina_reader_provider",
     "build_provider",
     "build_startup_http_provider",
     "build_trafilatura_provider",
+    "build_zyte_provider",
     "firecrawl_actions",
     "firecrawl_payload",
+    "zyte_actions",
+    "zyte_payload",
 ]

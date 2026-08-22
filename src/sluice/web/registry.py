@@ -27,7 +27,12 @@ from .extractors import (
     build_extractor,
     validate_extractor_runtime,
 )
-from .http import DirectResponse, MAX_BODY_BYTES, _PooledPinnedHTTPXClient
+from .http import (
+    DirectResponse,
+    MAX_BODY_BYTES,
+    _PooledPinnedHTTPXClient,
+    _check_execution_probe,
+)
 from .providers import (
     CORE_PROVIDER_BUILDERS,
     WebProvider,
@@ -195,7 +200,26 @@ class ProviderLimiter:
         with self._lock:
             if time.monotonic() < self._cooldown_until:
                 return False
-        return self._semaphore.acquire(timeout=timeout)
+        acquired = self._semaphore.acquire(timeout=timeout)
+        if not acquired:
+            return False
+        # A different in-flight request may enter cooldown while this caller
+        # waits for the semaphore.  Do not spend the newly available permit on
+        # a request that should now advance to another provider.
+        with self._lock:
+            cooling_down = time.monotonic() < self._cooldown_until
+        if cooling_down:
+            self._semaphore.release()
+            return False
+        return True
+
+    def in_cooldown(self) -> bool:
+        with self._lock:
+            return time.monotonic() < self._cooldown_until
+
+    def cooldown_remaining(self) -> float:
+        with self._lock:
+            return max(0.0, self._cooldown_until - time.monotonic())
 
     def release(self) -> None:
         try:
@@ -391,12 +415,35 @@ class _ThreadLocalCurlSession:
         chunks: list[bytes] = []
         total = 0
         overflowed = False
+        timed_out = False
+
+        deadline = request.stage_deadline
+        now = time.monotonic()
+        if deadline is None and binding.timeout is not None:
+            deadline = now + binding.timeout.total_seconds()
+        remaining: float | None = None
+        if deadline is not None:
+            remaining = deadline - now
+            if remaining <= 0:
+                raise self._web_error("timeout")
 
         class BodyTooLarge(Exception):
             pass
 
+        class BodyTimedOut(Exception):
+            pass
+
+        def check_deadline(*, callback: bool = False) -> None:
+            nonlocal timed_out
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                if callback:
+                    raise BodyTimedOut
+                raise self._web_error("timeout")
+
         def receive(chunk: object) -> None:
             nonlocal overflowed, total
+            check_deadline(callback=True)
             try:
                 piece = bytes(chunk)
             except Exception:
@@ -407,6 +454,7 @@ class _ThreadLocalCurlSession:
                 raise BodyTooLarge
             total = next_total
             chunks.append(piece)
+            check_deadline(callback=True)
 
         kwargs: dict[str, object] = {
             "headers": dict(request.target_headers),
@@ -414,20 +462,39 @@ class _ThreadLocalCurlSession:
             "accept_encoding": "gzip, deflate, br",
             "content_callback": receive,
         }
-        if binding.timeout is not None:
-            kwargs["timeout"] = binding.timeout.total_seconds()
+        if remaining is not None:
+            configured_connect = binding.connect_timeout or binding.timeout
+            connect = (
+                remaining
+                if configured_connect is None
+                else min(remaining, configured_connect.total_seconds())
+            )
+            # curl_cffi accepts ``(connect, read)``.  The callback's absolute
+            # check additionally prevents a sequence of successful reads from
+            # resetting the provider's total budget.
+            kwargs["timeout"] = (connect, remaining)
         if binding.proxy is not None:
             kwargs["proxy"] = binding.proxy
+        check_deadline()
+        _check_execution_probe()
         try:
             response = requester("GET", str(target), **kwargs)
         except BodyTooLarge:
             raise self._web_error("body_too_large") from None
+        except BodyTimedOut:
+            raise self._web_error("timeout") from None
         except WebSafetyError:
             raise
         except BaseException:
             if overflowed:
                 raise self._web_error("body_too_large") from None
+            if timed_out or (
+                deadline is not None and time.monotonic() >= deadline
+            ):
+                raise self._web_error("timeout") from None
             raise self._web_error("provider_error") from None
+        check_deadline()
+        _check_execution_probe()
         try:
             status_code = int(getattr(response, "status_code", 0) or 0)
             headers = dict(getattr(response, "headers", {}) or {})
@@ -685,7 +752,15 @@ class WebRuntimeCatalog:
         if configured is not None:
             transport = configured
             owned = False
-        elif binding.type in {"httpx", "trafilatura", "firecrawl", "crawl4ai"}:
+        elif binding.type in {
+            "httpx",
+            "trafilatura",
+            "firecrawl",
+            "crawl4ai",
+            "jina_reader",
+            "zyte",
+            "bright_data",
+        }:
             try:
                 import httpx
 

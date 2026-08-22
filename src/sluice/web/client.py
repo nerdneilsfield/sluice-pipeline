@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import replace
 import hashlib
 import json
+import math
 import re
 import time
 from typing import Any
@@ -98,6 +99,7 @@ class WebContentClient:
         started: float,
         artifact: DocumentArtifact | None = None,
         status_code: int | None = None,
+        status_kind: str | None = None,
         detail_code: str | None = None,
     ) -> WebAttemptFailure:
         stable = {
@@ -122,13 +124,17 @@ class WebContentClient:
         safe_reason = reason if reason in stable else "provider_error"
         if status_code is None and artifact is not None:
             status_code = artifact.status_code
+        if status_kind not in {None, "service", "target"}:
+            status_kind = None
+        if status_kind is None and status_code is not None and artifact is not None:
+            status_kind = "target"
         return WebAttemptFailure(
             provider_instance=WebContentClient._name(binding),
             provider_type=WebContentClient._type(binding),
             attempt_ordinal=ordinal,
             reason=safe_reason,
             status_code=status_code,
-            status_kind="target" if status_code is not None else None,
+            status_kind=status_kind,
             elapsed_ms=WebContentClient._elapsed_ms(started),
             detail_code=detail_code,
         )
@@ -143,6 +149,54 @@ class WebContentClient:
     def _check_deadline(request: FetchRequest) -> None:
         if request.stage_deadline is not None and time.monotonic() >= request.stage_deadline:
             raise WebStageDeadlineExpired()
+
+    @staticmethod
+    def _provider_timeout(binding: object) -> float | None:
+        value = getattr(binding, "timeout_seconds", None)
+        if value is None:
+            timeout = getattr(binding, "timeout", None)
+            total_seconds = getattr(timeout, "total_seconds", None)
+            if callable(total_seconds):
+                value = total_seconds()
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            return None
+        return float(value)
+
+    @classmethod
+    def _provider_deadlines(
+        cls,
+        binding: object,
+        request: FetchRequest,
+        provider_attempt_started: float,
+    ) -> tuple[float | None, float | None]:
+        timeout = cls._provider_timeout(binding)
+        provider_deadline = (
+            None
+            if timeout is None
+            else provider_attempt_started + timeout
+        )
+        stage_deadline = request.stage_deadline
+        if provider_deadline is None:
+            return None, stage_deadline
+        if stage_deadline is None:
+            return provider_deadline, provider_deadline
+        return provider_deadline, min(stage_deadline, provider_deadline)
+
+    @staticmethod
+    def _check_provider_deadline(
+        request: FetchRequest,
+        provider_deadline: float | None,
+    ) -> None:
+        now = time.monotonic()
+        if request.stage_deadline is not None and now >= request.stage_deadline:
+            raise WebStageDeadlineExpired()
+        if provider_deadline is not None and now >= provider_deadline:
+            raise WebSafetyError("timeout")
 
     def _provider(self, binding: object) -> object:
         catalog = self.catalog
@@ -170,21 +224,73 @@ class WebContentClient:
                 return None
         return None
 
-    def _acquire(self, binding: object, request: FetchRequest) -> tuple[object | None, bool]:
+    @staticmethod
+    def _in_cooldown(limiter: object | None) -> bool:
+        if limiter is None:
+            return False
+        checker = getattr(limiter, "in_cooldown", None)
+        if callable(checker):
+            try:
+                return bool(checker())
+            except Exception:
+                return False
+        until = getattr(limiter, "cooldown_until", None)
+        try:
+            return (
+                not isinstance(until, bool)
+                and isinstance(until, (int, float))
+                and math.isfinite(until)
+                and time.monotonic() < until
+            )
+        except Exception:
+            return False
+
+    def _acquire(
+        self,
+        binding: object,
+        effective_deadline: float | None,
+    ) -> tuple[object | None, bool, bool]:
         limiter = self._limiter(binding)
         if limiter is None:
-            return None, True
+            return None, True, False
+        if self._in_cooldown(limiter):
+            return limiter, False, True
         acquire = getattr(limiter, "acquire", None)
         if not callable(acquire):
-            return None, True
+            return None, True, False
         timeout: float | None = None
-        if request.stage_deadline is not None:
-            timeout = max(0.0, request.stage_deadline - time.monotonic())
+        if effective_deadline is not None:
+            timeout = max(0.0, effective_deadline - time.monotonic())
         try:
             acquired = acquire(timeout=timeout)
         except TypeError:
             acquired = acquire(timeout)
-        return limiter, bool(acquired)
+        return limiter, bool(acquired), (
+            not bool(acquired) and self._in_cooldown(limiter)
+        )
+
+    @staticmethod
+    def _cooldown(limiter: object | None, seconds: object = None) -> None:
+        if limiter is None:
+            return
+        callback = getattr(limiter, "cooldown", None)
+        if not callable(callback):
+            return
+        value: float | None = None
+        if (
+            not isinstance(seconds, bool)
+            and isinstance(seconds, (int, float))
+            and math.isfinite(seconds)
+            and seconds >= 0
+        ):
+            value = float(seconds)
+        try:
+            if value is None:
+                callback()
+            else:
+                callback(value)
+        except Exception:
+            pass
 
     @staticmethod
     def _release(limiter: object | None) -> None:
@@ -526,6 +632,7 @@ class WebContentClient:
             try:
                 extractor = self._extractor(extractor_binding)
                 produced = extractor.extract(original)
+                self._check_probe()
             except (WebAttemptCancelled, WebStageDeadlineExpired):
                 raise
             except Exception as error:
@@ -659,7 +766,8 @@ class WebContentClient:
 
         for ordinal, binding in enumerate(providers, 1):
             self._check_deadline(request)
-            started = time.monotonic()
+            self._check_probe()
+            eligibility_started = time.monotonic()
             capabilities = self._capabilities(binding)
             if not capabilities.intersection(request.acceptable):
                 attempts.append(
@@ -667,37 +775,61 @@ class WebContentClient:
                         binding,
                         ordinal,
                         "missing_capability",
-                        started=started,
+                        started=eligibility_started,
                         detail_code="static_capability",
                     )
                 )
                 continue
 
+            # The provider clock starts immediately before limiter acquisition;
+            # static capability skips consume no paid provider budget.
+            started = time.monotonic()
+            provider_deadline, effective_deadline = self._provider_deadlines(
+                binding,
+                request,
+                started,
+            )
+            provider_request = (
+                request
+                if effective_deadline == request.stage_deadline
+                else replace(request, stage_deadline=effective_deadline)
+            )
             limiter: object | None = None
             acquired = False
             try:
                 self._check_probe()
-                limiter, acquired = self._acquire(binding, request)
+                limiter, acquired, cooling_down = self._acquire(
+                    binding,
+                    effective_deadline,
+                )
                 if not acquired:
+                    # Stage ownership always dominates a skip.  Provider
+                    # contention itself remains provider_busy, while a live
+                    # cooldown is rate_limited.
+                    self._check_deadline(request)
+                    self._check_probe()
                     attempts.append(
                         self._safe_failure(
                             binding,
                             ordinal,
-                            "provider_busy",
+                            "rate_limited" if cooling_down else "provider_busy",
                             started=started,
-                            detail_code="limiter",
+                            detail_code=(
+                                "cooldown" if cooling_down else "limiter"
+                            ),
                         )
                     )
                     continue
-                self._check_deadline(request)
+                self._check_provider_deadline(request, provider_deadline)
                 self._check_probe()
                 provider = self._provider(binding)
                 fetch = getattr(provider, "fetch", None)
                 if not callable(fetch):
                     raise WebSafetyError("provider_error")
-                artifact = self._provider_artifact(fetch(request), binding, request)
-                self._check_deadline(request)
+                fetched = fetch(provider_request)
+                self._check_provider_deadline(request, provider_deadline)
                 self._check_probe()
+                artifact = self._provider_artifact(fetched, binding, request)
 
                 consistency_failure = self._artifact_consistency_failure(artifact)
                 if consistency_failure is None and not artifact.capabilities <= capabilities:
@@ -717,6 +849,9 @@ class WebContentClient:
                 if request.mode == "list_html":
                     reason = self._validate_list_artifact(artifact, request)
                     if reason is not None:
+                        if reason == "http_status" and artifact.status_code == 429:
+                            reason = "rate_limited"
+                            self._cooldown(limiter)
                         attempts.append(
                             self._safe_failure(
                                 binding,
@@ -733,6 +868,10 @@ class WebContentClient:
                             artifact.final_url or request.url,
                             request.list_selector or "",
                         )
+                        self._check_provider_deadline(request, provider_deadline)
+                        self._check_probe()
+                    except (WebAttemptCancelled, WebStageDeadlineExpired):
+                        raise
                     except Exception as error:
                         reason = sanitize_web_error(error)
                         attempts.append(
@@ -746,6 +885,7 @@ class WebContentClient:
                         )
                         continue
                     if matches:
+                        self._check_probe()
                         return self._with_attempts(
                             self._source_artifact(artifact, request.mode), tuple(attempts)
                         )
@@ -758,9 +898,13 @@ class WebContentClient:
                 if request.mode == "raw_source":
                     reason = self._validate_raw_artifact(artifact, request)
                     if reason is None:
+                        self._check_probe()
                         return self._with_attempts(
                             self._source_artifact(artifact, request.mode), tuple(attempts)
                         )
+                    if reason == "http_status" and artifact.status_code == 429:
+                        reason = "rate_limited"
+                        self._cooldown(limiter)
                     attempts.append(
                         self._safe_failure(
                             binding,
@@ -775,8 +919,13 @@ class WebContentClient:
                 candidate, reason = self._article_candidate(
                     artifact, request, extractors
                 )
+                self._check_provider_deadline(request, provider_deadline)
+                self._check_probe()
                 if candidate is not None:
                     return self._with_attempts(candidate, tuple(attempts))
+                if reason == "http_status" and artifact.status_code == 429:
+                    reason = "rate_limited"
+                    self._cooldown(limiter)
                 attempts.append(
                     self._safe_failure(
                         binding,
@@ -789,19 +938,39 @@ class WebContentClient:
             except (WebAttemptCancelled, WebStageDeadlineExpired):
                 raise
             except Exception as error:
+                # A transport can report its effective timeout at the same
+                # instant that the owning Stage/probe becomes stale.  Durable
+                # Stage ownership dominates an ordinary provider failure.
+                self._check_deadline(request)
+                self._check_probe()
                 reason = sanitize_web_error(error)
+                if reason == "rate_limited":
+                    self._cooldown(
+                        limiter,
+                        getattr(error, "retry_after_seconds", None),
+                    )
+                status_code = getattr(error, "status_code", None)
+                if isinstance(status_code, bool) or not isinstance(
+                    status_code, int
+                ):
+                    status_code = None
+                status_kind = getattr(error, "status_kind", None)
                 attempts.append(
                     self._safe_failure(
                         binding,
                         ordinal,
                         reason,
                         started=started,
+                        status_code=status_code,
+                        status_kind=status_kind,
                     )
                 )
             finally:
                 if acquired:
                     self._release(limiter)
 
+        self._check_deadline(request)
+        self._check_probe()
         if request.mode == "list_html" and empty_list_candidate is not None:
             return self._with_attempts(empty_list_candidate, tuple(attempts))
         if request.mode == "article":

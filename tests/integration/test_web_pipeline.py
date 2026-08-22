@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from sluice.errors import ExecutionError
+from sluice.errors import ExecutionError, WebSafetyError
 from sluice.web.client import WebContentClient
 from sluice.web.contracts import (
     DocumentArtifact,
@@ -17,8 +17,14 @@ from sluice.web.contracts import (
     NO_MATCH,
     ProviderBinding,
     QualityPolicy,
+    WebAttemptCancelled,
+    WebExecutionProbe,
+    WebStageDeadlineExpired,
+    reset_web_execution_probe,
+    set_web_execution_probe,
 )
 from sluice.web.providers import FirecrawlProvider
+from sluice.web.registry import ProviderLimiter
 
 
 def _provider(name: str, *capabilities: str) -> ProviderBinding:
@@ -575,6 +581,429 @@ def test_busy_limiter_is_not_released_without_a_permit() -> None:
     assert busy_limiter.acquire_calls == 1
     assert busy_limiter.release_calls == 0
     assert catalog.calls == ["available"]
+    assert [attempt.reason for attempt in result.attempts] == ["provider_busy"]
+
+
+def test_source_attempt_without_stage_deadline_uses_provider_deadline_only(
+    monkeypatch,
+) -> None:
+    now = 100.0
+    monkeypatch.setattr("sluice.web.client.time.monotonic", lambda: now)
+    binding = ProviderBinding(
+        name="reader",
+        type="startup_http",
+        options={"trusted": True},
+        timeout_seconds=15,
+        capabilities=frozenset({"markdown"}),
+    )
+
+    class RecordingLimiter:
+        timeout: float | None = None
+
+        def acquire(self, timeout: float | None = None) -> bool:
+            self.timeout = timeout
+            return True
+
+        def release(self) -> None:
+            pass
+
+    class RecordingProvider:
+        received: FetchRequest | None = None
+
+        def fetch(self, request: FetchRequest) -> DocumentArtifact:
+            self.received = request
+            return DocumentArtifact(
+                final_url=request.url,
+                content_type="text/markdown",
+                markdown="provider deadline body",
+                capabilities=frozenset({"markdown"}),
+            )
+
+    limiter = RecordingLimiter()
+    provider = RecordingProvider()
+
+    class Catalog:
+        def limiter(self, received: ProviderBinding) -> RecordingLimiter:
+            assert received is binding
+            return limiter
+
+        def provider(self, received: ProviderBinding) -> RecordingProvider:
+            assert received is binding
+            return provider
+
+    result = WebContentClient(Catalog()).resolve(
+        _article_request(),
+        (binding,),
+        (ExtractorBinding(name="identity", type="identity"),),
+    )
+
+    assert result.provider_instance == "reader"
+    assert limiter.timeout == pytest.approx(15.0)
+    assert provider.received is not None
+    assert provider.received.stage_deadline == pytest.approx(115.0)
+
+
+def test_active_provider_cooldown_advances_without_a_network_call(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("sluice.web.registry.time.monotonic", lambda: 100.0)
+    cooling = _provider("cooling", "markdown")
+    available = _provider("available", "markdown")
+    catalog = _FakeCatalog(
+        {
+            "cooling": DocumentArtifact(),
+            "available": DocumentArtifact(
+                final_url="https://example.test/article",
+                content_type="text/markdown",
+                markdown="available after cooldown",
+                capabilities=frozenset({"markdown"}),
+            ),
+        }
+    )
+    cooling_limiter = ProviderLimiter(concurrency=1, cooldown_seconds=30)
+    cooling_limiter.cooldown()
+    catalog.limiters["cooling"] = cooling_limiter
+
+    result = WebContentClient(catalog).resolve(
+        _article_request(),
+        (cooling, available),
+        (ExtractorBinding(name="identity", type="identity"),),
+    )
+
+    assert result.provider_instance == "available"
+    assert catalog.calls == ["available"]
+    assert [attempt.reason for attempt in result.attempts] == ["rate_limited"]
+
+
+def test_retry_after_failure_cools_provider_and_retains_only_safe_status() -> None:
+    limited = _provider("limited", "markdown")
+    available = _provider("available", "markdown")
+    rate_limit = WebSafetyError("rate_limited")
+    rate_limit.reason = "rate_limited"
+    rate_limit.status_code = 429
+    rate_limit.status_kind = "service"
+    rate_limit.retry_after_seconds = 17.0
+
+    @dataclass
+    class CooldownLimiter(_FakeLimiter):
+        cooldown_calls: list[float | None] = None  # type: ignore[assignment]
+
+        def __post_init__(self) -> None:
+            self.cooldown_calls = []
+
+        def cooldown(self, seconds: float | None = None) -> None:
+            self.cooldown_calls.append(seconds)
+
+    catalog = _FakeCatalog(
+        {
+            "limited": rate_limit,  # type: ignore[dict-item]
+            "available": DocumentArtifact(
+                final_url="https://example.test/article",
+                content_type="text/markdown",
+                markdown="fallback after rate limit",
+                capabilities=frozenset({"markdown"}),
+            ),
+        }
+    )
+    limiter = CooldownLimiter()
+    catalog.limiters["limited"] = limiter
+
+    result = WebContentClient(catalog).resolve(
+        _article_request(),
+        (limited, available),
+        (ExtractorBinding(name="identity", type="identity"),),
+    )
+
+    assert result.provider_instance == "available"
+    assert limiter.cooldown_calls == [17.0]
+    assert len(result.attempts) == 1
+    assert result.attempts[0].reason == "rate_limited"
+    assert result.attempts[0].status_code == 429
+    assert result.attempts[0].status_kind == "service"
+
+
+def test_provider_deadline_expiry_advances_to_next_source_provider(
+    monkeypatch,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(
+        "sluice.web.client.time.monotonic", lambda: clock[0]
+    )
+    first = ProviderBinding(
+        name="first",
+        type="startup_http",
+        options={"trusted": True},
+        timeout_seconds=15,
+        capabilities=frozenset({"markdown"}),
+    )
+    second = ProviderBinding(
+        name="second",
+        type="startup_http",
+        options={"trusted": True},
+        timeout_seconds=15,
+        capabilities=frozenset({"markdown"}),
+    )
+    calls: list[str] = []
+
+    class Catalog:
+        limiters = {"first": _FakeLimiter(), "second": _FakeLimiter()}
+
+        def limiter(self, binding: ProviderBinding) -> _FakeLimiter:
+            return self.limiters[binding.name]
+
+        def provider(self, binding: ProviderBinding):
+            class Provider:
+                def fetch(self, request: FetchRequest) -> DocumentArtifact:
+                    calls.append(binding.name)
+                    if binding.name == "first":
+                        assert request.stage_deadline == 115.0
+                        clock[0] = 116.0
+                    return DocumentArtifact(
+                        final_url=request.url,
+                        content_type="text/markdown",
+                        markdown=f"{binding.name} provider body",
+                        capabilities=frozenset({"markdown"}),
+                    )
+
+            return Provider()
+
+    result = WebContentClient(Catalog()).resolve(
+        _article_request(),
+        (first, second),
+        (ExtractorBinding(name="identity", type="identity"),),
+    )
+
+    assert result.provider_instance == "second"
+    assert calls == ["first", "second"]
+    assert [attempt.reason for attempt in result.attempts] == ["timeout"]
+
+
+def test_stage_deadline_expiry_never_starts_another_provider(monkeypatch) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(
+        "sluice.web.client.time.monotonic", lambda: clock[0]
+    )
+    first = ProviderBinding(
+        name="first",
+        type="startup_http",
+        options={"trusted": True},
+        timeout_seconds=15,
+        capabilities=frozenset({"markdown"}),
+    )
+    second = ProviderBinding(
+        name="second",
+        type="startup_http",
+        options={"trusted": True},
+        timeout_seconds=15,
+        capabilities=frozenset({"markdown"}),
+    )
+    calls: list[str] = []
+
+    class Catalog:
+        def limiter(self, binding: ProviderBinding) -> _FakeLimiter:
+            return _FakeLimiter()
+
+        def provider(self, binding: ProviderBinding):
+            class Provider:
+                def fetch(self, request: FetchRequest) -> DocumentArtifact:
+                    calls.append(binding.name)
+                    clock[0] = 111.0
+                    return DocumentArtifact(
+                        final_url=request.url,
+                        content_type="text/markdown",
+                        markdown="late stage body",
+                        capabilities=frozenset({"markdown"}),
+                    )
+
+            return Provider()
+
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="article",
+        acceptable=frozenset({"markdown", "raw_html", "text"}),
+        preferred=("markdown", "raw_html", "text"),
+        quality=QualityPolicy(min_chars=1),
+        stage_deadline=110.0,
+    )
+
+    expired = False
+    try:
+        WebContentClient(Catalog()).resolve(
+            request,
+            (first, second),
+            (ExtractorBinding(name="identity", type="identity"),),
+        )
+    except WebStageDeadlineExpired:
+        expired = True
+
+    assert expired is True
+    assert calls == ["first"]
+
+
+def test_stage_deadline_dominates_a_final_provider_timeout(monkeypatch) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(
+        "sluice.web.client.time.monotonic", lambda: clock[0]
+    )
+    binding = ProviderBinding(
+        name="only",
+        type="startup_http",
+        options={"trusted": True},
+        timeout_seconds=30,
+        capabilities=frozenset({"markdown"}),
+    )
+
+    class Catalog:
+        def limiter(self, received: ProviderBinding) -> _FakeLimiter:
+            assert received is binding
+            return _FakeLimiter()
+
+        def provider(self, received: ProviderBinding):
+            assert received is binding
+
+            class Provider:
+                def fetch(self, request: FetchRequest) -> DocumentArtifact:
+                    assert request.stage_deadline == 110.0
+                    clock[0] = 111.0
+                    raise WebSafetyError("timeout")
+
+            return Provider()
+
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="article",
+        acceptable=frozenset({"markdown"}),
+        preferred=("markdown",),
+        quality=QualityPolicy(min_chars=1),
+        stage_deadline=110.0,
+    )
+
+    with pytest.raises(WebStageDeadlineExpired):
+        WebContentClient(Catalog()).resolve(
+            request,
+            (binding,),
+            (ExtractorBinding(name="identity", type="identity"),),
+        )
+
+
+def test_probe_cancellation_during_limiter_acquire_beats_busy_exhaustion() -> None:
+    binding = _provider("only", "markdown")
+    stale = False
+    network_calls = 0
+
+    class Limiter:
+        def acquire(self, timeout: float | None = None) -> bool:
+            del timeout
+            nonlocal stale
+            stale = True
+            return False
+
+    class Catalog:
+        def limiter(self, received: ProviderBinding) -> Limiter:
+            assert received is binding
+            return Limiter()
+
+        def provider(self, received: ProviderBinding):
+            assert received is binding
+
+            class Provider:
+                def fetch(self, request: FetchRequest) -> DocumentArtifact:
+                    del request
+                    nonlocal network_calls
+                    network_calls += 1
+                    raise AssertionError("a busy provider must not run")
+
+            return Provider()
+
+    def check() -> None:
+        if stale:
+            raise WebAttemptCancelled()
+
+    token = set_web_execution_probe(WebExecutionProbe(check))
+    try:
+        with pytest.raises(WebAttemptCancelled):
+            WebContentClient(Catalog()).resolve(
+                _article_request(),
+                (binding,),
+                (ExtractorBinding(name="identity", type="identity"),),
+            )
+    finally:
+        reset_web_execution_probe(token)
+
+    assert network_calls == 0
+
+
+def test_probe_cancellation_after_extractor_blocks_publication() -> None:
+    binding = _provider("html", "raw_html")
+    checks = 0
+    extractor_calls = 0
+
+    class Catalog:
+        def limiter(self, received: ProviderBinding) -> _FakeLimiter:
+            assert received is binding
+            return _FakeLimiter()
+
+        def provider(self, received: ProviderBinding):
+            assert received is binding
+
+            class Provider:
+                def fetch(self, request: FetchRequest) -> DocumentArtifact:
+                    return DocumentArtifact(
+                        final_url=request.url,
+                        content_type="text/html",
+                        raw_html=(
+                            "<article><p>"
+                            + ("provider html body " * 12)
+                            + "</p></article>"
+                        ),
+                        capabilities=frozenset({"raw_html"}),
+                    )
+
+            return Provider()
+
+        def extractor(self, received: ExtractorBinding):
+            assert received.type == "beautifulsoup"
+
+            class Extractor:
+                def extract(self, artifact: DocumentArtifact) -> DocumentArtifact:
+                    nonlocal extractor_calls
+                    extractor_calls += 1
+                    return DocumentArtifact(
+                        source_url=artifact.source_url,
+                        final_url=artifact.final_url,
+                        content_type="text/plain",
+                        text="extracted provider body",
+                        selected_format="text",
+                        capabilities=frozenset({"text"}),
+                    )
+
+            return Extractor()
+
+    def check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 6:
+            raise WebAttemptCancelled()
+
+    token = set_web_execution_probe(WebExecutionProbe(check))
+    cancelled = False
+    try:
+        WebContentClient(Catalog()).resolve(
+            _article_request(),
+            (binding,),
+            (
+                ExtractorBinding(name="identity", type="identity"),
+                ExtractorBinding(name="local", type="beautifulsoup"),
+            ),
+        )
+    except WebAttemptCancelled:
+        cancelled = True
+    finally:
+        reset_web_execution_probe(token)
+
+    assert extractor_calls == 1
+    assert checks == 6
+    assert cancelled is True
 
 
 def test_list_exhaustion_returns_earliest_valid_empty_candidate() -> None:
