@@ -22,7 +22,12 @@ from .contracts import (
 )
 from .extractors import build_extractor as _build_extractor
 from .feed import validate_raw_feed
-from .http import DirectResponse, bounded_manual_get
+from .http import (
+    DirectResponse,
+    bounded_manual_get,
+    bounded_service_post,
+    merge_target_headers,
+)
 from .url import TargetPolicy, normalize_target_url, validate_target_headers
 
 
@@ -449,18 +454,37 @@ def firecrawl_payload(binding: ProviderBinding, request: FetchRequest) -> dict[s
     mobile = options.get("mobile", binding.mobile)
     actions = options.get("actions", binding.actions)
     formats = ["markdown", "rawHtml"] if request.mode == "article" else ["rawHtml"]
-    return {
+    if wait_for is None:
+        wait_for = 0
+    if (
+        isinstance(wait_for, bool)
+        or not isinstance(wait_for, (int, float))
+        or wait_for < 0
+    ):
+        raise DefinitionError("Firecrawl wait_for must be a non-negative duration")
+    wait_for_milliseconds = wait_for * 1000
+    if not float(wait_for_milliseconds).is_integer():
+        raise DefinitionError("Firecrawl wait_for must resolve to whole milliseconds")
+    actions_payload = firecrawl_actions(actions)
+    if wait_for_selector is not None:
+        if not isinstance(wait_for_selector, str) or not wait_for_selector.strip():
+            raise DefinitionError("Firecrawl wait_for_selector must be non-empty")
+        actions_payload.insert(0, {"type": "wait", "selector": wait_for_selector})
+    target_headers = merge_target_headers(request, binding)
+    payload: dict[str, Any] = {
         "url": request.url,
         "formats": formats,
         "onlyMainContent": bool(only_main_content),
-        "waitFor": wait_for,
-        "waitForSelector": wait_for_selector,
+        "waitFor": int(wait_for_milliseconds),
         "mobile": bool(mobile),
-        "actions": firecrawl_actions(actions),
+        "actions": actions_payload,
         "maxAge": 0,
         "storeInCache": False,
         "skipTlsVerification": False,
     }
+    if target_headers:
+        payload["headers"] = target_headers
+    return payload
 
 
 def _service_transport(runtime: object | None, binding: ProviderBinding) -> Any:
@@ -481,6 +505,8 @@ def _service_transport(runtime: object | None, binding: ProviderBinding) -> Any:
     for candidate in candidates:
         if candidate is None:
             continue
+        if callable(getattr(candidate, "post_pinned", None)):
+            return candidate
         if callable(getattr(candidate, "post", None)):
             return candidate
         if callable(getattr(candidate, "request", None)):
@@ -511,83 +537,19 @@ def _service_headers(binding: ProviderBinding) -> dict[str, str]:
     headers = {str(name): str(value) for name, value in binding.service_headers.items()}
     api_key = binding.options.get("api_key")
     if api_key is not None:
+        if any(name.casefold() == "authorization" for name in headers):
+            raise DefinitionError(
+                f"provider {binding.name!r} cannot combine api_key with Authorization"
+            )
         # ``api_key`` is either resolved by WebRuntimeCatalog or an explicit
         # test value when an adapter is constructed directly.
-        for name in headers:
-            if name.casefold() == "authorization":
-                break
-        else:
-            headers["Authorization"] = f"Bearer {api_key}"
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         return validate_target_headers(headers)
     except WebSafetyError:
         raise
     except Exception:
         raise WebSafetyError("provider_error") from None
-
-
-def _service_call_target(transport: Any, binding: ProviderBinding, path: str) -> str:
-    """Use relative paths for small fake boundaries and absolute URLs for clients."""
-
-    module = str(getattr(type(transport), "__module__", ""))
-    if module.startswith(("httpx", "requests", "urllib3")) or getattr(
-        transport, "base_url", None
-    ):
-        return _service_endpoint_url(binding, path)
-    return path
-
-
-def _call_service_post(
-    transport: Any,
-    target: str,
-    payload: Mapping[str, Any],
-    headers: Mapping[str, str],
-) -> Any:
-    post = getattr(transport, "post", None)
-    request = getattr(transport, "request", None)
-    if callable(post):
-        attempts = (
-            lambda: post(target, json=dict(payload), headers=dict(headers)),
-            lambda: post(target, json=dict(payload)),
-            lambda: post(target, dict(payload), dict(headers)),
-            lambda: post(target, dict(payload)),
-        )
-    elif callable(request):
-        attempts = (
-            lambda: request("POST", target, json=dict(payload), headers=dict(headers)),
-            lambda: request("POST", target, json=dict(payload)),
-            lambda: request("POST", target, dict(payload), dict(headers)),
-            lambda: request("POST", target, dict(payload)),
-        )
-    elif callable(transport):
-        attempts = (
-            lambda: transport(target, json=dict(payload), headers=dict(headers)),
-            lambda: transport(target, json=dict(payload)),
-            lambda: transport(target, dict(payload), dict(headers)),
-            lambda: transport(target, dict(payload)),
-        )
-    elif isinstance(transport, Mapping):
-        callback = transport.get("post") or transport.get("request")
-        if not callable(callback):
-            raise TypeError("service transport has no POST boundary")
-        attempts = (
-            lambda: callback(target, json=dict(payload), headers=dict(headers)),
-            lambda: callback(target, json=dict(payload)),
-            lambda: callback("POST", target, json=dict(payload), headers=dict(headers)),
-            lambda: callback("POST", target, json=dict(payload)),
-        )
-    else:
-        raise TypeError("service transport has no POST boundary")
-    last_type_error: TypeError | None = None
-    for attempt in attempts:
-        try:
-            return attempt()
-        except TypeError as error:
-            last_type_error = error
-            continue
-    if last_type_error is not None:
-        raise last_type_error
-    raise TypeError("service transport POST failed")
 
 
 def _json_from_response(response: Any) -> tuple[int, Mapping[str, str], Any, str | None]:
@@ -681,12 +643,14 @@ def _post_service_json(
     payload: Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], int, Mapping[str, str], str | None]:
     transport = _service_transport(runtime, binding)
-    if transport is None:
-        raise WebSafetyError("provider_error")
-    target = _service_call_target(transport, binding, path)
+    target = _service_endpoint_url(binding, path)
     try:
-        response = _call_service_post(
-            transport, target, payload, _service_headers(binding)
+        response = bounded_service_post(
+            target,
+            binding,
+            payload,
+            headers=_service_headers(binding),
+            transport=transport,
         )
         status, headers, value, response_url = _json_from_response(response)
     except WebSafetyError:
@@ -724,14 +688,43 @@ def _remote_final_url(
 ) -> str:
     metadata = data.get("metadata")
     metadata_map = metadata if isinstance(metadata, Mapping) else {}
-    reported = _first_string(
+
+    def reported_url(
+        mapping: Mapping[str, Any], keys: tuple[str, ...]
+    ) -> str | None:
+        selected: str | None = None
+        for key in keys:
+            if key not in mapping:
+                continue
+            value = mapping[key]
+            # Vendor models commonly serialize an optional redirect URL as
+            # null.  A non-null authored value, however, must be a usable URL
+            # rather than silently falling back to the submitted target.
+            if value is None:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise WebSafetyError("provider_error")
+            if selected is None:
+                selected = value
+        return selected
+
+    data_reported = reported_url(
         data,
-        "final_url",
-        "finalUrl",
-        "url",
-        "sourceURL",
-        "source_url",
-    ) or _first_string(metadata_map, "sourceURL", "sourceUrl", "url", "finalUrl")
+        (
+            "redirected_url",
+            "redirectedUrl",
+            "final_url",
+            "finalUrl",
+            "url",
+            "sourceURL",
+            "source_url",
+        ),
+    )
+    metadata_reported = reported_url(
+        metadata_map,
+        ("sourceURL", "sourceUrl", "finalUrl", "final_url", "url"),
+    )
+    reported = data_reported or metadata_reported
     candidate = reported or request.url
     try:
         return str(normalize_target_url(candidate, TargetPolicy.from_value(binding.target_policy)))
@@ -813,9 +806,8 @@ def _remote_artifact(
         "rawHtml",
         "raw_html",
         "html",
-        "cleaned_html",
-        "cleanedHtml",
     ),
+    raw_source_keys: tuple[str, ...] = ("body", "rawHtml"),
 ) -> DocumentArtifact:
     final_url = _remote_final_url(binding, request, data)
     status_code = _remote_status(data, response_status)
@@ -837,11 +829,19 @@ def _remote_artifact(
     if content_type:
         content_type = content_type.split(";", 1)[0].strip().lower()
     if request.mode == "raw_source":
+        raw_source_value: Any = None
+        for key in raw_source_keys:
+            if key in data and data[key] is not None:
+                # Raw feed eligibility is deliberately narrower than the
+                # ordinary representation helper: nested/normalized values
+                # are not the exact body returned by the crawl operation.
+                raw_source_value = data[key]
+                break
         raw_source: bytes | None
-        if isinstance(raw_html_value, bytes):
-            raw_source = raw_html_value
-        elif isinstance(raw_html_value, str):
-            raw_source = raw_html_value.encode("utf-8")
+        if isinstance(raw_source_value, bytes):
+            raw_source = raw_source_value
+        elif isinstance(raw_source_value, str):
+            raw_source = raw_source_value.encode("utf-8")
         else:
             raw_source = None
         if raw_source is not None and validate_raw_feed(raw_source) is not None:
@@ -937,16 +937,56 @@ class Crawl4AIProvider:
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
         request = _validate_remote_request_url(self.binding, request)
         options = self.binding.options
-        payload: dict[str, Any] = {
-            "url": request.url,
+        target_headers = merge_target_headers(request, self.binding)
+        browser_headers = {
+            name: value
+            for name, value in target_headers.items()
+            if name.casefold() != "cookie"
+        }
+        cookies = [
+            {
+                "type": "dict",
+                "value": {
+                    "name": str(name),
+                    "value": str(value),
+                    "url": request.url,
+                },
+            }
+            for name, value in self.binding.cookies.items()
+        ]
+        browser_params: dict[str, Any] = {
             "browser_type": options.get("browser_type", "chromium"),
             "headless": bool(options.get("headless", True)),
-            "wait_until": options.get("wait_until", "domcontentloaded"),
-            "wait_for": options.get(
-                "wait_for_selector", self.binding.wait_for_selector
-            ),
-            "delay_before_return_html": options.get("delay_before_return_html", 0),
-            "cache_mode": "bypass",
+        }
+        if browser_headers:
+            browser_params["headers"] = {
+                "type": "dict",
+                "value": browser_headers,
+            }
+        if cookies:
+            browser_params["cookies"] = cookies
+        payload: dict[str, Any] = {
+            "urls": [request.url],
+            "browser_config": {
+                "type": "BrowserConfig",
+                "params": browser_params,
+            },
+            "crawler_config": {
+                "type": "CrawlerRunConfig",
+                "params": {
+                    "cache_mode": "bypass",
+                    "stream": False,
+                    "wait_until": options.get(
+                        "wait_until", "domcontentloaded"
+                    ),
+                    "wait_for": options.get(
+                        "wait_for_selector", self.binding.wait_for_selector
+                    ),
+                    "delay_before_return_html": options.get(
+                        "delay_before_return_html", 0
+                    ),
+                },
+            },
         }
         data, status, headers, _response_url = _post_service_json(
             self.binding,
@@ -962,6 +1002,8 @@ class Crawl4AIProvider:
             _remote_data(data),
             response_status=status,
             response_headers=headers,
+            raw_html_keys=("rawHtml", "raw_html", "html"),
+            raw_source_keys=("body", "rawHtml"),
         )
 
 

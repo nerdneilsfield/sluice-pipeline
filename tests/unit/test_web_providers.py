@@ -7,6 +7,7 @@ import json
 import logging
 from threading import Event, Thread
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -66,6 +67,8 @@ class _ServiceRequest:
     path: str
     json: dict[str, object]
     headers: dict[str, str]
+    url: str
+    follow_redirects: object
 
 
 class _FakeService:
@@ -75,20 +78,24 @@ class _FakeService:
 
     def post(
         self,
-        path: str,
+        url: str,
         *,
         json: dict[str, object],
         headers: dict[str, str],
         **kwargs: object,
     ) -> DirectResponse:
-        del kwargs
-        self.requests.append(_ServiceRequest(path, json, headers))
+        path = urlsplit(url).path if "://" in url else url
+        self.requests.append(
+            _ServiceRequest(path, json, headers, url, kwargs.get("follow_redirects"))
+        )
+        peer = "10.0.0.8" if ".internal" in url else "93.184.216.34"
         return DirectResponse(
             status_code=200,
             headers={"content-type": "application/json"},
             body=json_module_dumps(self.payload),
-            url=f"https://service.example{path}",
-            final_url=f"https://service.example{path}",
+            url=url if "://" in url else f"https://service.example{path}",
+            final_url=url if "://" in url else f"https://service.example{path}",
+            peer=peer,
         )
 
 
@@ -96,7 +103,10 @@ def json_module_dumps(value: object) -> bytes:
     return json.dumps(value).encode("utf-8")
 
 
-def test_firecrawl_article_requests_markdown_and_raw_html_once() -> None:
+def test_firecrawl_article_requests_markdown_and_raw_html_once(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
     service = _FakeService(
         {
             "success": True,
@@ -122,20 +132,32 @@ def test_firecrawl_article_requests_markdown_and_raw_html_once() -> None:
             {"press": {"key": "Enter"}},
             {"scroll": {"direction": "down"}},
         ),
+        target_headers={"X-Binding": "binding"},
+        cookies={"session": "cookie-secret"},
         capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
     )
 
-    artifact = FirecrawlProvider(binding, service).fetch(_request())
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="article",
+        acceptable=frozenset({"text", "raw_html", "markdown"}),
+        preferred=("markdown", "raw_html", "text"),
+        target_headers={"X-Request": "request"},
+        quality=QualityPolicy(min_chars=1),
+    )
+
+    artifact = FirecrawlProvider(binding, service).fetch(request)
 
     assert [request.path for request in service.requests] == ["/v2/scrape"]
     payload = service.requests[0].json
     assert payload["url"] == "https://example.test/article"
     assert payload["formats"] == ["markdown", "rawHtml"]
     assert payload["onlyMainContent"] is True
-    assert payload["waitForSelector"] == "main"
-    assert payload["waitFor"] == 2
+    assert "waitForSelector" not in payload
+    assert payload["waitFor"] == 2_000
     assert payload["mobile"] is True
     assert payload["actions"] == [
+        {"type": "wait", "selector": "main"},
         {"type": "wait", "milliseconds": 10},
         {"type": "click", "selector": "#load"},
         {"type": "write", "text": "sluice"},
@@ -145,11 +167,21 @@ def test_firecrawl_article_requests_markdown_and_raw_html_once() -> None:
     assert payload["maxAge"] == 0
     assert payload["storeInCache"] is False
     assert payload["skipTlsVerification"] is False
+    assert payload["headers"] == {
+        "X-Binding": "binding",
+        "X-Request": "request",
+        "Cookie": "session=cookie-secret",
+    }
     assert artifact.markdown == "article markdown"
     assert artifact.raw_html == "<html><body>article</body></html>"
+    assert service.requests[0].url == "https://api.firecrawl.dev/v2/scrape"
+    assert service.requests[0].follow_redirects is False
 
 
-def test_firecrawl_list_requests_raw_html_only() -> None:
+def test_firecrawl_list_requests_raw_html_only(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
     service = _FakeService(
         {"success": True, "data": {"rawHtml": "<html><body>list</body></html>"}}
     )
@@ -175,7 +207,8 @@ def test_firecrawl_list_requests_raw_html_only() -> None:
     assert artifact.markdown is None
 
 
-def test_crawl4ai_uses_sync_crawl_never_legacy_poll_paths() -> None:
+def test_crawl4ai_uses_sync_crawl_never_legacy_poll_paths(monkeypatch) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
     service = _FakeService(
         {
             "success": True,
@@ -197,26 +230,70 @@ def test_crawl4ai_uses_sync_crawl_never_legacy_poll_paths() -> None:
             "wait_for_selector": ".ready",
             "delay_before_return_html": 3,
         },
+        target_headers={"X-Binding": "binding"},
+        cookies={"session": "cookie-secret"},
         capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
     )
 
-    artifact = Crawl4AIProvider(binding, service).fetch(_request())
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="article",
+        acceptable=frozenset({"text", "raw_html", "markdown"}),
+        preferred=("markdown", "raw_html", "text"),
+        target_headers={"X-Request": "request"},
+        quality=QualityPolicy(min_chars=1),
+    )
+
+    artifact = Crawl4AIProvider(binding, service).fetch(request)
 
     assert [request.path for request in service.requests] == ["/crawl"]
     payload = service.requests[0].json
-    assert payload["url"] == "https://example.test/article"
-    assert payload["cache_mode"] == "bypass"
-    assert payload["browser_type"] == "firefox"
-    assert payload["headless"] is False
-    assert payload["wait_until"] == "networkidle"
-    assert payload["wait_for"] == ".ready"
-    assert payload["delay_before_return_html"] == 3
+    assert payload == {
+        "urls": ["https://example.test/article"],
+        "browser_config": {
+            "type": "BrowserConfig",
+            "params": {
+                "browser_type": "firefox",
+                "headless": False,
+                "headers": {
+                    "type": "dict",
+                    "value": {
+                        "X-Binding": "binding",
+                        "X-Request": "request",
+                    },
+                },
+                "cookies": [
+                    {
+                        "type": "dict",
+                        "value": {
+                            "name": "session",
+                            "value": "cookie-secret",
+                            "url": "https://example.test/article",
+                        },
+                    }
+                ],
+            },
+        },
+        "crawler_config": {
+            "type": "CrawlerRunConfig",
+            "params": {
+                "cache_mode": "bypass",
+                "stream": False,
+                "wait_until": "networkidle",
+                "wait_for": ".ready",
+                "delay_before_return_html": 3,
+            },
+        },
+    }
     assert service.requests[0].headers == {"Authorization": "Bearer service-secret"}
     assert artifact.raw_html == "<html><body>article</body></html>"
     assert artifact.markdown == "article markdown"
+    assert service.requests[0].url == "http://crawl4ai.internal:11235/crawl"
+    assert service.requests[0].follow_redirects is False
 
 
-def test_crawl4ai_self_host_can_omit_bearer_authentication() -> None:
+def test_crawl4ai_self_host_can_omit_bearer_authentication(monkeypatch) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
     service = _FakeService(
         {"success": True, "html": "<article>body</article>", "markdown": "body"}
     )
@@ -230,6 +307,430 @@ def test_crawl4ai_self_host_can_omit_bearer_authentication() -> None:
     Crawl4AIProvider(binding, service).fetch(_request())
 
     assert service.requests[0].headers == {}
+
+
+@pytest.mark.parametrize("provider_type", ["firecrawl", "crawl4ai"])
+def test_remote_provider_rejects_mixed_service_dns_before_post(
+    monkeypatch, provider_type: str
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host",
+        lambda host: ["93.184.216.34", "10.0.0.8"],
+    )
+    service = _FakeService(
+        {"success": True, "data": {"rawHtml": "<html>body</html>"}}
+    )
+    binding = ProviderBinding(
+        name="remote",
+        type=provider_type,
+        base_url="https://service.example",
+        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+    )
+    provider = (
+        FirecrawlProvider(binding, service)
+        if provider_type == "firecrawl"
+        else Crawl4AIProvider(binding, service)
+    )
+
+    with pytest.raises(WebSafetyError, match="ssrf_blocked"):
+        provider.fetch(_request())
+
+    assert service.requests == []
+
+
+def test_service_type_error_after_send_is_not_retried(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+
+    class TypeErrorAfterSend:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> object:
+            del url, kwargs
+            self.calls += 1
+            raise TypeError("response decoding failed after request was sent")
+
+    service = TypeErrorAfterSend()
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+    )
+
+    with pytest.raises(WebSafetyError, match="provider_error"):
+        FirecrawlProvider(binding, service).fetch(_request())
+
+    assert service.calls == 1
+
+
+def test_remote_provider_requires_https_for_public_service_before_post(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {"success": True, "data": {"rawHtml": "<html>body</html>"}}
+    )
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="http://api.example.test",
+    )
+
+    with pytest.raises(WebSafetyError, match="service_https_required"):
+        FirecrawlProvider(binding, service).fetch(_request())
+
+    assert service.requests == []
+
+
+def test_remote_provider_rejects_service_redirect_without_following(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+
+    class RedirectingService:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> DirectResponse:
+            del kwargs
+            self.calls += 1
+            return DirectResponse(
+                status_code=302,
+                headers={"location": "https://attacker.example/steal"},
+                url=url,
+                final_url=url,
+                peer="93.184.216.34",
+            )
+
+    service = RedirectingService()
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.example.test",
+    )
+
+    with pytest.raises(WebSafetyError, match="service_redirect"):
+        FirecrawlProvider(binding, service).fetch(_request())
+
+    assert service.calls == 1
+
+
+def test_remote_provider_rejects_unapproved_service_peer(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+
+    class ReboundService:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> DirectResponse:
+            del kwargs
+            self.calls += 1
+            return DirectResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=json_module_dumps(
+                    {"success": True, "data": {"rawHtml": "<html>body</html>"}}
+                ),
+                url=url,
+                final_url=url,
+                peer="93.184.216.35",
+            )
+
+    service = ReboundService()
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.example.test",
+    )
+
+    with pytest.raises(WebSafetyError, match="peer_mismatch"):
+        FirecrawlProvider(binding, service).fetch(_request())
+
+    assert service.calls == 1
+
+
+def test_remote_provider_rejects_changed_service_response_url(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+
+    class ChangedURLService:
+        calls = 0
+
+        def post(self, url: str, **kwargs: object) -> DirectResponse:
+            del url, kwargs
+            self.calls += 1
+            return DirectResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=json_module_dumps(
+                    {"success": True, "data": {"rawHtml": "<html>body</html>"}}
+                ),
+                url="https://attacker.example/stolen",
+                final_url="https://attacker.example/stolen",
+                peer="93.184.216.34",
+            )
+
+    service = ChangedURLService()
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.example.test",
+    )
+
+    with pytest.raises(WebSafetyError, match="service_redirect"):
+        FirecrawlProvider(binding, service).fetch(_request())
+
+    assert service.calls == 1
+
+
+@pytest.mark.parametrize("provider_type", ["firecrawl", "crawl4ai"])
+def test_remote_provider_rejects_protected_target_headers_before_post(
+    monkeypatch, provider_type: str
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {"success": True, "data": {"rawHtml": "<html>body</html>"}}
+    )
+    binding = ProviderBinding(
+        name="remote",
+        type=provider_type,
+        base_url="https://service.example",
+        target_headers={"Host": "metadata.internal"},
+    )
+    provider = (
+        FirecrawlProvider(binding, service)
+        if provider_type == "firecrawl"
+        else Crawl4AIProvider(binding, service)
+    )
+
+    with pytest.raises(WebSafetyError, match="forbidden_header"):
+        provider.fetch(_request())
+
+    assert service.requests == []
+
+
+def test_catalog_rejects_ambiguous_typed_and_header_service_auth() -> None:
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        options={"api_key": "typed-secret"},
+        base_url="https://api.firecrawl.dev",
+        service_headers={"AUTHORIZATION": "Bearer header-secret"},
+    )
+
+    with pytest.raises(DefinitionError, match="api_key.*Authorization"):
+        WebRuntimeCatalog((binding,))
+
+
+def test_catalog_service_post_uses_pinned_streaming_httpx_client(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    created: list[object] = []
+    requests: list[object] = []
+
+    class Stream:
+        def get_extra_info(self, name: str):
+            return ("93.184.216.34", 443) if name == "server_addr" else None
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def __init__(self, request: object) -> None:
+            self.url = getattr(request, "url")
+            self.extensions = {"network_stream": Stream()}
+
+        def iter_bytes(self):
+            yield json_module_dumps(
+                {"success": True, "data": {"rawHtml": "<html>body</html>"}}
+            )
+
+        def close(self) -> None:
+            pass
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+            created.append(self)
+
+        def send(self, request: object, *, stream: bool = False):
+            assert stream is True
+            requests.append(request)
+            return Response(request)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("httpx.Client", Client)
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+        capabilities=frozenset(
+            {"raw_html", "raw_source", "markdown", "rendered_js"}
+        ),
+    )
+    catalog = WebRuntimeCatalog((binding,))
+    try:
+        artifact = catalog.provider(binding).fetch(_request())
+    finally:
+        catalog.close()
+
+    assert artifact.raw_html == "<html>body</html>"
+    assert len(created) == 1
+    assert created[0].kwargs["follow_redirects"] is False
+    assert created[0].kwargs["trust_env"] is False
+    assert len(requests) == 1
+    assert getattr(requests[0], "method") == "POST"
+    assert str(getattr(requests[0], "url")) == "https://api.firecrawl.dev/v2/scrape"
+    assert getattr(requests[0], "extensions") == {
+        "sluice.addresses": ("93.184.216.34",)
+    }
+
+
+def test_crawl4ai_raw_source_accepts_exact_body_field(monkeypatch) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
+    feed = '<feed xmlns="http://www.w3.org/2005/Atom"><title>empty</title></feed>'
+    service = _FakeService(
+        {
+            "success": True,
+            "results": [
+                {
+                    "success": True,
+                    "url": "https://example.test/article",
+                    "body": feed,
+                    "cleaned_html": "<html>normalized</html>",
+                }
+            ],
+        }
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="http://crawl4ai.internal:11235",
+        capabilities=frozenset(
+            {"raw_html", "raw_source", "markdown", "rendered_js"}
+        ),
+    )
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="raw_source",
+        acceptable=frozenset({"raw_source"}),
+        preferred=("raw_source",),
+        quality=QualityPolicy(min_chars=1),
+    )
+
+    artifact = Crawl4AIProvider(binding, service).fetch(request)
+
+    assert artifact.raw_source == feed.encode()
+    assert artifact.capabilities == frozenset({"raw_source"})
+
+
+@pytest.mark.parametrize(
+    "returned_source",
+    [
+        {"cleaned_html": '<feed xmlns="http://www.w3.org/2005/Atom" />'},
+        {
+            "body": {
+                "value": '<feed xmlns="http://www.w3.org/2005/Atom" />'
+            }
+        },
+    ],
+    ids=("cleaned-html", "normalized-body-object"),
+)
+def test_crawl4ai_raw_source_never_uses_normalized_html(
+    monkeypatch, returned_source: dict[str, object]
+) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
+    service = _FakeService(
+        {
+            "success": True,
+            "results": [
+                {
+                    "success": True,
+                    "url": "https://example.test/article",
+                    **returned_source,
+                }
+            ],
+        }
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="http://crawl4ai.internal:11235",
+        capabilities=frozenset(
+            {"raw_html", "raw_source", "markdown", "rendered_js"}
+        ),
+    )
+    request = FetchRequest(
+        url="https://example.test/article",
+        mode="raw_source",
+        acceptable=frozenset({"raw_source"}),
+        preferred=("raw_source",),
+        quality=QualityPolicy(min_chars=1),
+    )
+
+    artifact = Crawl4AIProvider(binding, service).fetch(request)
+
+    assert artifact.raw_source is None
+    assert artifact.capabilities == frozenset()
+
+
+def test_present_non_string_reported_final_url_fails(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
+    service = _FakeService(
+        {
+            "success": True,
+            "data": {
+                "rawHtml": "<html>body</html>",
+                "metadata": {"sourceURL": 42},
+            },
+        }
+    )
+    binding = ProviderBinding(
+        name="fire",
+        type="firecrawl",
+        base_url="https://api.firecrawl.dev",
+    )
+
+    with pytest.raises(WebSafetyError, match="provider_error"):
+        FirecrawlProvider(binding, service).fetch(_request())
+
+
+def test_present_malformed_crawl4ai_redirected_url_fails(monkeypatch) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
+    service = _FakeService(
+        {
+            "success": True,
+            "results": [
+                {
+                    "success": True,
+                    "url": "https://example.test/article",
+                    "redirected_url": "file:///etc/passwd",
+                    "html": "<html>body</html>",
+                }
+            ],
+        }
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="http://crawl4ai.internal:11235",
+    )
+
+    with pytest.raises(WebSafetyError):
+        Crawl4AIProvider(binding, service).fetch(_request())
 
 
 def test_firecrawl_rejects_v1_before_sending_a_request() -> None:

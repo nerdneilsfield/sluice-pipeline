@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -67,7 +68,7 @@ class _RemoteService:
 
     def post(self, path: str, **kwargs: object) -> object:
         del kwargs
-        self.paths.append(path)
+        self.paths.append(urlsplit(path).path if "://" in path else path)
         return self.payload
 
 
@@ -276,7 +277,10 @@ def test_raw_source_rejects_non_generic_binary_mime_and_falls_back() -> None:
     assert [attempt.reason for attempt in result.attempts] == ["bad_content_type"]
 
 
-def test_firecrawl_raw_source_is_conditional_on_feed_validation() -> None:
+def test_firecrawl_raw_source_is_conditional_on_feed_validation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
     binding = ProviderBinding(
         name="fire",
         type="firecrawl",
@@ -302,7 +306,12 @@ def test_firecrawl_raw_source_is_conditional_on_feed_validation() -> None:
     assert service.paths == ["/v2/scrape"]
 
 
-def test_firecrawl_raw_source_rejects_article_html_and_exhausts_chain() -> None:
+def test_firecrawl_raw_source_rejects_article_html_and_exhausts_chain(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
+    )
     binding = ProviderBinding(
         name="fire",
         type="firecrawl",

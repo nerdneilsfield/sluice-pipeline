@@ -110,8 +110,12 @@ _CAPABILITIES: dict[str, frozenset[str]] = {
     "httpx": frozenset({"raw_html", "raw_source", "text"}),
     "curl_cffi": frozenset({"raw_html", "raw_source", "text"}),
     "trafilatura": frozenset({"raw_html", "text", "markdown"}),
-    "crawl4ai": frozenset({"raw_html", "text", "markdown", "rendered_js"}),
-    "firecrawl": frozenset({"raw_html", "markdown", "text"}),
+    "crawl4ai": frozenset(
+        {"raw_html", "raw_source", "markdown", "rendered_js"}
+    ),
+    "firecrawl": frozenset(
+        {"raw_html", "raw_source", "markdown", "rendered_js"}
+    ),
     "jina_reader": frozenset({"markdown"}),
     "zyte": frozenset({"raw_html", "markdown", "text"}),
     "bright_data": frozenset({"raw_html", "markdown", "text"}),
@@ -591,6 +595,13 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
         if spec.get("trusted") is not True:
             raise DefinitionError(f"{label}.trusted must be true")
         options["trusted"] = True
+
+    if "api_key" in options and any(
+        name.casefold() == "authorization" for name in service_headers
+    ):
+        raise DefinitionError(
+            f"{label}.api_key cannot be combined with an Authorization service header"
+        )
 
     target_policy = {
         "allow_remote_dns_proxy": allow_remote_dns_proxy,

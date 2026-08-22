@@ -132,13 +132,26 @@ def resolve_provider_binding(
     if not isinstance(binding, ProviderBinding):
         raise DefinitionError("provider binding must be a ProviderBinding")
     try:
+        resolved_options = _resolve_provider_options(
+            binding,
+            allow_missing=allow_missing_secrets,
+        )
+        resolved_service_headers = _resolve_secret(
+            binding.service_headers,
+            field=f"provider {binding.name}.service_headers",
+            allow_missing=allow_missing_secrets,
+        )
+        if "api_key" in resolved_options and any(
+            str(name).casefold() == "authorization"
+            for name in resolved_service_headers
+        ):
+            raise DefinitionError(
+                f"provider {binding.name!r} cannot combine api_key with Authorization"
+            )
         return ProviderBinding(
             name=binding.name,
             type=binding.type,
-            options=_resolve_provider_options(
-                binding,
-                allow_missing=allow_missing_secrets,
-            ),
+            options=resolved_options,
             base_url=binding.base_url,
             timeout=binding.timeout,
             connect_timeout=binding.connect_timeout,
@@ -147,7 +160,7 @@ def resolve_provider_binding(
             concurrency=binding.concurrency,
             cooldown=binding.cooldown,
             capabilities=binding.capabilities,
-            service_headers=_resolve_secret(binding.service_headers, field=f"provider {binding.name}.service_headers", allow_missing=allow_missing_secrets),
+            service_headers=resolved_service_headers,
             target_headers=_resolve_secret(binding.target_headers, field=f"provider {binding.name}.target_headers", allow_missing=allow_missing_secrets),
             cookies=_resolve_secret(binding.cookies, field=f"provider {binding.name}.cookies", allow_missing=allow_missing_secrets),
             proxy=_resolve_secret(binding.proxy, field=f"provider {binding.name}.proxy", allow_missing=allow_missing_secrets),
@@ -672,7 +685,7 @@ class WebRuntimeCatalog:
         if configured is not None:
             transport = configured
             owned = False
-        elif binding.type in {"httpx", "trafilatura"}:
+        elif binding.type in {"httpx", "trafilatura", "firecrawl", "crawl4ai"}:
             try:
                 import httpx
 
@@ -685,10 +698,15 @@ class WebRuntimeCatalog:
                             or executable_binding.timeout
                         ).total_seconds(),
                     )
-                remote_dns_proxy = _direct_remote_dns_proxy(executable_binding)
+                direct_provider = binding.type in {"httpx", "trafilatura"}
+                remote_dns_proxy = (
+                    _direct_remote_dns_proxy(executable_binding)
+                    if direct_provider
+                    else False
+                )
                 transport = _PooledPinnedHTTPXClient(
                     timeout=timeout,
-                    proxy=executable_binding.proxy,
+                    proxy=executable_binding.proxy if direct_provider else None,
                     remote_dns_proxy=remote_dns_proxy,
                 )
             except DefinitionError:

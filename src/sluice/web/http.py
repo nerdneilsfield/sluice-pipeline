@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import ipaddress
+import json
 from types import MappingProxyType
 import threading
 from typing import Any, Callable, Mapping
@@ -205,6 +206,32 @@ class _PooledPinnedHTTPXClient:
         request: FetchRequest,
         binding: ProviderBinding,
     ) -> DirectResponse:
+        return self._request_pinned(
+            "GET", target, addresses, request, binding, payload=None
+        )
+
+    def post_pinned(
+        self,
+        target: NormalizedURL,
+        addresses: tuple[str, ...],
+        request: FetchRequest,
+        binding: ProviderBinding,
+        payload: Mapping[str, Any],
+    ) -> DirectResponse:
+        return self._request_pinned(
+            "POST", target, addresses, request, binding, payload=payload
+        )
+
+    def _request_pinned(
+        self,
+        method: str,
+        target: NormalizedURL,
+        addresses: tuple[str, ...],
+        request: FetchRequest,
+        binding: ProviderBinding,
+        *,
+        payload: Mapping[str, Any] | None,
+    ) -> DirectResponse:
         with self._lock:
             if self._closed:
                 raise OSError("pinned HTTPX client is closed")
@@ -244,12 +271,13 @@ class _PooledPinnedHTTPXClient:
                 candidate_headers["Host"] = target.netloc
                 if target.scheme == "https":
                     extensions["sni_hostname"] = target.host
-            http_request = httpx.Request(
-                "GET",
-                request_url,
-                headers=candidate_headers,
-                extensions=extensions,
-            )
+            request_options: dict[str, Any] = {
+                "headers": candidate_headers,
+                "extensions": extensions,
+            }
+            if payload is not None:
+                request_options["json"] = dict(payload)
+            http_request = httpx.Request(method, request_url, **request_options)
             try:
                 response = client.send(http_request, stream=True)
                 break
@@ -551,6 +579,14 @@ def _merge_target_headers(request: FetchRequest, binding: ProviderBinding) -> di
     return merged
 
 
+def merge_target_headers(
+    request: FetchRequest, binding: ProviderBinding
+) -> dict[str, str]:
+    """Return validated provider/request target headers and declared cookies."""
+
+    return _merge_target_headers(request, binding)
+
+
 def _cookie_header(binding: ProviderBinding) -> str | None:
     if not binding.cookies:
         return None
@@ -700,6 +736,101 @@ def _send_injected(
     raise _error("network")
 
 
+def _service_mapping_response(result: Any, target: NormalizedURL) -> Any:
+    """Encode a decoded fake-service result as the JSON HTTP body it represents."""
+
+    if not isinstance(result, Mapping):
+        return result
+    envelope_keys = {
+        "status",
+        "status_code",
+        "headers",
+        "body",
+        "content",
+        "url",
+        "final_url",
+        "peer",
+    }
+    if envelope_keys.intersection(result):
+        return result
+    try:
+        body = json.dumps(result).encode("utf-8")
+    except (TypeError, ValueError):
+        raise _error("provider_error") from None
+    return DirectResponse(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body=body,
+        url=str(target),
+        final_url=str(target),
+    )
+
+
+def _send_injected_post(
+    transport: Any,
+    target: NormalizedURL,
+    addresses: tuple[str, ...],
+    request: FetchRequest,
+    binding: ProviderBinding,
+    payload: Mapping[str, Any],
+) -> Any:
+    """Issue exactly one injected POST; never signature-retry after a send."""
+
+    pinned_post = getattr(transport, "post_pinned", None)
+    if callable(pinned_post):
+        return pinned_post(target, addresses, request, binding, payload)
+    post = getattr(transport, "post", None)
+    if callable(post):
+        return post(
+            str(target),
+            json=dict(payload),
+            headers=dict(request.target_headers),
+            follow_redirects=False,
+        )
+    requester = getattr(transport, "request", None)
+    if callable(requester):
+        return requester(
+            "POST",
+            str(target),
+            json=dict(payload),
+            headers=dict(request.target_headers),
+            follow_redirects=False,
+        )
+    if isinstance(transport, Mapping):
+        callback = transport.get("post")
+        if callable(callback):
+            return callback(
+                str(target),
+                json=dict(payload),
+                headers=dict(request.target_headers),
+                follow_redirects=False,
+            )
+        callback = transport.get("request")
+        if callable(callback):
+            return callback(
+                "POST",
+                str(target),
+                json=dict(payload),
+                headers=dict(request.target_headers),
+                follow_redirects=False,
+            )
+    sender = getattr(transport, "send", None)
+    if callable(sender):
+        http_request = httpx.Request(
+            "POST", str(target), headers=dict(request.target_headers), json=dict(payload)
+        )
+        return sender(http_request, follow_redirects=False)
+    if callable(transport):
+        return transport(
+            "POST",
+            str(target),
+            json=dict(payload),
+            headers=dict(request.target_headers),
+            follow_redirects=False,
+        )
+    raise _error("network")
+
+
 def send_pinned_httpx_request(
     target: NormalizedURL,
     addresses: tuple[str, ...],
@@ -760,6 +891,67 @@ def send_pinned_httpx_request(
         raise _error("network") from None
     except Exception:
         # No third-party exception text is allowed to cross this boundary.
+        raise _error("provider_error") from None
+
+
+def send_pinned_httpx_post(
+    target: NormalizedURL,
+    addresses: tuple[str, ...],
+    payload: Mapping[str, Any],
+    request: FetchRequest,
+    binding: ProviderBinding,
+    *,
+    transport: Any = None,
+) -> DirectResponse:
+    """Perform one redirect-disabled JSON POST and return a bounded response."""
+
+    outgoing_headers = validate_target_headers(request.target_headers)
+    request = _request_with_headers(request, outgoing_headers)
+    limit = min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES)
+    if transport is not None:
+        try:
+            result = _send_injected_post(
+                transport, target, addresses, request, binding, payload
+            )
+            result = _service_mapping_response(result, target)
+            detached = read_decompressed_limited(result, limit)
+            if detached.url is None:
+                detached.url = str(target)
+                detached.final_url = str(target)
+            return detached
+        except WebSafetyError as error:
+            raise _safe_transport_safety_error(error) from None
+        except Exception:
+            raise _error("provider_error") from None
+
+    timeout = None
+    if binding.timeout is not None:
+        timeout = httpx.Timeout(
+            binding.timeout.total_seconds(),
+            connect=(binding.connect_timeout or binding.timeout).total_seconds(),
+        )
+    try:
+        pinned_transport = _PinnedHTTPTransport(addresses)
+        with httpx.Client(
+            transport=pinned_transport,
+            follow_redirects=False,
+            timeout=timeout,
+            trust_env=False,
+        ) as client:
+            with client.stream(
+                "POST",
+                str(target),
+                headers=outgoing_headers,
+                json=dict(payload),
+            ) as response:
+                return read_decompressed_limited(response, limit)
+    except WebSafetyError as error:
+        raise _safe_transport_safety_error(error) from None
+    except httpx.TimeoutException:
+        raise _error("timeout") from None
+    except (httpx.HTTPError, OSError):
+        raise _error("network") from None
+    except Exception:
         raise _error("provider_error") from None
 
 
@@ -953,11 +1145,88 @@ def bounded_service_get(
         raise _error("provider_error") from None
 
 
+def bounded_service_post(
+    url: str,
+    binding: ProviderBinding,
+    payload: Mapping[str, Any],
+    headers: Mapping[str, str] | None = None,
+    transport: Any = None,
+) -> DirectResponse:
+    """POST JSON to a provider service endpoint exactly once (no redirects)."""
+
+    try:
+        if (
+            not isinstance(binding, ProviderBinding)
+            or not binding.base_url
+            or not isinstance(payload, Mapping)
+        ):
+            raise _error("provider_error")
+        # Validate target-side options before a vendor request is issued.  The
+        # values themselves are mapped into the vendor payload by adapters and
+        # are never sent as headers to the service endpoint.
+        validate_target_headers(binding.target_headers)
+        validated_headers = validate_target_headers(headers)
+        service, service_policy = _service_endpoint(binding.base_url)
+        target = normalize_target_url(url, service_policy)
+        if target.host != service.host or target.port != service.port:
+            raise _error("service_redirect")
+        if target.scheme != service.scheme:
+            raise _error("service_redirect")
+        addresses = _guard_service_addresses(service, service_policy)
+        if service.scheme == "http" and any(
+            not is_non_public_address(address) for address in addresses
+        ):
+            raise _error("service_https_required")
+        request = FetchRequest(
+            url=str(target),
+            mode="article",
+            acceptable=frozenset({"text"}),
+            target_headers=validated_headers,
+        )
+        response = send_pinned_httpx_post(
+            target,
+            addresses,
+            payload,
+            request,
+            binding,
+            transport=transport,
+        )
+        if response.peer is not None and response.peer not in addresses:
+            raise _error("peer_mismatch")
+        reported = response.final_url or response.url
+        if reported:
+            try:
+                reported_target = normalize_target_url(reported, service_policy)
+            except WebSafetyError:
+                raise _error("service_redirect") from None
+            if (
+                reported_target.host != target.host
+                or reported_target.port != target.port
+                or reported_target.scheme != target.scheme
+                or reported_target.path != target.path
+                or reported_target.query != target.query
+            ):
+                raise _error("service_redirect")
+            response.final_url = str(reported_target)
+        if response.is_redirect:
+            raise _error("service_redirect")
+        return read_decompressed_limited(
+            response, min(binding.max_body_bytes, MAX_BODY_BYTES)
+        )
+    except WebSafetyError as error:
+        raise _safe_transport_safety_error(error) from None
+    except Exception:
+        raise _error("provider_error") from None
+
+
 __all__ = [
     "DirectResponse",
     "MAX_BODY_BYTES",
     "bounded_manual_get",
     "bounded_service_get",
+    "bounded_service_post",
+    "merge_target_headers",
     "read_decompressed_limited",
+    "send_pinned_httpx_post",
     "send_pinned_httpx_request",
 ]

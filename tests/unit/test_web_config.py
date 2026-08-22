@@ -137,6 +137,50 @@ stages:
     )
 
 
+def test_typed_api_key_and_authorization_service_header_are_mutually_exclusive(
+    tmp_path,
+):
+    path = _write(
+        tmp_path,
+        """version: 1
+web:
+  providers:
+    hosted:
+      type: firecrawl
+      api_key: env:FIRECRAWL_KEY
+      service_headers:
+        aUtHoRiZaTiOn: env:FIRECRAWL_AUTHORIZATION
+""",
+    )
+
+    with pytest.raises(DefinitionError, match="api_key.*Authorization"):
+        load_definition(path)
+
+
+def test_remote_provider_static_capabilities_match_returned_representations(
+    tmp_path,
+):
+    definition = load_definition(
+        _write(
+            tmp_path,
+            """version: 1
+web:
+  providers:
+    fire:
+      type: firecrawl
+    browser:
+      type: crawl4ai
+      base_url: http://crawl4ai.internal:11235
+""",
+        )
+    )
+
+    assert definition.web is not None
+    expected = frozenset({"raw_html", "raw_source", "markdown", "rendered_js"})
+    assert definition.web.providers["fire"].capabilities == expected
+    assert definition.web.providers["browser"].capabilities == expected
+
+
 def test_literal_proxy_query_and_fragment_are_rejected(tmp_path):
     path = _write(
         tmp_path,
