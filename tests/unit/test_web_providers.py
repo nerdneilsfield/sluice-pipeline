@@ -309,6 +309,100 @@ def test_crawl4ai_self_host_can_omit_bearer_authentication(monkeypatch) -> None:
     assert service.requests[0].headers == {}
 
 
+@pytest.mark.parametrize(
+    ("provider_type", "base_url", "address"),
+    [
+        ("firecrawl", "https://api.firecrawl.dev", "93.184.216.34"),
+        ("crawl4ai", "http://crawl4ai.internal:11235", "10.0.0.8"),
+    ],
+)
+def test_catalog_hosted_provider_prefers_binding_pinned_transport_over_global_http_client(
+    monkeypatch, provider_type: str, base_url: str, address: str
+) -> None:
+    monkeypatch.setattr(
+        "sluice.web.url.resolve_host", lambda host: [address]
+    )
+
+    class GlobalCompatibilityHTTPClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def post(self, url: str, **kwargs: object) -> DirectResponse:
+            del kwargs
+            self.calls += 1
+            return DirectResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=json_module_dumps(
+                    {
+                        "success": True,
+                        "data": {
+                            "rawHtml": "<html>global</html>",
+                            "metadata": {"sourceURL": "https://example.test/article"},
+                        },
+                    }
+                ),
+                url=url,
+                final_url=url,
+                peer=address,
+            )
+
+    class BindingPinnedService:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+        def post_pinned(
+            self,
+            target: object,
+            addresses: tuple[str, ...],
+            request: FetchRequest,
+            binding: ProviderBinding,
+            payload: dict[str, object],
+        ) -> DirectResponse:
+            del request, binding, payload
+            self.calls.append((str(target), addresses))
+            return DirectResponse(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                body=json_module_dumps(
+                    {
+                        "success": True,
+                        "data": {
+                            "rawHtml": "<html>binding</html>",
+                            "metadata": {"sourceURL": "https://example.test/article"},
+                        },
+                    }
+                ),
+                url=str(target),
+                final_url=str(target),
+                peer=address,
+            )
+
+    global_client = GlobalCompatibilityHTTPClient()
+    binding_transport = BindingPinnedService()
+    binding = ProviderBinding(
+        name="hosted",
+        type=provider_type,
+        base_url=base_url,
+        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+    )
+    runtime = SimpleNamespace(
+        http_client=global_client,
+        transports={binding.name: binding_transport},
+    )
+    catalog = WebRuntimeCatalog((binding,), runtime=runtime)
+    try:
+        artifact = catalog.provider(binding).fetch(_request())
+    finally:
+        catalog.close()
+
+    assert artifact.raw_html == "<html>binding</html>"
+    assert global_client.calls == 0
+    assert binding_transport.calls == [
+        (f"{base_url}/{'v2/scrape' if provider_type == 'firecrawl' else 'crawl'}", (address,))
+    ]
+
+
 @pytest.mark.parametrize("provider_type", ["firecrawl", "crawl4ai"])
 def test_remote_provider_rejects_mixed_service_dns_before_post(
     monkeypatch, provider_type: str

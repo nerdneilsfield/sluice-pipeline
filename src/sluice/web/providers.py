@@ -46,7 +46,12 @@ def _runtime_value(runtime: object, name: str, default: Any = None) -> Any:
     return getattr(runtime, name, default)
 
 
-def _transport_for(runtime: object, binding: ProviderBinding) -> Any:
+def _transport_for(
+    runtime: object,
+    binding: ProviderBinding,
+    *,
+    binding_specific_only: bool = False,
+) -> Any:
     resolver = _runtime_value(runtime, "transport_for")
     if callable(resolver):
         try:
@@ -64,6 +69,8 @@ def _transport_for(runtime: object, binding: ProviderBinding) -> Any:
     transports = _runtime_value(runtime, "transports")
     if isinstance(transports, Mapping) and transports.get(binding.name) is not None:
         return transports[binding.name]
+    if binding_specific_only:
+        return None
     for name in ("httpx_client", "http_client", "transport"):
         found = _runtime_value(runtime, name)
         if found is not None:
@@ -492,16 +499,26 @@ def _service_transport(runtime: object | None, binding: ProviderBinding) -> Any:
 
     candidates: list[Any] = []
     if runtime is not None:
+        # Hosted providers must use the catalog's binding-specific transport
+        # first.  In particular, the app-wide ``http_client`` is the trusted
+        # compatibility boundary for ``startup_http`` only; it may be a
+        # post-capable client but cannot enforce the hosted service's pinned
+        # streaming policy.
+        resolved = _transport_for(
+            runtime, binding, binding_specific_only=True
+        )
+        if resolved is not None:
+            candidates.append(resolved)
         candidates.append(runtime)
-        for name in ("service", "service_client", "http_client", "transport"):
+        for name in (
+            "service",
+            "service_client",
+            "httpx_client",
+            "transport",
+        ):
             value = _runtime_value(runtime, name)
             if value is not None:
                 candidates.append(value)
-        # Catalogs expose a binding-specific resolver.  It may return the
-        # same fake service used by tests or an operator-owned HTTP client.
-        resolved = _transport_for(runtime, binding)
-        if resolved is not None:
-            candidates.append(resolved)
     for candidate in candidates:
         if candidate is None:
             continue
