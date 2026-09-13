@@ -12,6 +12,7 @@ from sluice.canonical import content_hash
 from sluice.config import freeze_json
 from sluice.contracts import KEEP_CHECKPOINT, SourceRecord, SourceResult
 from sluice.errors import ExecutionError
+from sluice.web.contracts import DocumentArtifact
 import sluice.source_runtime as source_runtime
 from sluice.source_runtime import collect_source
 
@@ -135,29 +136,64 @@ class FakeHttp:
         return self.responses[url]
 
 
+class SourceWebClient:
+    def __init__(self, responses):
+        self.responses = responses
+
+    def resolve(self, request, fetch_chain, extract_chain):
+        del fetch_chain, extract_chain
+        body = self.responses[request.url]
+        if request.mode == "raw_source":
+            return DocumentArtifact(
+                source_url=request.url, final_url=request.url,
+                content_type="application/rss+xml", raw_source=body.encode(),
+                capabilities=frozenset({"raw_source"}),
+                provider_instance="__rss_direct__", provider_type="startup_http",
+            )
+        return DocumentArtifact(
+            source_url=request.url, final_url=request.url,
+            content_type="text/html", raw_html=body,
+            text="A Body with enough visible content for quality.",
+            selected_format="text", capabilities=frozenset({"raw_html", "text"}),
+            provider_instance="trusted", provider_type="startup_http", extraction="identity",
+        )
+
+
 RSS_XML = """<rss version='2.0'><channel><item><guid>a</guid><title>A</title><link>https://example.test/a</link></item></channel></rss>"""
 HTML_PAGE = "<html><body><article><h1>A</h1><p>Body</p></article></body></html>"
 
 
 @pytest.mark.parametrize(
-    ("source_use", "url"),
+    ("source_use", "url", "with_config"),
     [
-        ("sluice.sources.rss", "https://example.test/feed"),
-        ("sluice.sources.webpage", "https://example.test/page"),
+        ("sluice.sources.rss", "https://example.test/feed", "{url: https://example.test/feed}"),
+        ("sluice.sources.webpage", "https://example.test/page", "{url: https://example.test/page, fetch_chain: trusted, extract_chain: identity, output: text, min_chars: 1}"),
     ],
 )
 def test_builtin_sources_finalize_ordered_records_through_the_runtime(
-    tmp_path, source_use, url
+    tmp_path, source_use, url, with_config
 ):
     definition = tmp_path / "builtin.yml"
     definition.write_text(
-        f"version: 1\ndatabase: state.db\nsources:\n  feed: {{use: {source_use}, with: {{url: {url}}}}}\n",
+        f"""version: 1
+database: state.db
+web:
+  providers: {{trusted: {{type: startup_http, trusted: true}}}}
+  fetch_chains: {{trusted: {{providers: [trusted]}}}}
+  extractors: {{identity: {{type: identity}}}}
+  extract_chains: {{identity: {{extractors: [identity]}}}}
+sources:
+  feed: {{use: {source_use}, with: {with_config}}}
+""",
         encoding="utf-8",
     )
     app = open_app(
         definition,
         tmp_path / "state.db",
         http_client=FakeHttp(
+            {"https://example.test/feed": RSS_XML, "https://example.test/page": HTML_PAGE}
+        ),
+        web_content_client=SourceWebClient(
             {"https://example.test/feed": RSS_XML, "https://example.test/page": HTML_PAGE}
         ),
     )

@@ -100,6 +100,25 @@ class FunctionTask:
 
 
 @dataclass(frozen=True, slots=True)
+class BuiltinWebSource:
+    """Private invocation wrapper for a resolved built-in web Source."""
+
+    source: object
+
+    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+        collector = getattr(self.source, "collect", None)
+        if not callable(collector):
+            raise DefinitionError("built-in web Source has no collect operation")
+        return collector(config, checkpoint)
+
+    def collect_web(self, invocation: PrivateWebInvocation, checkpoint: JSONValue) -> SourceResult:
+        collector = getattr(self.source, "collect_web", None)
+        if not callable(collector):
+            raise DefinitionError("built-in web Source has no private collect operation")
+        return collector(invocation, checkpoint)
+
+
+@dataclass(frozen=True, slots=True)
 class BuiltinWebTask:
     """Private invocation wrapper for a resolved built-in web Task."""
 
@@ -258,6 +277,8 @@ def resolve_source(path: str, adapters: BoundaryAdapters) -> SourceContract:
     method = getattr(value, "collect", None)
     if callable(method):
         require_call_shape(path, method, {}, None)
+        if path in BUILTIN_SOURCE_BINDERS:
+            return BuiltinWebSource(value)  # type: ignore[return-value]
         return FunctionSource(method)
     if callable(value):
         require_call_shape(path, value, {}, None)

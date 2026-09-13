@@ -138,27 +138,16 @@ def _strict_json(
 
 
 def _collect_contract(app: App, source: Any, contract: Any, checkpoint: JSONValue) -> SourceResult:
-    """Run a built-in web Source through the private startup client when set."""
+    """Run a built-in web Source through its private bound wrapper."""
 
-    client = getattr(app, "web_content_client", None)
     if (
         getattr(source, "web_binding", None) is not None
         and getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
     ):
-        if client is None:
-            raise ExecutionError("web content client is not configured")
-        if not any(
-            callable(getattr(client, name, None))
-            for name in ("collect_web", "collect")
-        ):
-            raise ExecutionError("web content client has no collect operation")
-        from sluice.resolution import collect_web
-
-        return collect_web(
-            PrivateWebInvocation(source.with_config, source.web_binding),
-            checkpoint,
-            client,
-        )
+        runner = getattr(contract, "collect_web", None)
+        if not callable(runner):
+            raise ExecutionError("built-in web Source has no private collect operation")
+        return runner(PrivateWebInvocation(source.with_config, source.web_binding), checkpoint)
     return contract.collect(_fresh_json(source.with_config), checkpoint)
 
 

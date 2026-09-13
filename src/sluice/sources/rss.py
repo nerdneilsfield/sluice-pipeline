@@ -1,55 +1,56 @@
-"""Small, dependency-free RSS 2.0 and Atom Source adapter."""
+"""Private WebContentClient-backed RSS 2, Atom, and RSS 1 Sources."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
-from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
-import xml.etree.ElementTree as ET
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from sluice.contracts import (
-    HTTPClient,
-    JSONValue,
-    KEEP_CHECKPOINT,
-    SourceRecord,
-    SourceResult,
-)
+from sluice.canonical import canonical_json
+from sluice.contracts import HTTPClient, JSONValue, KEEP_CHECKPOINT, SourceRecord, SourceResult
 from sluice.errors import ExecutionError
+from sluice.web.contracts import DocumentArtifact, FetchRequest, PrivateWebInvocation
+from sluice.web.feed import validate_raw_feed
+from sluice.web.projectors import project_markdown, project_text
+from sluice.web.url import normalize_target_url_string
 
 
-def _local_name(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1].lower()
+def _local_name(tag: object) -> str:
+    return tag.rsplit("}", 1)[-1].lower() if isinstance(tag, str) else ""
 
 
-def _text(element: ET.Element | None) -> str | None:
+def _text(element: Any | None) -> str | None:
     if element is None:
         return None
     value = "".join(element.itertext()).strip()
     return value or None
 
 
-def _child(element: ET.Element, *names: str) -> ET.Element | None:
+def _child(element: Any, *names: str) -> Any | None:
     wanted = {name.lower() for name in names}
     for candidate in list(element):
-        if _local_name(candidate.tag) in wanted:
+        if _local_name(getattr(candidate, "tag", None)) in wanted:
             return candidate
     return None
 
 
-def _field(element: ET.Element, *names: str) -> str | None:
+def _field(element: Any, *names: str) -> str | None:
     return _text(_child(element, *names))
 
 
-def _link(element: ET.Element) -> str | None:
+def _link(element: Any, final_url: str) -> str | None:
     for candidate in list(element):
-        if _local_name(candidate.tag) != "link":
+        if _local_name(getattr(candidate, "tag", None)) != "link":
             continue
         href = candidate.attrib.get("href")
-        if href and href.strip():
-            return href.strip()
-        value = _text(candidate)
-        if value:
-            return value
+        value = href.strip() if isinstance(href, str) and href.strip() else _text(candidate)
+        if not value:
+            continue
+        try:
+            return normalize_target_url_string(urljoin(final_url, value))
+        except Exception:
+            continue
     return None
 
 
@@ -57,81 +58,112 @@ def _request_url(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> str:
     url = config.get("url")
     if not isinstance(url, str) or not url:
         raise ExecutionError("RSS Source requires a non-empty url")
-
-    # A checkpoint is a cursor only when the definition explicitly names the
-    # query parameter.  Merely having a prior checkpoint must not silently
-    # alter a feed request.
     parameter = config.get("cursor_param", config.get("checkpoint_param"))
-    if parameter is None or checkpoint is None:
+    if parameter is None or checkpoint is None or checkpoint is KEEP_CHECKPOINT:
         return url
     if not isinstance(parameter, str) or not parameter:
         raise ExecutionError("RSS cursor_param must be a non-empty string")
-    if checkpoint is KEEP_CHECKPOINT:
-        return url
+    cursor_text = checkpoint if isinstance(checkpoint, str) else canonical_json(checkpoint)
     split = urlsplit(url)
-    query = list(parse_qsl(split.query, keep_blank_values=True))
-    query = [(key, value) for key, value in query if key != parameter]
-    if isinstance(checkpoint, str):
-        cursor_text = checkpoint
-    else:
-        from sluice.canonical import canonical_json
-
-        cursor_text = canonical_json(checkpoint)
+    query = [(key, value) for key, value in parse_qsl(split.query, keep_blank_values=True) if key != parameter]
     query.append((parameter, cursor_text))
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
 
 
-def _parse(xml: str) -> tuple[SourceRecord, ...]:
-    if not isinstance(xml, str):
-        raise ExecutionError("RSS response must be text")
-    try:
-        root = ET.fromstring(xml)
-    except (ET.ParseError, TypeError) as error:
-        raise ExecutionError("invalid RSS or Atom XML") from error
+def _is_html(value: str) -> bool:
+    stripped = value.lstrip()
+    return stripped.startswith("<") and ">" in stripped
 
+
+def _entry_record(entry: Any, index: int, artifact: DocumentArtifact, output: str) -> SourceRecord:
+    final_url = artifact.final_url
+    if not isinstance(final_url, str):
+        raise ExecutionError("RSS response has no final URL")
+    entry_id = _field(entry, "guid", "id")
+    link = _link(entry, final_url)
+    title = _field(entry, "title")
+    content = _field(entry, "content", "encoded", "description", "summary")
+    published = _field(entry, "published", "pubdate")
+    updated = _field(entry, "updated", "modified")
+    logical_id = entry_id or link or title or f"entry-{index}"
+    if not isinstance(logical_id, str) or not logical_id.strip():
+        raise ExecutionError("RSS record logical_id must be a non-empty string")
+    value = content or ""
+    source = DocumentArtifact(
+        source_url=artifact.source_url,
+        final_url=final_url,
+        content_type="text/html" if _is_html(value) else "text/plain",
+        raw_html=value if _is_html(value) else None,
+        text=None if _is_html(value) else value,
+        selected_format="raw_html" if _is_html(value) else "text",
+        capabilities=frozenset({"raw_html" if _is_html(value) else "text"}),
+        title=title,
+        provider_instance=artifact.provider_instance,
+        provider_type=artifact.provider_type,
+        extraction="feed_parser",
+    )
+    projected = project_markdown(source) if output == "markdown" else project_text(source)
+    rendered = getattr(projected, "value", None)
+    metadata = getattr(projected, "metadata", None)
+    if not isinstance(rendered, str) or not isinstance(metadata, Mapping):
+        raise ExecutionError("RSS entry projection failed")
+    payload: dict[str, JSONValue] = {}
+    if title is not None:
+        payload["title"] = title
+    if link is not None:
+        payload["link"] = link
+    if content is not None:
+        payload["content"] = rendered
+    if published is not None:
+        payload["published"] = published
+    if updated is not None:
+        payload["updated"] = updated
+    return SourceRecord(logical_id.strip(), payload, metadata)
+
+
+def parse_feed_bytes(raw: bytes, final_url: str, *, artifact: DocumentArtifact | None = None, entry_output: str = "text") -> tuple[SourceRecord, ...]:
+    """Parse already-bounded literal feed bytes without retaining the raw body."""
+
+    root = validate_raw_feed(raw)
+    if root is None:
+        raise ExecutionError("invalid RSS raw source")
+    if entry_output not in {"text", "markdown"}:
+        raise ExecutionError("RSS entry_output must be text or markdown")
+    source = artifact or DocumentArtifact(
+        source_url=final_url,
+        final_url=final_url,
+        content_type="application/xml",
+        raw_source=raw,
+        capabilities=frozenset({"raw_source"}),
+        provider_instance="__rss_direct__",
+        provider_type="httpx",
+    )
     records: list[SourceRecord] = []
-    for index, entry in enumerate(
-        element
-        for element in root.iter()
-        if _local_name(element.tag) in {"item", "entry"}
-    ):
-        entry_id = _field(entry, "guid", "id")
-        link = _link(entry)
-        title = _field(entry, "title")
-        content = _field(entry, "content", "encoded", "description", "summary")
-        published = _field(entry, "published", "pubdate")
-        updated = _field(entry, "updated", "modified")
-        logical_id = entry_id or link or title or f"entry-{index}"
-        if not isinstance(logical_id, str) or not logical_id.strip():
-            raise ExecutionError("RSS record logical_id must be a non-empty string")
-
-        payload: dict[str, JSONValue] = {}
-        if title is not None:
-            payload["title"] = title
-        if link is not None:
-            payload["link"] = link
-        if content is not None:
-            payload["content"] = content
-        if published is not None:
-            payload["published"] = published
-        if updated is not None:
-            payload["updated"] = updated
-        records.append(SourceRecord(logical_id.strip(), payload))
+    seen: set[str] = set()
+    for index, entry in enumerate(element for element in root.root.iter() if _local_name(getattr(element, "tag", None)) in {"item", "entry"}):
+        record = _entry_record(entry, index, source, entry_output)
+        if record.logical_id not in seen:
+            seen.add(record.logical_id)
+            records.append(record)
     return tuple(records)
 
 
+def _next_checkpoint(config: Mapping[str, JSONValue]) -> JSONValue:
+    return config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
+
+
 def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
-    """Parse XML supplied explicitly in ``config``.
+    """Direct-only literal XML helper; it never performs Source collection I/O."""
 
-    The startup-bound adapter normally uses :class:`_RSSSource`; this public
-    function is also useful for callers that already have a response body.
-    """
-
+    del checkpoint
     xml = config.get("xml", config.get("content"))
-    if not isinstance(xml, str):
-        raise ExecutionError("RSS collect requires a startup HTTP adapter")
-    next_checkpoint = config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
-    return SourceResult(records=_parse(xml), next_checkpoint=next_checkpoint)
+    url = config.get("url")
+    if not isinstance(xml, str) or not isinstance(url, str) or not url:
+        raise ExecutionError("RSS collect requires literal XML and url")
+    return SourceResult(
+        records=parse_feed_bytes(xml.encode("utf-8"), url, entry_output=str(config.get("entry_output", "text"))),
+        next_checkpoint=_next_checkpoint(config),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,27 +171,51 @@ class _RSSSource:
     http_client: HTTPClient | None
     web_content_client: object | None = None
 
-    def collect(
-        self, config: Mapping[str, JSONValue], checkpoint: JSONValue
-    ) -> SourceResult:
-        if self.http_client is None:
-            raise ExecutionError("RSS Source has no startup HTTP adapter")
+    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+        return collect(config, checkpoint)
+
+    def collect_web(self, invocation: PrivateWebInvocation, checkpoint: JSONValue) -> SourceResult:
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        if self.web_content_client is None:
+            raise ExecutionError("web content client is not configured")
+        resolve = getattr(self.web_content_client, "resolve", None)
+        if not callable(resolve):
+            raise ExecutionError("web content client has no resolve operation")
+        config = invocation.with_config
+        binding = invocation.web_binding
         url = _request_url(config, checkpoint)
+        if binding.direct_provider is None:
+            raise ExecutionError("RSS Source has no direct provider")
+        request = FetchRequest(
+            url=url,
+            mode="raw_source",
+            acceptable=frozenset({"raw_source"}),
+            preferred=("raw_source",),
+            quality=binding.quality,
+        )
         try:
-            xml = self.http_client.get(url)
-        except BaseException as error:
-            raise ExecutionError("RSS HTTP request failed") from error
-        records = _parse(xml)
-        next_checkpoint = config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
-        return SourceResult(records=records, next_checkpoint=next_checkpoint)
+            artifact = resolve(request, (binding.direct_provider,), None)
+        except BaseException:
+            if binding.fetch_chain is None:
+                raise
+            artifact = resolve(request, binding.fetch_chain, None)
+        if not isinstance(artifact, DocumentArtifact) or not isinstance(artifact.raw_source, bytes):
+            raise ExecutionError("RSS resolution returned no raw source")
+        return SourceResult(
+            records=parse_feed_bytes(
+                artifact.raw_source,
+                artifact.final_url or url,
+                artifact=artifact,
+                entry_output=str(config.get("entry_output", "text")),
+            ),
+            next_checkpoint=_next_checkpoint(config),
+        )
 
 
 def bind(adapters: object | None) -> _RSSSource:
-    """Bind the startup boundary, retaining legacy HTTP compatibility."""
+    """Bind the immutable startup boundary without widening public contracts."""
 
     if hasattr(adapters, "http_client") and hasattr(adapters, "web_content_client"):
-        return _RSSSource(
-            getattr(adapters, "http_client"),
-            getattr(adapters, "web_content_client"),
-        )
+        return _RSSSource(getattr(adapters, "http_client"), getattr(adapters, "web_content_client"))
     return _RSSSource(adapters)  # type: ignore[arg-type]

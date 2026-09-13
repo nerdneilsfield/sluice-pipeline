@@ -246,6 +246,9 @@ pipelines:
     )
     definition = load_definition(path)
     assert definition.sources["s"].with_config["url"] == "https://example.test/feed.xml"
+    assert definition.sources["s"].web_binding is not None
+    assert definition.sources["s"].web_binding.direct_provider is not None
+    assert definition.sources["s"].web_binding.direct_provider.name == "__rss_direct__"
     assert definition.pipelines["p"].nodes["out"].from_refs == ("source.s",)
     assert definition.pipelines["p"].nodes["out"].policy.timeout == timedelta(seconds=120)
 

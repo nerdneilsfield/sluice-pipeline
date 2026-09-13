@@ -1,116 +1,75 @@
-"""Dependency-free webpage Source using the startup HTTP adapter."""
+"""Private WebContentClient-backed webpage Source and literal test helpers."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from typing import Mapping
-from urllib.parse import urljoin
 
-from sluice.contracts import (
-    HTTPClient,
-    JSONValue,
-    KEEP_CHECKPOINT,
-    SourceRecord,
-    SourceResult,
-)
+from sluice.contracts import HTTPClient, JSONValue, KEEP_CHECKPOINT, SourceRecord, SourceResult
 from sluice.errors import ExecutionError
+from sluice.web.contracts import DocumentArtifact, FetchRequest, PrivateWebInvocation
+from sluice.web.projectors import project_markdown, project_text
+from sluice.web.select import select_list_records
 
 
-class _SelectorParser(HTMLParser):
-    def __init__(self, selector: str):
-        super().__init__(convert_charrefs=True)
-        self.selector = selector.strip()
-        self.records: list[dict[str, str | None]] = []
-        self._active: list[dict[str, str | None]] = []
-        self._depth = 0
-
-    def _matches(self, tag: str, attrs: dict[str, str]) -> bool:
-        selector = self.selector
-        if not selector:
-            return False
-        if selector.startswith("#"):
-            return attrs.get("id") == selector[1:]
-        if selector.startswith("."):
-            return selector[1:] in (attrs.get("class") or "").split()
-        if "." in selector:
-            wanted_tag, wanted_class = selector.split(".", 1)
-            return tag == wanted_tag and wanted_class in (attrs.get("class") or "").split()
-        return tag == selector
-
-    def handle_starttag(self, tag: str, attrs_list):
-        attrs = {key: value or "" for key, value in attrs_list}
-        if self._matches(tag, attrs):
-            self._active.append(
-                {"tag": tag, "href": attrs.get("href"), "text": "", "depth": str(self._depth)}
-            )
-        self._depth += 1
-
-    def handle_startendtag(self, tag: str, attrs_list):
-        self.handle_starttag(tag, attrs_list)
-        self.handle_endtag(tag)
-
-    def handle_data(self, data: str):
-        text = data.strip()
-        if text:
-            for record in self._active:
-                record["text"] = (record.get("text") or "") + text
-
-    def handle_endtag(self, tag: str):
-        self._depth = max(0, self._depth - 1)
-        if not self._active:
-            return
-        # The most recently opened matching element closes first.  Nested
-        # matching elements remain ordered and independent.
-        for index in range(len(self._active) - 1, -1, -1):
-            if self._active[index].get("tag") == tag:
-                self.records.append(self._active.pop(index))
-                break
+def _next_checkpoint(config: Mapping[str, JSONValue]) -> JSONValue:
+    return config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
 
 
-def _page_record(url: str, html: str) -> SourceRecord:
-    parser = _SelectorParser("title")
-    try:
-        parser.feed(html)
-        parser.close()
-    except (TypeError, ValueError) as error:
-        raise ExecutionError("invalid webpage HTML") from error
-    title = parser.records[0].get("text") if parser.records else None
-    if not title:
-        heading = _SelectorParser("h1")
-        try:
-            heading.feed(html)
-            heading.close()
-        except (TypeError, ValueError) as error:
-            raise ExecutionError("invalid webpage HTML") from error
-        title = heading.records[0].get("text") if heading.records else None
-    payload: dict[str, JSONValue] = {"url": url, "content": html}
+def _record_from_projected(logical_id: str, url: str, projected: object, title: str | None) -> SourceRecord:
+    value = getattr(projected, "value", None)
+    metadata = getattr(projected, "metadata", None)
+    if not isinstance(value, str) or not isinstance(metadata, Mapping):
+        raise ExecutionError("webpage projection failed")
+    payload: dict[str, JSONValue] = {"url": url, "content": value}
     if title:
         payload["title"] = title
-    return SourceRecord(url, payload)
+    return SourceRecord(logical_id, payload, metadata)
 
 
-def _list_records(url: str, html: str, selector: str) -> tuple[SourceRecord, ...]:
-    parser = _SelectorParser(selector)
-    try:
-        parser.feed(html)
-        parser.close()
-    except (TypeError, ValueError) as error:
-        raise ExecutionError("invalid webpage HTML") from error
+def _list_records(
+    source_url: str,
+    final_url: str,
+    html: str,
+    selector: str,
+    *,
+    provider_instance: str | None = None,
+    provider_type: str | None = None,
+) -> tuple[SourceRecord, ...]:
     records: list[SourceRecord] = []
-    for index, found in enumerate(parser.records):
-        text = (found.get("text") or "").strip()
-        href = found.get("href")
-        record_url = urljoin(url, href) if href else url
-        logical_id = href or f"{url}#{index}"
-        payload: dict[str, JSONValue] = {"url": record_url, "content": text}
-        if text:
-            payload["title"] = text
-        records.append(SourceRecord(logical_id, payload))
+    for match in select_list_records(html, final_url, selector):
+        artifact = DocumentArtifact(
+            source_url=source_url,
+            final_url=final_url,
+            content_type="text/plain",
+            text=match.text,
+            selected_format="text",
+            capabilities=frozenset({"text"}),
+            provider_instance=provider_instance,
+            provider_type=provider_type,
+            extraction="list_selector",
+        )
+        records.append(
+            _record_from_projected(
+                match.logical_id,
+                match.url,
+                project_text(artifact),
+                match.title,
+            )
+        )
     return tuple(records)
 
 
+def _page_record(artifact: DocumentArtifact, output: str) -> SourceRecord:
+    if artifact.final_url is None:
+        raise ExecutionError("webpage response has no final URL")
+    projected = project_markdown(artifact) if output == "markdown" else project_text(artifact)
+    return _record_from_projected(artifact.final_url, artifact.final_url, projected, artifact.title)
+
+
 def _collect_html(config: Mapping[str, JSONValue], html: str) -> SourceResult:
+    """Project a literal HTML body for direct deterministic helper callers."""
+
     if not isinstance(html, str):
         raise ExecutionError("webpage response must be text")
     url = config.get("url")
@@ -119,21 +78,32 @@ def _collect_html(config: Mapping[str, JSONValue], html: str) -> SourceResult:
     selector = config.get("list_selector", config.get("selector"))
     if selector is not None and (not isinstance(selector, str) or not selector.strip()):
         raise ExecutionError("webpage selector must be a non-empty string")
-    records = (
-        _list_records(url, html, selector)
-        if isinstance(selector, str)
-        else (_page_record(url, html),)
-    )
-    next_checkpoint = config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
-    return SourceResult(records=records, next_checkpoint=next_checkpoint)
+    if isinstance(selector, str):
+        records = _list_records(url, url, html, selector)
+    else:
+        output = config.get("output", "text")
+        if output not in {"markdown", "text"}:
+            raise ExecutionError("webpage output must be markdown or text")
+        artifact = DocumentArtifact(
+            source_url=url,
+            final_url=url,
+            content_type="text/html",
+            raw_html=html,
+            selected_format="raw_html",
+            capabilities=frozenset({"raw_html"}),
+            extraction="input",
+        )
+        records = (_page_record(artifact, output),)
+    return SourceResult(records=records, next_checkpoint=_next_checkpoint(config))
 
 
 def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
-    """Collect HTML supplied explicitly in ``config`` (no network fallback)."""
+    """Direct-only literal HTML helper; it never performs Source collection I/O."""
 
+    del checkpoint
     html = config.get("html", config.get("content"))
     if not isinstance(html, str):
-        raise ExecutionError("webpage collect requires a startup HTTP adapter")
+        raise ExecutionError("webpage collect requires literal HTML")
     return _collect_html(config, html)
 
 
@@ -142,27 +112,74 @@ class _WebpageSource:
     http_client: HTTPClient | None
     web_content_client: object | None = None
 
-    def collect(
-        self, config: Mapping[str, JSONValue], checkpoint: JSONValue
-    ) -> SourceResult:
-        if self.http_client is None:
-            raise ExecutionError("webpage Source has no startup HTTP adapter")
+    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+        del checkpoint
+        return collect(config, KEEP_CHECKPOINT)
+
+    def collect_web(self, invocation: PrivateWebInvocation, checkpoint: JSONValue) -> SourceResult:
+        del checkpoint
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        if self.web_content_client is None:
+            raise ExecutionError("web content client is not configured")
+        resolve = getattr(self.web_content_client, "resolve", None)
+        if not callable(resolve):
+            raise ExecutionError("web content client has no resolve operation")
+        config = invocation.with_config
+        binding = invocation.web_binding
         url = config.get("url")
         if not isinstance(url, str) or not url:
             raise ExecutionError("webpage Source requires a non-empty url")
-        try:
-            html = self.http_client.get(url)
-        except BaseException as error:
-            raise ExecutionError("webpage HTTP request failed") from error
-        return _collect_html(config, html)
+        if binding.fetch_chain is None:
+            raise ExecutionError("webpage Source has no fetch chain")
+        selector = config.get("list_selector")
+        if isinstance(selector, str):
+            artifact = resolve(
+                FetchRequest(
+                    url=url,
+                    mode="list_html",
+                    acceptable=frozenset({"raw_html"}),
+                    preferred=("raw_html",),
+                    list_selector=selector,
+                    quality=binding.quality,
+                ),
+                binding.fetch_chain,
+                None,
+            )
+            if not isinstance(artifact, DocumentArtifact) or not isinstance(artifact.raw_html, str):
+                raise ExecutionError("webpage list resolution returned no HTML")
+            final_url = artifact.final_url or url
+            records = _list_records(
+                url,
+                final_url,
+                artifact.raw_html,
+                selector,
+                provider_instance=artifact.provider_instance,
+                provider_type=artifact.provider_type,
+            )
+        else:
+            if binding.extract_chain is None or binding.output not in {"markdown", "text"}:
+                raise ExecutionError("webpage Source has no article projection")
+            artifact = resolve(
+                FetchRequest(
+                    url=url,
+                    mode="article",
+                    acceptable=frozenset({"raw_html", "text", "markdown"}),
+                    preferred=("markdown", "raw_html", "text"),
+                    quality=binding.quality,
+                ),
+                binding.fetch_chain,
+                binding.extract_chain,
+            )
+            if not isinstance(artifact, DocumentArtifact):
+                raise ExecutionError("webpage article resolution failed")
+            records = (_page_record(artifact, binding.output),)
+        return SourceResult(records=records, next_checkpoint=_next_checkpoint(config))
 
 
 def bind(adapters: object | None) -> _WebpageSource:
-    """Bind either the complete startup boundary or a legacy HTTP client."""
+    """Bind the immutable startup boundary without widening public contracts."""
 
     if hasattr(adapters, "http_client") and hasattr(adapters, "web_content_client"):
-        return _WebpageSource(
-            getattr(adapters, "http_client"),
-            getattr(adapters, "web_content_client"),
-        )
+        return _WebpageSource(getattr(adapters, "http_client"), getattr(adapters, "web_content_client"))
     return _WebpageSource(adapters)  # type: ignore[arg-type]
