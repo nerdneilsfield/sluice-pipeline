@@ -181,35 +181,23 @@ def _task_run(
     task_def: TaskDef | None = None,
     web_content_client: object | None = None,
 ) -> object:
-    if (
-        task_def is not None
-        and task_def.web_binding is not None
-        and task_def.use
-        in {
-            "sluice.tasks.fetch_webpage",
-            "sluice.tasks.extract_content",
-            "sluice.tasks.to_markdown",
-            "sluice.tasks.to_text",
-        }
-    ):
-        if web_content_client is None:
-            raise ExecutionError("web content client is not configured")
-        if not any(
-            callable(getattr(web_content_client, name, None))
-            for name in ("run_web", "run")
-        ):
-            raise ExecutionError("web content client has no run operation")
-        from .resolution import private_web_invocation, run_web
+    if task_def is not None:
+        from .resolution import BuiltinWebTask, private_web_invocation
 
-        invocation = private_web_invocation(task_def)
-        if invocation is None:
-            raise DefinitionError("web Task has no private invocation")
+        if isinstance(task, BuiltinWebTask):
+            invocation = private_web_invocation(task_def)
+            if invocation is None:
+                raise DefinitionError("web Task has no private invocation")
+            return task.run_web(invocation, value)
+        if task_def.web_binding is not None:
+            if web_content_client is None:
+                raise ExecutionError("web content client is not configured")
+            from .resolution import run_web
 
-        return run_web(
-            invocation,
-            value,
-            web_content_client,
-        )
+            invocation = private_web_invocation(task_def)
+            if invocation is None:
+                raise DefinitionError("web Task has no private invocation")
+            return run_web(invocation, value, web_content_client)
     run = getattr(task, "run", None)
     if not callable(run):
         raise ExecutionError("resolved Task is not callable")

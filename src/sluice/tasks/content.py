@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 import re
 from typing import Any
@@ -11,6 +11,9 @@ from typing import Any
 from ..contracts import NEW, HTTPClient, Item
 from ..canonical import canonical_json
 from ..errors import ExecutionError
+from ..web.contracts import DocumentArtifact, FetchRequest, PrivateWebInvocation
+from ..web.extractors import NO_MATCH, build_extractor
+from ..web.projectors import coerce_projector_input, project_markdown, project_text
 from .collection import field_value
 
 
@@ -67,6 +70,29 @@ class _FetchTask:
         if not isinstance(response, str):
             raise ExecutionError("webpage HTTP response must be text")
         return NEW(response)
+
+    def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        if self.web_content_client is None:
+            raise ExecutionError("web content client is not configured")
+        resolve = getattr(self.web_content_client, "resolve", None)
+        if callable(resolve):
+            binding = invocation.web_binding
+            if binding.fetch_chain is None or binding.extract_chain is None:
+                raise ExecutionError("fetch_webpage has no web chains")
+            request = FetchRequest(
+                url=_url(invocation.with_config, input),
+                mode="article",
+                acceptable=frozenset({"raw_html", "text", "markdown"}),
+                preferred=("markdown", "raw_html", "text"),
+                quality=binding.quality,
+            )
+            return NEW(resolve(request, binding.fetch_chain, binding.extract_chain))
+        runner = getattr(self.web_content_client, "run_web", None)
+        if callable(runner):
+            return runner(invocation, input)
+        raise ExecutionError("web content client has no run operation")
 
     def __call__(self, config: Mapping[str, Any], input: object) -> object:
         return self.run(config, input)
@@ -307,19 +333,87 @@ def _article_text(html: str) -> str:
 
 
 def _extract_content(config: Mapping[str, Any], input: object) -> object:
-    """Extract article-like visible text from HTML, with a plain fallback.
-
-    ``mode: plain`` preserves the older all-visible-text behavior.  The
-    default ``article`` mode is the v4 equivalent of the legacy master
-    fetcher's main-content extraction, while keeping HTTP and extraction as
-    separate deterministic Tasks.
-    """
+    """Retain the direct-call legacy extractor for non-web unit callers."""
 
     mode = config.get("mode", "article")
     if not isinstance(mode, str) or mode not in {"article", "plain"}:
         raise ExecutionError("extract_content.mode must be article or plain")
     value = _input_text(input)
     return NEW(_plain_text(value) if mode == "plain" else _article_text(value))
+
+
+def _extract_input_artifact(input: object, input_format: str) -> DocumentArtifact:
+    if isinstance(input, DocumentArtifact):
+        return input
+    return coerce_projector_input(input, input_format=input_format)
+
+
+def _clear_extraction(artifact: DocumentArtifact) -> DocumentArtifact:
+    if artifact.extraction in {None, "", "input", "provider", "provider_original", "identity"}:
+        return artifact
+    return replace(
+        artifact,
+        text=None,
+        markdown=None,
+        selected_format=None,
+        extraction=None,
+        extract_binding_digest=None,
+        quality=None,
+        capabilities=frozenset(
+            capability
+            for capability in artifact.capabilities
+            if capability not in {"text", "markdown"}
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ExtractTask:
+    input_mode: str = "each"
+
+    def run(self, config: Mapping[str, Any], input: object) -> object:
+        return _extract_content(config, input)
+
+    def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        binding = invocation.web_binding
+        if binding.extract_chain is None:
+            raise ExecutionError("extract_content has no extractor chain")
+        input_format = invocation.with_config.get("input_format", "auto")
+        if not isinstance(input_format, str):
+            raise ExecutionError("extract_content.input_format is unsupported")
+        artifact = _extract_input_artifact(input, input_format)
+        request = FetchRequest(
+            url=artifact.final_url or artifact.source_url or "https://sluice.invalid/input",
+            mode="article",
+            acceptable=frozenset({"raw_html", "text", "markdown"}),
+            preferred=("markdown", "text", "raw_html"),
+            quality=binding.quality,
+        )
+        from ..web.client import WebContentClient
+
+        digest = WebContentClient._extract_binding_digest(binding.extract_chain, request)
+        if artifact.selected_format is not None and artifact.extract_binding_digest == digest:
+            return NEW(artifact)
+        artifact = _clear_extraction(artifact)
+        for extractor_binding in binding.extract_chain:
+            extractor = build_extractor(extractor_binding)
+            candidate = extractor.extract(artifact)
+            if candidate is NO_MATCH:
+                continue
+            if not isinstance(candidate, DocumentArtifact):
+                continue
+            evaluation = WebContentClient._evaluate_selected(candidate, request)
+            if evaluation.passed:
+                return NEW(
+                    replace(
+                        candidate,
+                        quality=evaluation.quality,
+                        extract_binding_digest=digest,
+                    )
+                )
+        raise ExecutionError("web content extraction failed")
 
 
 class _MarkdownParser(HTMLParser):
@@ -409,11 +503,36 @@ def _markdown(value: str) -> str:
 
 
 def _to_markdown(config: Mapping[str, Any], input: object) -> object:
-    """Convert HTML/text into deterministic Markdown text."""
+    input_format = config.get("input_format", "auto")
+    if not isinstance(input_format, str):
+        raise ExecutionError("to_markdown.input_format is unsupported")
+    return project_markdown(input, input_format=input_format)
 
-    del config
-    value = _input_text(input)
-    return NEW(_markdown(value))
+
+def _to_text(config: Mapping[str, Any], input: object) -> object:
+    input_format = config.get("input_format", "auto")
+    if not isinstance(input_format, str):
+        raise ExecutionError("to_text.input_format is unsupported")
+    return project_text(input, input_format=input_format)
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectTask:
+    output: str
+    input_mode: str = "each"
+
+    def run(self, config: Mapping[str, Any], input: object) -> object:
+        return _to_markdown(config, input) if self.output == "markdown" else _to_text(config, input)
+
+    def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+        if not isinstance(invocation, PrivateWebInvocation):
+            raise ExecutionError("invalid private web invocation")
+        if invocation.web_binding.output != self.output:
+            raise ExecutionError("web projector binding output is invalid")
+        return self.run(invocation.with_config, input)
+
+    def __call__(self, config: Mapping[str, Any], input: object) -> object:
+        return self.run(config, input)
 
 
 def _render_payload(config: Mapping[str, Any], input: object) -> str:
@@ -476,7 +595,8 @@ class _FunctionTask:
 # Public Task objects remain directly callable in unit tests and are also
 # consumed by the startup resolution boundary.
 fetch_webpage = _FetchTask()
-extract_content = _FunctionTask("each", _extract_content)
-to_markdown = _FunctionTask("each", _to_markdown)
+extract_content = _ExtractTask()
+to_markdown = _ProjectTask("markdown")
+to_text = _ProjectTask("text")
 render_email = _FunctionTask("each", _render_email)
 render_telegram = _FunctionTask("each", _render_telegram)

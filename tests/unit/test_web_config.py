@@ -276,6 +276,28 @@ def test_web_source_cache_version_participates_in_semantic_binding(tmp_path):
     assert first.web_binding.semantic_projection() != second.web_binding.semantic_projection()
 
 
+def test_loader_rejects_terminal_fetch_artifact(tmp_path):
+    with pytest.raises(DefinitionError, match="to_markdown or to_text"):
+        load_definition(
+            _write(
+                tmp_path,
+                """version: 1
+web:
+  providers: {direct: {type: startup_http, trusted: true}}
+  fetch_chains: {robust: {providers: [direct]}}
+  extractors: {identity: {type: identity}}
+  extract_chains: {article: {extractors: [identity]}}
+stages:
+  article:
+    input: each
+    tasks:
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article}
+""",
+            )
+        )
+
+
 def test_non_web_task_canonical_shape_contains_null_binding(tmp_path):
     definition = load_definition(
         _write(

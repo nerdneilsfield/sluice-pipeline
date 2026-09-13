@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
+from sluice.app import open_app
+from sluice.contracts import SourceRecord, SourceResult
 from sluice.errors import ExecutionError, WebSafetyError
+from sluice.reconcile import tick
+from sluice.source_runtime import collect_source
 from sluice.web.client import WebContentClient
 from sluice.web.contracts import (
     DocumentArtifact,
@@ -25,6 +31,86 @@ from sluice.web.contracts import (
 )
 from sluice.web.providers import FirecrawlProvider
 from sluice.web.registry import ProviderLimiter
+
+
+def _pipeline_source(config, checkpoint):
+    del config, checkpoint
+    return SourceResult(
+        (SourceRecord("article", {"url": "https://example.test/article"}),), "done"
+    )
+
+
+def _pipeline_sink(config, payload, delivery_key):
+    del config, payload, delivery_key
+    return None
+
+
+def test_fetch_extract_project_chain_materializes_json_not_artifact(tmp_path: Path) -> None:
+    definition = tmp_path / "definition.yml"
+    definition.write_text(
+        """version: 1
+web:
+  providers: {direct: {type: startup_http, trusted: true}}
+  fetch_chains: {robust: {providers: [direct]}}
+  extractors: {identity: {type: identity}}
+  extract_chains: {article: {extractors: [identity]}}
+sources:
+  feed: {use: tests.integration.test_web_pipeline._pipeline_source, with: {}}
+stages:
+  article:
+    input: each
+    tasks:
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article, min_chars: 1}
+      - use: sluice.tasks.to_text
+pipelines:
+  p:
+    nodes:
+      article: {stage: article, from: source.feed}
+      deliver:
+        from: article
+        deliver: {use: tests.integration.test_web_pipeline._pipeline_sink, with: {}}
+""",
+        encoding="utf-8",
+    )
+
+    class Client:
+        def resolve(self, request, fetch_chain, extract_chain):
+            assert request.url == "https://example.test/article"
+            assert fetch_chain[0].name == "direct"
+            assert extract_chain[0].type == "identity"
+            return DocumentArtifact(
+                source_url=request.url,
+                final_url=request.url,
+                content_type="text/markdown",
+                markdown="# Article\n\nBody",
+                selected_format="markdown",
+                capabilities=frozenset({"markdown"}),
+                provider_instance="direct",
+                provider_type="startup_http",
+                extraction="identity",
+            )
+
+        def close(self):
+            pass
+
+    app = open_app(
+        definition,
+        tmp_path / "state.db",
+        http_client=type("HTTP", (), {"get": lambda self, url: "unused"})(),
+        web_content_client=Client(),
+    )
+    try:
+        collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        tick(app, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        payload, metadata = app.conn.execute(
+            "SELECT payload_json,metadata_json FROM items WHERE producer_kind='stage'"
+        ).fetchone()
+    finally:
+        app.close()
+
+    assert "DocumentArtifact" not in payload
+    assert '"web"' in metadata
 
 
 def _provider(name: str, *capabilities: str) -> ProviderBinding:

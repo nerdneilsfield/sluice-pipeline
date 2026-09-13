@@ -6,7 +6,7 @@ import pytest
 
 from sluice.contracts import NEW
 from sluice.errors import ExecutionError
-from sluice.tasks.content import extract_content
+from sluice.tasks.content import extract_content, fetch_webpage, to_text
 from sluice.web.contracts import DocumentArtifact
 from sluice.web.extractors import (
     EXTRACTOR_FORMATS,
@@ -17,6 +17,75 @@ from sluice.web.extractors import (
     extract_newspaper4k,
 )
 from sluice.web.projectors import coerce_projector_input, project_markdown, project_text
+
+
+def test_content_task_bindings_project_artifacts_and_use_private_client() -> None:
+    from sluice.web.contracts import PrivateWebInvocation, WebBinding
+
+    artifact = DocumentArtifact(
+        source_url="https://example.test/article",
+        final_url="https://example.test/article",
+        content_type="text/markdown",
+        markdown="# Article\n\nBody",
+        selected_format="markdown",
+        capabilities=frozenset({"markdown"}),
+    )
+
+    assert to_text.run({}, artifact).value == "Article\nBody"
+
+    class Client:
+        invocation: PrivateWebInvocation | None = None
+
+        def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+            self.invocation = invocation
+            assert input == "https://example.test/article"
+            return NEW(artifact)
+
+    task = fetch_webpage.bind(
+        type("Adapters", (), {"http_client": None, "web_content_client": Client()})()
+    )
+    result = task.run_web(
+        PrivateWebInvocation(
+            {"fetch_chain": "robust", "extract_chain": "article"},
+            WebBinding(output="artifact"),
+        ),
+        "https://example.test/article",
+    )
+
+    assert result == NEW(artifact)
+    assert task.web_content_client.invocation is not None
+
+
+def test_extract_content_reruns_a_different_artifact_digest() -> None:
+    from sluice.web.contracts import ExtractorBinding, PrivateWebInvocation, QualityPolicy, WebBinding
+
+    artifact = DocumentArtifact(
+        raw_html="<article><p>Fresh body</p></article>",
+        text="stale extraction",
+        selected_format="text",
+        extraction="beautifulsoup",
+        extract_binding_digest="old-digest",
+        content_type="text/html",
+        capabilities=frozenset({"raw_html", "text"}),
+    )
+    binding = WebBinding(
+        extract_chain=(
+            ExtractorBinding(name="identity", type="identity"),
+            ExtractorBinding(name="fallback", type="beautifulsoup"),
+        ),
+        extract_chain_name="article",
+        quality=QualityPolicy(min_chars=1),
+        output="artifact",
+    )
+
+    result = extract_content.run_web(
+        PrivateWebInvocation({"extract_chain": "article"}, binding), artifact
+    )
+
+    assert isinstance(result, NEW)
+    assert isinstance(result.value, DocumentArtifact)
+    assert result.value.text == "Fresh body"
+    assert result.value.extract_binding_digest != "old-digest"
 
 
 def test_extract_content_prefers_article_and_drops_boilerplate() -> None:

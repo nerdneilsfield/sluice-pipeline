@@ -55,6 +55,7 @@ BUILTIN_TASK_MODES: dict[str, str] = {
     "sluice.tasks.fetch_webpage": "each",
     "sluice.tasks.extract_content": "each",
     "sluice.tasks.to_markdown": "each",
+    "sluice.tasks.to_text": "each",
     "sluice.tasks.llm_extract": "each",
     "sluice.tasks.llm_summary": "batch",
     "sluice.tasks.render_email": "each",

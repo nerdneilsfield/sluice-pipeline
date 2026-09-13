@@ -50,6 +50,7 @@ BUILTIN_TASK_BINDERS: dict[str, str] = {
     "sluice.tasks.fetch_webpage": "sluice.tasks.content.fetch_webpage",
     "sluice.tasks.extract_content": "sluice.tasks.content.extract_content",
     "sluice.tasks.to_markdown": "sluice.tasks.content.to_markdown",
+    "sluice.tasks.to_text": "sluice.tasks.content.to_text",
     "sluice.tasks.render_email": "sluice.tasks.content.render_email",
     "sluice.tasks.render_telegram": "sluice.tasks.content.render_telegram",
     "sluice.tasks.llm_extract": "sluice.tasks.llm.bind_extract",
@@ -96,6 +97,26 @@ class FunctionTask:
     def run(self, config: Mapping[str, JSONValue], input: object) -> object:
         copied = _fresh_json(config)
         return self.function(copied, input)  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinWebTask:
+    """Private invocation wrapper for a resolved built-in web Task."""
+
+    task: object
+    input_mode: Literal["each", "batch"]
+
+    def run(self, config: Mapping[str, JSONValue], input: object) -> object:
+        runner = getattr(self.task, "run", None)
+        if not callable(runner):
+            raise DefinitionError("built-in web Task has no run operation")
+        return runner(config, input)
+
+    def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
+        runner = getattr(self.task, "run_web", None)
+        if not callable(runner):
+            raise DefinitionError("built-in web Task has no private run operation")
+        return runner(invocation, input)
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +289,8 @@ def resolve_task(
         raise DefinitionError(f"{path} is not a Task callable with input_mode")
     if task.input_mode != expected_mode:
         raise DefinitionError(f"{path} declares {task.input_mode}, expected {expected_mode}")
+    if path in BUILTIN_WEB_TASKS:
+        return BuiltinWebTask(value, task.input_mode)
     return task
 
 
