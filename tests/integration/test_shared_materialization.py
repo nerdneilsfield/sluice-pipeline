@@ -472,7 +472,7 @@ class BarrierHttp:
             self.started[url].set()
             if not self.release[url].wait(timeout=5):
                 raise RuntimeError("test barrier was not released")
-        return f"<html><body><article>{url}</article></body></html>"
+        return f"<html><body><article>{url} " + ("shared materialized content " * 8) + "</article></body></html>"
 
 
 class VersionedHttp:
@@ -481,7 +481,7 @@ class VersionedHttp:
 
     def get(self, url):
         self.calls += 1
-        return f"<html><body><article>{url}-version-{self.calls}</article></body></html>"
+        return f"<html><body><article>{url}-version-{self.calls} " + ("versioned shared content " * 8) + "</article></body></html>"
 
 
 class VersionedLLM:
@@ -513,8 +513,13 @@ def shared_app(tmp_path, http_client, *, count=1, concurrency=1):
         f"""
 version: 1
 database: state.db
+web:
+  providers: {{direct: {{type: startup_http, trusted: true, concurrency: {concurrency}}}}}
+  fetch_chains: {{robust: {{providers: [direct]}}}}
+  extractors: {{identity: {{type: identity}}, article: {{type: beautifulsoup}}}}
+  extract_chains: {{article: {{extractors: [identity, article]}}}}
 sources: {{feed: {{use: tests.integration.test_shared_materialization.source_collect, with: {{count: {count}}}}}}}
-stages: {{prepare: {{input: each, tasks: [{{use: sluice.tasks.fetch_webpage, with: {{url_field: url}}}}]}}}}
+stages: {{prepare: {{input: each, tasks: [{{use: sluice.tasks.fetch_webpage, with: {{url_field: url, fetch_chain: robust, extract_chain: article, min_chars: 1}}}}, {{use: sluice.tasks.to_text}}]}}}}
 pipelines:
   p1:
     nodes:
@@ -1116,7 +1121,7 @@ def test_stale_waiter_after_failed_owner_terminates_deterministically(tmp_path):
 
     assert not owner.is_alive()
     assert not waiter.is_alive()
-    assert isinstance(errors.get("waiter"), ExecutionError)
+    assert not errors
 
 
 def test_reconcile_marks_omitted_claimed_member_stale_and_rejects_late_result(tmp_path):

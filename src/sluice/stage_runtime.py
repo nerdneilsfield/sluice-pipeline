@@ -44,6 +44,15 @@ from .config import decode_stage_snapshot, freeze_json, verify_stage_files
 from .db import write_transaction
 from .logging import log_event
 from .errors import DefinitionError, ExecutionError, InvalidStructuredOutput
+from .web.contracts import (
+    FetchChainExhausted,
+    WebAttemptCancelled,
+    WebExecutionProbe,
+    WebStageDeadlineExpired,
+    reset_web_execution_probe,
+    set_web_execution_probe,
+)
+from .web.sanitize import sanitize_web_error
 
 if TYPE_CHECKING:
     from .app import App
@@ -209,6 +218,53 @@ def _task_run(
         raise ExecutionError("Task execution failed") from error
 
 
+@dataclass(frozen=True, slots=True)
+class WebTaskFailure(ExecutionError):
+    """Retain the built-in fetch Task index without serializing its cause."""
+
+    task_index: int
+    cause: FetchChainExhausted
+
+    def __post_init__(self) -> None:
+        if isinstance(self.task_index, bool) or not isinstance(self.task_index, int):
+            raise TypeError("task_index must be an integer")
+        if not isinstance(self.cause, FetchChainExhausted):
+            raise TypeError("cause must be FetchChainExhausted")
+
+
+def terminal_fetch_drop_eligible(stage: StageDef, failed_task_index: int) -> bool:
+    """Return whether an exhausted fetch may publish its terminal empty result."""
+
+    if stage.input_mode != "each" or failed_task_index != 0:
+        return False
+    tasks = stage.tasks
+    if failed_task_index >= len(tasks):
+        return False
+    if tasks[failed_task_index].use != "sluice.tasks.fetch_webpage":
+        return False
+    prefix = tasks[:failed_task_index]
+    if any(task.use in {"sluice.tasks.fetch_webpage", "sluice.tasks.extract_content"} for task in prefix):
+        return False
+    suffix = tasks[failed_task_index + 1 :]
+    if not suffix or suffix[-1].use not in {"sluice.tasks.to_markdown", "sluice.tasks.to_text"}:
+        return False
+    middle = suffix[:-1]
+    return len(middle) <= 1 and all(
+        task.use == "sluice.tasks.extract_content" for task in middle
+    )
+
+
+def retries_exhausted(execution: Mapping[str, object], policy: ExecutionPolicy) -> bool:
+    """Evaluate the durable retry counter carried by the claimed execution."""
+
+    retry_count = execution["retry_count"]
+    return (
+        isinstance(retry_count, int)
+        and not isinstance(retry_count, bool)
+        and retry_count >= policy.retries
+    )
+
+
 def _is_initial_dedup(stage: StageDef, task: object) -> bool:
     if not stage.tasks or not stage.tasks[0].use.endswith(".dedup"):
         return False
@@ -254,13 +310,18 @@ def run_stage_tasks(
             raise ExecutionError("each Stage requires exactly one current Item")
         value: object = current_items[0]
         for index, task in enumerate(tasks):
-            result = _task_run(
-                task,
-                _task_config(stage, index),
-                value,
-                task_def=stage.tasks[index],
-                web_content_client=web_content_client,
-            )
+            try:
+                result = _task_run(
+                    task,
+                    _task_config(stage, index),
+                    value,
+                    task_def=stage.tasks[index],
+                    web_content_client=web_content_client,
+                )
+            except FetchChainExhausted as error:
+                if stage.tasks[index].use == "sluice.tasks.fetch_webpage":
+                    raise WebTaskFailure(index, error) from error
+                raise
             markers = validate_task_outputs(
                 "each",
                 result,
@@ -1125,7 +1186,14 @@ def _start_claimed_execution(app: "App", execution_id: int, at: datetime) -> boo
         return changed.rowcount == 1
 
 
-def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: datetime) -> bool:
+def _finalize_stage(
+    app: "App",
+    execution_id: int,
+    outcome: StageOutcome,
+    at: datetime,
+    *,
+    terminal_fetch_drop: bool = False,
+) -> bool:
     at_text = _ts(at)
     reconcile_consumers: list[tuple[str, str]] = []
     with write_transaction(app.conn):
@@ -1136,11 +1204,12 @@ def _finalize_stage(app: "App", execution_id: int, outcome: StageOutcome, at: da
         if row is None:
             return False
         guard = app.conn.execute(
-            "UPDATE executions SET state=?,finished_at=? WHERE id=? AND kind='stage' AND state='running' "
+            "UPDATE executions SET state=?,error=CASE WHEN ? THEN NULL ELSE error END,finished_at=? WHERE id=? AND kind='stage' AND state='running' "
             "AND stage_name=? AND lookup_key=? AND EXISTS (SELECT 1 FROM materialization_claims mc WHERE mc.stage_name=? "
             "AND mc.lookup_key=? AND mc.owner_execution_id=?)",
             (
                 outcome.status,
+                int(terminal_fetch_drop),
                 at_text,
                 execution_id,
                 row["stage_name"],
@@ -1456,16 +1525,45 @@ def _fail_execution(
     return retry_id
 
 
+def _execution_probe(app: "App", execution_id: int, stage_deadline: float | None) -> WebExecutionProbe:
+    def check() -> None:
+        with app.conn.transaction_lock:
+            row = app.conn.execute(
+                "SELECT state FROM executions WHERE id=? AND kind='stage'", (execution_id,)
+            ).fetchone()
+            owner = app.conn.execute(
+                "SELECT 1 FROM materialization_claims WHERE owner_execution_id=?", (execution_id,)
+            ).fetchone()
+        if row is None or row["state"] != "running" or owner is None:
+            raise WebAttemptCancelled()
+        if stage_deadline is not None and time.monotonic() >= stage_deadline:
+            raise WebStageDeadlineExpired()
+
+    return WebExecutionProbe(checker=check, stage_deadline=stage_deadline)
+
+
+def _execution_still_owned(app: "App", execution_id: int) -> bool:
+    with app.conn.transaction_lock:
+        row = app.conn.execute(
+            "SELECT 1 FROM executions e JOIN materialization_claims mc "
+            "ON mc.owner_execution_id=e.id WHERE e.id=? AND e.kind='stage' AND e.state='running'",
+            (execution_id,),
+        ).fetchone()
+    return row is not None
+
+
 def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
     if not _start_claimed_execution(app, execution_id, at):
-        row = app.conn.execute("SELECT state FROM executions WHERE id=?", (execution_id,)).fetchone()
-        return execution_id if row is None else execution_id
+        return execution_id
     with app.conn.transaction_lock:
         row = app.conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
     if row is None:
         return execution_id
+    stage = _decode_stage_snapshot(str(row["config_json"]))
+    policy = _decode_policy(str(row["policy_json"]))
+    deadline = None if policy.timeout is None else time.monotonic() + policy.timeout.total_seconds()
+    token = set_web_execution_probe(_execution_probe(app, execution_id, deadline))
     try:
-        stage = _decode_stage_snapshot(str(row["config_json"]))
         items = _items_for_execution(app, execution_id, "items")
         history = _items_for_execution(app, execution_id, "history")
         tasks = [app.tasks[task.use] for task in stage.tasks]
@@ -1476,9 +1574,25 @@ def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
             tasks,
             web_content_client=getattr(app, "web_content_client", None),
         )
-        if not _finalize_stage(app, execution_id, outcome, at):
-            return execution_id
+        _finalize_stage(app, execution_id, outcome, at)
         return execution_id
+    except WebTaskFailure as failure:
+        if terminal_fetch_drop_eligible(stage, failure.task_index) and retries_exhausted(row, policy):
+            _finalize_stage(
+                app,
+                execution_id,
+                StageOutcome(outputs=(), status="succeeded"),
+                at,
+                terminal_fetch_drop=True,
+            )
+            return execution_id
+        retry_id = _fail_execution(app, execution_id, sanitize_web_error(failure.cause), at)
+    except WebAttemptCancelled as error:
+        if not _execution_still_owned(app, execution_id):
+            return execution_id
+        retry_id = _fail_execution(app, execution_id, sanitize_web_error(error), at)
+    except WebStageDeadlineExpired as error:
+        retry_id = _fail_execution(app, execution_id, sanitize_web_error(error), at)
     except InvalidStructuredOutput as error:
         retry_id = _fail_execution(
             app,
@@ -1494,14 +1608,19 @@ def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
                 )
             ),
         )
-        if retry_id is not None:
-            return _execute_claimed_stage(app, retry_id, at)
-        return execution_id
     except BaseException as error:
-        retry_id = _fail_execution(app, execution_id, error, at)
-        if retry_id is not None:
-            return _execute_claimed_stage(app, retry_id, at)
-        return execution_id
+        has_web_task = any(task.web_binding is not None for task in stage.tasks)
+        retry_id = _fail_execution(
+            app,
+            execution_id,
+            sanitize_web_error(error) if has_web_task else error,
+            at,
+        )
+    finally:
+        reset_web_execution_probe(token)
+    if retry_id is not None:
+        return _execute_claimed_stage(app, retry_id, at)
+    return execution_id
 
 
 def _await_waiter_execution(

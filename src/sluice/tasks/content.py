@@ -11,7 +11,12 @@ from typing import Any
 from ..contracts import NEW, HTTPClient, Item
 from ..canonical import canonical_json
 from ..errors import ExecutionError
-from ..web.contracts import DocumentArtifact, FetchRequest, PrivateWebInvocation
+from ..web.contracts import (
+    DocumentArtifact,
+    FetchRequest,
+    PrivateWebInvocation,
+    current_web_execution_probe,
+)
 from ..web.extractors import NO_MATCH, build_extractor
 from ..web.projectors import coerce_projector_input, project_markdown, project_text
 from .collection import field_value
@@ -81,12 +86,18 @@ class _FetchTask:
             binding = invocation.web_binding
             if binding.fetch_chain is None or binding.extract_chain is None:
                 raise ExecutionError("fetch_webpage has no web chains")
+            probe = current_web_execution_probe()
             request = FetchRequest(
                 url=_url(invocation.with_config, input),
                 mode="article",
                 acceptable=frozenset({"raw_html", "text", "markdown"}),
                 preferred=("markdown", "raw_html", "text"),
                 quality=binding.quality,
+                stage_deadline=(
+                    None
+                    if probe is None or probe.stage_deadline is None
+                    else probe.stage_deadline
+                ),
             )
             return NEW(resolve(request, binding.fetch_chain, binding.extract_chain))
         runner = getattr(self.web_content_client, "run_web", None)
@@ -371,6 +382,10 @@ def _clear_extraction(artifact: DocumentArtifact) -> DocumentArtifact:
 @dataclass(frozen=True, slots=True)
 class _ExtractTask:
     input_mode: str = "each"
+
+    def bind(self, adapters: object) -> "_ExtractTask":
+        del adapters
+        return self
 
     def run(self, config: Mapping[str, Any], input: object) -> object:
         return _extract_content(config, input)

@@ -841,6 +841,7 @@ class WebExecutionProbe:
     """Immutable callback wrapper checked around provider/extractor work."""
 
     callback: Callable[[], None] | None
+    stage_deadline: float | None
 
     def __init__(
         self,
@@ -848,6 +849,7 @@ class WebExecutionProbe:
         *,
         checker: Callable[[], None] | None = None,
         check_fn: Callable[[], None] | None = None,
+        stage_deadline: float | None = None,
     ) -> None:
         supplied = [candidate for candidate in (callback, checker, check_fn) if candidate is not None]
         if len(supplied) > 1:
@@ -855,7 +857,15 @@ class WebExecutionProbe:
         selected = supplied[0] if supplied else None
         if selected is not None and not callable(selected):
             raise TypeError("WebExecutionProbe callback must be callable")
+        if stage_deadline is not None and (
+            isinstance(stage_deadline, bool)
+            or not isinstance(stage_deadline, (int, float))
+            or not math.isfinite(stage_deadline)
+            or stage_deadline <= 0
+        ):
+            raise TypeError("stage_deadline must be a positive finite timestamp or null")
         object.__setattr__(self, "callback", selected)
+        object.__setattr__(self, "stage_deadline", stage_deadline)
 
     @property
     def checker(self) -> Callable[[], None] | None:
