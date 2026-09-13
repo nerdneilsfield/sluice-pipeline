@@ -190,7 +190,7 @@ def _bound_builtin(binding: str, path: str) -> object:
         binder = import_value(binding)
     except DefinitionError as error:
         raise DefinitionError(f"cannot bind built-in {path}") from error
-    if not callable(binder):
+    if not callable(binder) and not callable(getattr(binder, "run", None)):
         raise DefinitionError(f"cannot bind built-in {path}")
     return binder
 
