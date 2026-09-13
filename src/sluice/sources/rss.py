@@ -10,7 +10,13 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from sluice.canonical import canonical_json
 from sluice.contracts import HTTPClient, JSONValue, KEEP_CHECKPOINT, SourceRecord, SourceResult
 from sluice.errors import ExecutionError
-from sluice.web.contracts import DocumentArtifact, FetchRequest, PrivateWebInvocation
+from sluice.web.contracts import (
+    DocumentArtifact,
+    FetchRequest,
+    PrivateWebInvocation,
+    WebAttemptCancelled,
+    WebStageDeadlineExpired,
+)
 from sluice.web.feed import validate_raw_feed
 from sluice.web.projectors import project_markdown, project_text
 from sluice.web.url import normalize_target_url_string
@@ -73,6 +79,28 @@ def _request_url(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> str:
 def _is_html(value: str) -> bool:
     stripped = value.lstrip()
     return stripped.startswith("<") and ">" in stripped
+
+
+def _feed_entries(root: Any, kind: str) -> tuple[Any, ...]:
+    """Return only entries permitted by the validated root kind."""
+
+    children = tuple(root)
+    if kind == "atom":
+        return tuple(child for child in children if _local_name(getattr(child, "tag", None)) == "entry")
+    if kind == "rss1":
+        return tuple(child for child in children if _local_name(getattr(child, "tag", None)) == "item")
+    if kind == "rss2":
+        channel = next(
+            (child for child in children if _local_name(getattr(child, "tag", None)) == "channel"),
+            None,
+        )
+        if channel is None:
+            return ()
+        return tuple(
+            child for child in tuple(channel)
+            if _local_name(getattr(child, "tag", None)) == "item"
+        )
+    raise ExecutionError("invalid RSS raw source")
 
 
 def _entry_record(entry: Any, index: int, artifact: DocumentArtifact, output: str) -> SourceRecord:
@@ -140,7 +168,7 @@ def parse_feed_bytes(raw: bytes, final_url: str, *, artifact: DocumentArtifact |
     )
     records: list[SourceRecord] = []
     seen: set[str] = set()
-    for index, entry in enumerate(element for element in root.root.iter() if _local_name(getattr(element, "tag", None)) in {"item", "entry"}):
+    for index, entry in enumerate(_feed_entries(root.root, root.kind)):
         record = _entry_record(entry, index, source, entry_output)
         if record.logical_id not in seen:
             seen.add(record.logical_id)
@@ -194,23 +222,29 @@ class _RSSSource:
             preferred=("raw_source",),
             quality=binding.quality,
         )
+        def project(artifact: object) -> SourceResult:
+            if not isinstance(artifact, DocumentArtifact) or not isinstance(artifact.raw_source, bytes):
+                raise ExecutionError("RSS resolution returned no raw source")
+            return SourceResult(
+                records=parse_feed_bytes(
+                    artifact.raw_source,
+                    artifact.final_url or url,
+                    artifact=artifact,
+                    entry_output=str(config.get("entry_output", "text")),
+                ),
+                next_checkpoint=_next_checkpoint(config),
+            )
+
         try:
-            artifact = resolve(request, (binding.direct_provider,), None)
-        except BaseException:
+            return project(resolve(request, (binding.direct_provider,), None))
+        except (WebAttemptCancelled, WebStageDeadlineExpired):
+            raise
+        except ExecutionError:
             if binding.fetch_chain is None:
                 raise
-            artifact = resolve(request, binding.fetch_chain, None)
-        if not isinstance(artifact, DocumentArtifact) or not isinstance(artifact.raw_source, bytes):
-            raise ExecutionError("RSS resolution returned no raw source")
-        return SourceResult(
-            records=parse_feed_bytes(
-                artifact.raw_source,
-                artifact.final_url or url,
-                artifact=artifact,
-                entry_output=str(config.get("entry_output", "text")),
-            ),
-            next_checkpoint=_next_checkpoint(config),
-        )
+        if binding.fetch_chain is None:
+            raise ExecutionError("invalid RSS raw source")
+        return project(resolve(request, binding.fetch_chain, None))
 
 
 def bind(adapters: object | None) -> _RSSSource:
