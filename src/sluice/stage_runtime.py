@@ -39,6 +39,7 @@ from .canonical import (
     load_item,
     materialized_item_id,
     stage_lookup_key,
+    utc_datetime,
 )
 from .config import decode_stage_snapshot, freeze_json, verify_stage_files
 from .db import write_transaction
@@ -1193,6 +1194,7 @@ def _finalize_stage(
     at: datetime,
     *,
     terminal_fetch_drop: bool = False,
+    expected_retry_count: int | None = None,
 ) -> bool:
     at_text = _ts(at)
     reconcile_consumers: list[tuple[str, str]] = []
@@ -1205,7 +1207,8 @@ def _finalize_stage(
             return False
         guard = app.conn.execute(
             "UPDATE executions SET state=?,error=CASE WHEN ? THEN NULL ELSE error END,finished_at=? WHERE id=? AND kind='stage' AND state='running' "
-            "AND stage_name=? AND lookup_key=? AND EXISTS (SELECT 1 FROM materialization_claims mc WHERE mc.stage_name=? "
+            "AND stage_name=? AND lookup_key=? AND (? IS NULL OR retry_count=?) "
+            "AND EXISTS (SELECT 1 FROM materialization_claims mc WHERE mc.stage_name=? "
             "AND mc.lookup_key=? AND mc.owner_execution_id=?)",
             (
                 outcome.status,
@@ -1214,6 +1217,8 @@ def _finalize_stage(
                 execution_id,
                 row["stage_name"],
                 row["lookup_key"],
+                expected_retry_count,
+                expected_retry_count,
                 row["stage_name"],
                 row["lookup_key"],
                 execution_id,
@@ -1525,16 +1530,26 @@ def _fail_execution(
     return retry_id
 
 
+def _stage_deadline(
+    started_at: object, policy: ExecutionPolicy, at: datetime
+) -> float | None:
+    if policy.timeout is None:
+        return None
+    started = utc_datetime(str(started_at))
+    remaining = (started + policy.timeout - utc_datetime(at)).total_seconds()
+    return time.monotonic() + remaining
+
+
 def _execution_probe(app: "App", execution_id: int, stage_deadline: float | None) -> WebExecutionProbe:
     def check() -> None:
         with app.conn.transaction_lock:
             row = app.conn.execute(
-                "SELECT state FROM executions WHERE id=? AND kind='stage'", (execution_id,)
+                "SELECT 1 FROM executions e JOIN materialization_claims mc "
+                "ON mc.owner_execution_id=e.id WHERE e.id=? AND e.kind='stage' "
+                "AND e.state='running'",
+                (execution_id,),
             ).fetchone()
-            owner = app.conn.execute(
-                "SELECT 1 FROM materialization_claims WHERE owner_execution_id=?", (execution_id,)
-            ).fetchone()
-        if row is None or row["state"] != "running" or owner is None:
+        if row is None:
             raise WebAttemptCancelled()
         if stage_deadline is not None and time.monotonic() >= stage_deadline:
             raise WebStageDeadlineExpired()
@@ -1561,7 +1576,10 @@ def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
         return execution_id
     stage = _decode_stage_snapshot(str(row["config_json"]))
     policy = _decode_policy(str(row["policy_json"]))
-    deadline = None if policy.timeout is None else time.monotonic() + policy.timeout.total_seconds()
+    deadline = _stage_deadline(row["started_at"], policy, at)
+    if deadline is not None and time.monotonic() >= deadline:
+        _fail_execution(app, execution_id, WebStageDeadlineExpired(), at)
+        return execution_id
     token = set_web_execution_probe(_execution_probe(app, execution_id, deadline))
     try:
         items = _items_for_execution(app, execution_id, "items")
@@ -1584,6 +1602,7 @@ def _execute_claimed_stage(app: "App", execution_id: int, at: datetime) -> int:
                 StageOutcome(outputs=(), status="succeeded"),
                 at,
                 terminal_fetch_drop=True,
+                expected_retry_count=int(row["retry_count"]),
             )
             return execution_id
         retry_id = _fail_execution(app, execution_id, sanitize_web_error(failure.cause), at)
