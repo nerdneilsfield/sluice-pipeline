@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
 import pytest
 
 from sluice.app import open_app
 from sluice.errors import ExecutionError
+from sluice.read_model import pipeline_list
+from sluice import source_runtime
 from sluice.source_runtime import collect_source
 from sluice.sources.rss import parse_feed_bytes
 from sluice.web.contracts import DocumentArtifact
@@ -149,10 +152,62 @@ sources:
         client,
     )
     try:
-        with pytest.raises(ExecutionError, match="invalid RSS raw source"):
+        with pytest.raises(ExecutionError, match="provider_error"):
             collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=timezone.utc))
     finally:
         app.close()
+
+
+def test_web_source_failures_are_sanitized_for_direct_and_queued_collection(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "Authorization: Bearer actual-secret vendor-body-private"
+    definition = """version: 1
+web:
+  providers: {direct: {type: startup_http, trusted: true}}
+  fetch_chains: {robust: {providers: [direct]}}
+sources:
+  page:
+    use: sluice.sources.webpage
+    retries: 1
+    with: {url: https://example.test/page, list_selector: article, fetch_chain: robust}
+pipelines:
+  p:
+    nodes:
+      documents: {from: source.page, deliver: {use: tests.integration.test_web_sources.sink, with: {}}}
+"""
+    client = ScriptedClient([ExecutionError(secret), ExecutionError(secret)])
+    app = _open(tmp_path, definition, client)
+    caplog.set_level(logging.INFO, logger="sluice.source_runtime")
+    try:
+        with pytest.raises(ExecutionError):
+            collect_source(app, "page", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        queued_id = app.conn.execute(
+            "SELECT id FROM executions WHERE kind='source' AND state='queued'"
+        ).fetchone()[0]
+        source_runtime._execute_queued_source(
+            app, queued_id, datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+        )
+        errors = [
+            row[0]
+            for row in app.conn.execute(
+                "SELECT error FROM executions WHERE kind='source' ORDER BY id"
+            )
+        ]
+        summary = next(item for item in pipeline_list(app) if item.name == "p")
+    finally:
+        app.close()
+
+    assert errors == ["provider_error", "provider_error"]
+    assert summary.latest_error == "provider_error"
+    assert secret not in caplog.text
+    assert "actual-secret" not in " ".join(errors)
+    assert "vendor-body-private" not in " ".join(errors)
+
+
+def sink(config, payload, delivery_key):
+    del config, payload, delivery_key
+    return None
 
 
 def test_feed_projection_uses_only_kind_specific_direct_entry_children() -> None:

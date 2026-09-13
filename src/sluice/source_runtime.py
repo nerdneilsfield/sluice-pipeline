@@ -22,6 +22,7 @@ from sluice.db import write_transaction
 from sluice.errors import ExecutionError
 from sluice.logging import log_event
 from sluice.web.contracts import PrivateWebInvocation
+from sluice.web.sanitize import sanitize_web_error
 
 
 _LOGGER = logging.getLogger("sluice.source_runtime")
@@ -354,6 +355,23 @@ def _activate_binding(
     return execution_id, checkpoint, superseded, activated
 
 
+def _is_web_source(source: Any) -> bool:
+    return (
+        getattr(source, "web_binding", None) is not None
+        or getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
+    )
+
+
+def _source_failure(error: BaseException, source: Any) -> BaseException:
+    if _is_web_source(source):
+        return ExecutionError(sanitize_web_error(error))
+    if isinstance(error, ExecutionError):
+        return error
+    wrapped = ExecutionError(str(error) or "Source collection failed")
+    wrapped.__cause__ = error
+    return wrapped
+
+
 def _record_failure(
     app: App,
     source_name: str,
@@ -576,10 +594,15 @@ def _execute_queued_source(app: App, execution_id: int, at: datetime) -> int:
         checkpoint = _checkpoint_value(expected_json)
         result = _validate_result(_collect_contract(app, source, contract, checkpoint))
     except BaseException as error:
-        wrapped = error if isinstance(error, ExecutionError) else ExecutionError(str(error) or "Source collection failed")
-        if wrapped is not error:
-            wrapped.__cause__ = error
-        _record_failure(app, source_name, binding, execution_id, expected_json, wrapped, at_text)
+        _record_failure(
+            app,
+            source_name,
+            binding,
+            execution_id,
+            expected_json,
+            _source_failure(error, source),
+            at_text,
+        )
         return execution_id
     finalized, revision = _finalize_source(
         app, source_name, binding, execution_id, expected_json, at_text, result
@@ -811,13 +834,7 @@ def collect_source(
             "source_external_completion",
             **_log_fields(source_name, binding, execution_id, checkpoint, None, "failed"),
         )
-        wrapped = (
-            error
-            if isinstance(error, ExecutionError)
-            else ExecutionError(str(error) or "Source collection failed")
-        )
-        if wrapped is not error:
-            wrapped.__cause__ = error
+        wrapped = _source_failure(error, source)
         _record_failure(app, source_name, binding, execution_id, _checkpoint_json(app, source_name, binding, execution_id), wrapped, at_text)
         raise wrapped
 
