@@ -349,22 +349,23 @@ def _extract_input_artifact(input: object, input_format: str) -> DocumentArtifac
 
 
 def _clear_extraction(artifact: DocumentArtifact) -> DocumentArtifact:
-    if artifact.extraction in {None, "", "input", "provider", "provider_original", "identity"}:
-        return artifact
-    return replace(
-        artifact,
-        text=None,
-        markdown=None,
-        selected_format=None,
-        extraction=None,
-        extract_binding_digest=None,
-        quality=None,
-        capabilities=frozenset(
-            capability
-            for capability in artifact.capabilities
-            if capability not in {"text", "markdown"}
-        ),
-    )
+    fields: dict[str, object] = {
+        "selected_format": None,
+        "extraction": None,
+        "extract_binding_digest": None,
+        "quality": None,
+    }
+    if artifact.extraction not in {None, "", "input", "provider", "provider_original", "identity"}:
+        fields.update(
+            text=None,
+            markdown=None,
+            capabilities=frozenset(
+                capability
+                for capability in artifact.capabilities
+                if capability not in {"text", "markdown"}
+            ),
+        )
+    return replace(artifact, **fields)
 
 
 @dataclass(frozen=True, slots=True)

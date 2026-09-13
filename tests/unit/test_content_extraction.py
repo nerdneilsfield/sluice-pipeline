@@ -56,6 +56,46 @@ def test_content_task_bindings_project_artifacts_and_use_private_client() -> Non
     assert task.web_content_client.invocation is not None
 
 
+def test_extract_content_clears_identity_selection_before_a_new_digest(monkeypatch) -> None:
+    from dataclasses import replace
+
+    from sluice.web.contracts import ExtractorBinding, PrivateWebInvocation, QualityPolicy, WebBinding
+
+    artifact = DocumentArtifact(
+        markdown="Provider-origin markdown",
+        selected_format="markdown",
+        extraction="identity",
+        extract_binding_digest="old-digest",
+        quality={"passed": True},
+        content_type="text/markdown",
+        capabilities=frozenset({"markdown"}),
+    )
+    binding = WebBinding(
+        extract_chain=(ExtractorBinding(name="identity", type="identity"),),
+        extract_chain_name="replacement",
+        quality=QualityPolicy(min_chars=1),
+        output="artifact",
+    )
+    received: list[DocumentArtifact] = []
+
+    class Identity:
+        def extract(self, candidate: DocumentArtifact) -> DocumentArtifact:
+            received.append(candidate)
+            return replace(candidate, selected_format="markdown")
+
+    monkeypatch.setattr("sluice.tasks.content.build_extractor", lambda _: Identity())
+
+    result = extract_content.run_web(
+        PrivateWebInvocation({"extract_chain": "replacement"}, binding), artifact
+    )
+
+    assert isinstance(result, NEW)
+    assert received[0].markdown == "Provider-origin markdown"
+    assert received[0].selected_format is None
+    assert received[0].quality is None
+    assert received[0].extract_binding_digest is None
+
+
 def test_extract_content_reruns_a_different_artifact_digest() -> None:
     from sluice.web.contracts import ExtractorBinding, PrivateWebInvocation, QualityPolicy, WebBinding
 

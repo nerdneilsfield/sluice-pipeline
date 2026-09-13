@@ -276,6 +276,68 @@ def test_web_source_cache_version_participates_in_semantic_binding(tmp_path):
     assert first.web_binding.semantic_projection() != second.web_binding.semantic_projection()
 
 
+@pytest.mark.parametrize(
+    ("tasks", "match"),
+    [
+        (
+            """
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article}
+      - use: custom.task
+      - use: sluice.tasks.to_text
+""",
+            "Artifact-producing web Tasks",
+        ),
+        (
+            """
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article}
+      - use: sluice.tasks.to_text
+      - use: custom.task
+""",
+            "Artifact-producing web Tasks",
+        ),
+        (
+            """
+      - use: sluice.tasks.extract_content
+        with: {extract_chain: article}
+      - use: sluice.tasks.to_text
+      - use: sluice.tasks.to_markdown
+""",
+            "Artifact-producing web Tasks",
+        ),
+        (
+            """
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article}
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: robust, extract_chain: article}
+      - use: sluice.tasks.to_text
+""",
+            "Artifact-producing web Tasks",
+        ),
+    ],
+)
+def test_loader_rejects_invalid_artifact_task_chains(tmp_path, tasks, match):
+    with pytest.raises(DefinitionError, match=match):
+        load_definition(
+            _write(
+                tmp_path,
+                f"""version: 1
+web:
+  providers: {{direct: {{type: startup_http, trusted: true}}}}
+  fetch_chains: {{robust: {{providers: [direct]}}}}
+  extractors: {{identity: {{type: identity}}}}
+  extract_chains: {{article: {{extractors: [identity]}}}}
+stages:
+  article:
+    input: each
+    tasks:{tasks}
+""",
+            )
+        )
+
+
 def test_loader_rejects_terminal_fetch_artifact(tmp_path):
     with pytest.raises(DefinitionError, match="to_markdown or to_text"):
         load_definition(

@@ -373,6 +373,31 @@ def _decode_task(
     return TaskDef(use=use, with_config=freeze_json(config), web_binding=web_binding)
 
 
+def _validate_artifact_task_chain(name: str, tasks: tuple[TaskDef, ...]) -> None:
+    artifact_tasks = {"sluice.tasks.fetch_webpage", "sluice.tasks.extract_content"}
+    projectors = {"sluice.tasks.to_markdown", "sluice.tasks.to_text"}
+    if not any(task.use in artifact_tasks for task in tasks):
+        return
+
+    uses = tuple(task.use for task in tasks)
+    fetch_count = uses.count("sluice.tasks.fetch_webpage")
+    extract_count = uses.count("sluice.tasks.extract_content")
+    projector_count = sum(use in projectors for use in uses)
+    valid = (
+        projector_count == 1
+        and uses[-1] in projectors
+        and ((fetch_count == 1 and extract_count == 0 and len(uses) == 2)
+             or (fetch_count == 1 and extract_count == 1 and len(uses) == 3
+                 and uses[1] == "sluice.tasks.extract_content")
+             or (fetch_count == 0 and extract_count == 1 and len(uses) == 2))
+    )
+    if not valid:
+        raise DefinitionError(
+            f"stages.{name} Artifact-producing web Tasks must use only fetch_webpage, "
+            "an optional adjacent extract_content, and one terminal to_markdown or to_text"
+        )
+
+
 def _decode_stages(
     raw: Mapping[str, object], base_dir: Path, registry: WebRegistryConfig
 ) -> dict[str, StageDef]:
@@ -411,17 +436,7 @@ def _decode_stages(
                     "invalid: drop is only valid for each llm_extract"
                 )
 
-        artifact_task_present = any(
-            task.use in {"sluice.tasks.fetch_webpage", "sluice.tasks.extract_content"}
-            for task in tasks
-        )
-        if artifact_task_present and tasks[-1].use not in {
-            "sluice.tasks.to_markdown",
-            "sluice.tasks.to_text",
-        }:
-            raise DefinitionError(
-                f"stages.{name} containing an Artifact-producing web Task must end with to_markdown or to_text"
-            )
+        _validate_artifact_task_chain(name, tasks)
 
         output_value = spec.get("output", spec.get("output_schema"))
         if output_value is None:
