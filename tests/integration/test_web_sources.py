@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
+from sluice import source_runtime
 from sluice.app import open_app
+from sluice.config import load_definition
 from sluice.errors import ExecutionError
 from sluice.read_model import pipeline_list
-from sluice import source_runtime
 from sluice.source_runtime import collect_source
 from sluice.sources.rss import parse_feed_bytes
-from sluice.web.contracts import DocumentArtifact
+from sluice.web.client import WebContentClient
+from sluice.web.contracts import DocumentArtifact, WebBinding
+from sluice.web.providers import FirecrawlProvider
+from sluice.web.registry import resolve_provider_binding
 
 
 class _HTTP:
@@ -158,14 +164,20 @@ sources:
         app.close()
 
 
-def test_web_source_failures_are_sanitized_for_direct_and_queued_collection(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_web_source_failures_hide_resolved_provider_secrets_for_direct_and_queued_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    secret = "Authorization: Bearer actual-secret vendor-body-private"
-    definition = """version: 1
+    secret = "actual-secret-value"
+    vendor_body = "vendor-body-private"
+    monkeypatch.setenv("WEB_SECRET", secret)
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+    definition_path = tmp_path / "definition.yml"
+    definition_path.write_text(
+        """version: 1
 web:
-  providers: {direct: {type: startup_http, trusted: true}}
-  fetch_chains: {robust: {providers: [direct]}}
+  providers:
+    vendor: {type: firecrawl, base_url: https://vendor.test, api_key: env:WEB_SECRET}
+  fetch_chains: {robust: {providers: [vendor]}}
 sources:
   page:
     use: sluice.sources.webpage
@@ -175,12 +187,39 @@ pipelines:
   p:
     nodes:
       documents: {from: source.page, deliver: {use: tests.integration.test_web_sources.sink, with: {}}}
-"""
-    client = ScriptedClient([ExecutionError(secret), ExecutionError(secret)])
-    app = _open(tmp_path, definition, client)
+""",
+        encoding="utf-8",
+    )
+
+    class Transport:
+        def post(self, url, json=None, headers=None, **kwargs):
+            del url, json, headers, kwargs
+            raise RuntimeError(f"{vendor_body} contains {secret}")
+
+    binding = load_definition(definition_path).sources["page"].web_binding
+    assert binding is not None
+    resolved = resolve_provider_binding(binding.fetch_chain[0])
+    assert resolved.options["api_key"] == secret
+    provider = FirecrawlProvider(resolved, SimpleNamespace(service_client=Transport()))
+
+    class Catalog:
+        def provider(self, received):
+            assert received.name == "vendor"
+            return provider
+
+        def limiter(self, received):
+            del received
+            return None
+
+    app = open_app(
+        definition_path,
+        tmp_path / "state.db",
+        http_client=_HTTP(),
+        web_content_client=WebContentClient(Catalog()),
+    )
     caplog.set_level(logging.INFO, logger="sluice.source_runtime")
     try:
-        with pytest.raises(ExecutionError):
+        with pytest.raises(ExecutionError, match="provider_error"):
             collect_source(app, "page", datetime(2026, 1, 1, tzinfo=timezone.utc))
         queued_id = app.conn.execute(
             "SELECT id FROM executions WHERE kind='source' AND state='queued'"
@@ -189,7 +228,7 @@ pipelines:
             app, queued_id, datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
         )
         errors = [
-            row[0]
+            str(row[0] or "")
             for row in app.conn.execute(
                 "SELECT error FROM executions WHERE kind='source' ORDER BY id"
             )
@@ -200,9 +239,63 @@ pipelines:
 
     assert errors == ["provider_error", "provider_error"]
     assert summary.latest_error == "provider_error"
-    assert secret not in caplog.text
-    assert "actual-secret" not in " ".join(errors)
-    assert "vendor-body-private" not in " ".join(errors)
+    assert secret not in caplog.text and vendor_body not in caplog.text
+    assert secret not in str(summary) and vendor_body not in str(summary)
+    assert all(secret not in error and vendor_body not in error for error in errors)
+
+
+class _CustomSource:
+    def collect(self, config, checkpoint):
+        del config, checkpoint
+        raise ExecutionError("custom source diagnostic")
+
+
+def test_custom_source_with_web_binding_retains_its_diagnostic(tmp_path: Path) -> None:
+    app = _open(
+        tmp_path,
+        """version: 1
+sources:
+  custom: {use: tests.integration.test_web_sources.custom_source, with: {}}
+""",
+        ScriptedClient([]),
+    )
+    source = app.definition.sources["custom"]
+    replacement = replace(source, web_binding=WebBinding())
+    object.__setattr__(app, "definition", replace(app.definition, sources=MappingProxyType({"custom": replacement})))
+    try:
+        with pytest.raises(ExecutionError, match="custom source diagnostic"):
+            collect_source(app, "custom", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        assert app.conn.execute("SELECT error FROM executions").fetchone()[0] == "custom source diagnostic"
+    finally:
+        app.close()
+
+
+custom_source = _CustomSource()
+
+
+def test_builtin_source_without_web_binding_retains_compatibility_diagnostic(tmp_path: Path) -> None:
+    app = _open(
+        tmp_path,
+        """version: 1
+web:
+  providers: {direct: {type: startup_http, trusted: true}}
+  fetch_chains: {robust: {providers: [direct]}}
+sources:
+  page:
+    use: sluice.sources.webpage
+    with: {url: https://example.test/page, list_selector: article, fetch_chain: robust}
+""",
+        ScriptedClient([]),
+    )
+    source = app.definition.sources["page"]
+    replacement = replace(source, web_binding=None)
+    object.__setattr__(app, "definition", replace(app.definition, sources=MappingProxyType({"page": replacement})))
+    try:
+        with pytest.raises(ExecutionError, match="webpage collect requires literal HTML"):
+            collect_source(app, "page", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        assert app.conn.execute("SELECT error FROM executions").fetchone()[0] == "webpage collect requires literal HTML"
+    finally:
+        app.close()
 
 
 def sink(config, payload, delivery_key):

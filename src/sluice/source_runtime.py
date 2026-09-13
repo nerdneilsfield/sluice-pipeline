@@ -357,8 +357,8 @@ def _activate_binding(
 
 def _is_web_source(source: Any) -> bool:
     return (
-        getattr(source, "web_binding", None) is not None
-        or getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
+        getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
+        and getattr(source, "web_binding", None) is not None
     )
 
 
