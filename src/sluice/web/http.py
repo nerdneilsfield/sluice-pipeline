@@ -1017,14 +1017,15 @@ def send_pinned_httpx_request(
     timeout = _httpx_timeout(request, binding)
     try:
         pinned_transport = _PinnedHTTPTransport(addresses)
-        with httpx.Client(
-            transport=pinned_transport,
-            follow_redirects=False,
-            timeout=timeout,
-            trust_env=False,
-        ) as client, client.stream(
-            "GET", str(target), headers=outgoing_headers
-        ) as response:
+        with (
+            httpx.Client(
+                transport=pinned_transport,
+                follow_redirects=False,
+                timeout=timeout,
+                trust_env=False,
+            ) as client,
+            client.stream("GET", str(target), headers=outgoing_headers) as response,
+        ):
             return read_decompressed_limited(
                 response,
                 min(binding.max_body_bytes, MAX_BODY_BYTES),

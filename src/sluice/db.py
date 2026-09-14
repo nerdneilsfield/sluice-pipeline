@@ -20,7 +20,7 @@ class LockedConnection(sqlite3.Connection):
         super().close()
 
 
-def open_database(path: str | Path) -> sqlite3.Connection:
+def open_database(path: str | Path) -> LockedConnection:
     database_path = Path(path)
     database_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(
@@ -49,6 +49,8 @@ def open_database(path: str | Path) -> sqlite3.Connection:
 
 @contextmanager
 def write_transaction(connection: sqlite3.Connection) -> Iterator[None]:
+    if not isinstance(connection, LockedConnection):
+        raise TypeError("connection must be opened by open_database")
     with connection.transaction_lock:
         connection.execute("BEGIN IMMEDIATE")
         try:

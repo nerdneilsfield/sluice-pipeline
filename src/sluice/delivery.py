@@ -571,7 +571,7 @@ def _delivery_rows_for_dispatch(
     *,
     include_failed: bool,
 ) -> list[str]:
-    node = _delivery(app, pipeline_name, node_name)
+    _delivery(app, pipeline_name, node_name)
     binding = _binding(app, pipeline_name, node_name)
     node_binding = _node_binding(app, pipeline_name, node_name)
     state_filter = (

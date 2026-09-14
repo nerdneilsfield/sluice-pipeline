@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from urllib.error import HTTPError
 
 import pytest
@@ -19,7 +19,7 @@ class _Response:
         self._body = json.dumps(payload).encode("utf-8")
         self.status = status
 
-    def __enter__(self) -> _Response:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:

@@ -33,6 +33,12 @@ from .source_runtime import (
 _LOGGER = logging.getLogger("sluice.reconcile")
 
 
+def _inserted_row_id(value: int | None) -> int:
+    if value is None:
+        raise ExecutionError("database insert did not return a row id")
+    return value
+
+
 def _timestamp(value: datetime) -> str:
     return utc_datetime(value).isoformat().replace("+00:00", "Z")
 
@@ -177,7 +183,7 @@ def _producer_for_ref_tx(
 
     # An upstream node's current pointer is authoritative.  Ensure that an
     # un-reconciled upstream node has its immutable empty snapshot first.
-    upstream_binding = _ensure_node_binding_tx(app, pipeline_name, ref, at_text, set())
+    _ensure_node_binding_tx(app, pipeline_name, ref, at_text, set())
     current = app.conn.execute(
         "SELECT binding_digest FROM node_current_bindings "
         "WHERE pipeline_name=? AND node_name=?",
@@ -295,7 +301,7 @@ def _ensure_node_binding_tx(
                 "VALUES ('snapshot',?,?,0,?)",
                 (producer_key, binding, empty_digest),
             )
-            publication_id = int(publication.lastrowid)
+            publication_id = _inserted_row_id(publication.lastrowid)
         else:
             publication_id = int(publication[0])
 
@@ -834,7 +840,7 @@ def _freeze_tx(
         "VALUES (?,?,?,'frozen',?)",
         (pipeline_name, node_name, binding, at_text),
     )
-    batch_id = int(batch.lastrowid)
+    batch_id = _inserted_row_id(batch.lastrowid)
     app.conn.executemany(
         "INSERT INTO batch_items(batch_id,ordinal,item_id) VALUES (?,?,?)",
         ((batch_id, ordinal, item_id) for ordinal, item_id in enumerate(item_ids)),

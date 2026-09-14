@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 from urllib.parse import urlsplit
 
 import yaml
@@ -41,6 +42,7 @@ from sluice.web.contracts import (
     ProviderBinding,
     QualityPolicy,
     WebBinding,
+    WebOutput,
 )
 
 # This map is intentionally a literal.  It is a validation aid only; it is
@@ -236,6 +238,15 @@ def freeze_json(value: object, _active: set[int] | None = None) -> FrozenJSON:
     raise DefinitionError(f"value is not JSON-compatible: {value!r}")
 
 
+def freeze_mapping(value: Mapping[str, object]) -> Mapping[str, FrozenJSON]:
+    """冻结已验证的配置映射，并保留其映射形状。"""
+
+    frozen = freeze_json(value)
+    if not isinstance(frozen, Mapping):
+        raise DefinitionError("configuration must be a mapping")
+    return frozen
+
+
 def thaw_json(value: object) -> object:
     """Return a fresh mutable JSON copy of an immutable definition value."""
 
@@ -344,7 +355,7 @@ def _decode_sources(
             schedule=_optional_interval(
                 spec.get("schedule"), f"sources.{name}.schedule"
             ),
-            with_config=freeze_json(with_config),
+            with_config=freeze_mapping(with_config),
             policy=_decode_source_policy(spec, f"sources.{name}"),
             web_binding=web_binding,
         )
@@ -376,7 +387,7 @@ def _decode_task(
         web_binding = expand_web_binding(use, config, registry)
     except DefinitionError as error:
         raise DefinitionError(f"invalid {label}: {error}") from error
-    return TaskDef(use=use, with_config=freeze_json(config), web_binding=web_binding)
+    return TaskDef(use=use, with_config=freeze_mapping(config), web_binding=web_binding)
 
 
 def _validate_artifact_task_chain(name: str, tasks: tuple[TaskDef, ...]) -> None:
@@ -419,8 +430,12 @@ def _decode_stages(
             raise DefinitionError("stage names must be non-empty")
         spec = _mapping(value, f"stages.{name}")
         _check_keys(spec, _STAGE_KEYS, f"stages.{name}")
-        input_mode = spec.get("input")
-        if input_mode not in {"each", "batch"}:
+        raw_input_mode = spec.get("input")
+        if raw_input_mode == "each":
+            input_mode: Literal["each", "batch"] = "each"
+        elif raw_input_mode == "batch":
+            input_mode = "batch"
+        else:
             raise DefinitionError(f"stages.{name}.input must be each or batch")
         raw_tasks = spec.get("tasks")
         if not isinstance(raw_tasks, (list, tuple)) or not raw_tasks:
@@ -454,7 +469,9 @@ def _decode_stages(
         if output_value is None:
             output_schema: Mapping[str, FrozenJSON] | None = None
         else:
-            output_schema = freeze_json(_mapping(output_value, f"stages.{name}.output"))  # type: ignore[assignment]
+            output_schema = freeze_mapping(
+                _mapping(output_value, f"stages.{name}.output")
+            )
         cache_version = _integer(
             spec.get("cache_version", 1), f"stages.{name}.cache_version", minimum=1
         )
@@ -499,7 +516,7 @@ def _decode_delivery(value: object, label: str) -> DeliveryDef:
     _check_keys(spec, _DELIVERY_KEYS, label)
     return DeliveryDef(
         use=_required_string(spec, "use", label),
-        with_config=freeze_json(_mapping(spec.get("with"), f"{label}.with")),
+        with_config=freeze_mapping(_mapping(spec.get("with"), f"{label}.with")),
     )
 
 
@@ -783,9 +800,9 @@ def validate_definition(definition: Definition) -> None:
 
 def canonical_stage_config(
     name: str,
-    input_mode: str,
+    input_mode: Literal["each", "batch"],
     tasks: tuple[TaskDef, ...],
-    output_schema: Mapping[str, JSONValue] | None,
+    output_schema: Mapping[str, FrozenJSON] | None,
     cache_version: int,
     base_dir: str | Path,
 ) -> str:
@@ -898,6 +915,54 @@ def _snapshot_mapping(value: object, label: str) -> Mapping[str, object]:
     if any(not isinstance(key, str) for key in value):
         raise ExecutionError(f"invalid retained {label}")
     return value
+
+
+def _snapshot_frozen_mapping(value: object, label: str) -> Mapping[str, FrozenJSON]:
+    mapping = _snapshot_mapping(value, label)
+    return freeze_mapping(mapping)
+
+
+def _snapshot_integer(value: object, label: str, *, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
+def _snapshot_boolean(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ExecutionError(f"invalid retained {label}")
+    return value
+
+
+def _snapshot_optional_integer(value: object, label: str) -> int | None:
+    if value is None:
+        return None
+    return _snapshot_integer(value, label, minimum=1)
+
+
+def _snapshot_optional_ratio(value: object, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ExecutionError(f"invalid retained {label}")
+    ratio = float(value)
+    if not math.isfinite(ratio) or not 0 <= ratio <= 1:
+        raise ExecutionError(f"invalid retained {label}")
+    return ratio
+
+
+def _snapshot_web_output(value: object, label: str) -> WebOutput:
+    if value == "artifact":
+        return "artifact"
+    if value == "markdown":
+        return "markdown"
+    if value == "text":
+        return "text"
+    if value == "raw_html":
+        return "raw_html"
+    if value == "raw_source":
+        return "raw_source"
+    raise ExecutionError(f"invalid retained {label}")
 
 
 def _snapshot_optional_string(value: object, label: str) -> str | None:
@@ -1015,6 +1080,7 @@ def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
     capabilities = _snapshot_sequence(value["capabilities"], f"{label}.capabilities")
     if any(not isinstance(capability, str) for capability in capabilities):
         raise ExecutionError(f"invalid retained {label}.capabilities")
+    capabilities = tuple(str(capability) for capability in capabilities)
     actions = _snapshot_sequence(value["actions"], f"{label}.actions")
     timeout = _snapshot_duration(value["timeout"], f"{label}.timeout", required=True)
     connect_timeout = _snapshot_duration(
@@ -1046,29 +1112,41 @@ def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
         return ProviderBinding(
             name=name,
             type=provider_type,
-            options=_snapshot_mapping(value["options"], f"{label}.options"),
+            options=_snapshot_frozen_mapping(value["options"], f"{label}.options"),
             base_url=base_url,
             timeout=timeout,
             connect_timeout=connect_timeout,
-            transport_retries=value["transport_retries"],
-            max_body_bytes=value["max_body_bytes"],
-            concurrency=value["concurrency"],
+            transport_retries=_snapshot_integer(
+                value["transport_retries"], f"{label}.transport_retries"
+            ),
+            max_body_bytes=_snapshot_integer(
+                value["max_body_bytes"], f"{label}.max_body_bytes", minimum=1
+            ),
+            concurrency=_snapshot_integer(
+                value["concurrency"], f"{label}.concurrency", minimum=1
+            ),
             cooldown=cooldown,
             capabilities=frozenset(capabilities),
-            service_headers=_snapshot_mapping(
+            service_headers=_snapshot_frozen_mapping(
                 value["service_headers"], f"{label}.service_headers"
             ),
-            target_headers=_snapshot_mapping(
+            target_headers=_snapshot_frozen_mapping(
                 value["target_headers"], f"{label}.target_headers"
             ),
-            cookies=_snapshot_mapping(value["cookies"], f"{label}.cookies"),
+            cookies=_snapshot_frozen_mapping(value["cookies"], f"{label}.cookies"),
             proxy=proxy,
-            target_policy=target_policy,
+            target_policy=(
+                None
+                if target_policy is None
+                else _snapshot_frozen_mapping(target_policy, f"{label}.target_policy")
+            ),
             timeout_seconds=timeout_seconds,
-            only_main_content=value["only_main_content"],
+            only_main_content=_snapshot_boolean(
+                value["only_main_content"], f"{label}.only_main_content"
+            ),
             wait_for_selector=wait_for_selector,
             wait_for=value["wait_for"],
-            mobile=value["mobile"],
+            mobile=_snapshot_boolean(value["mobile"], f"{label}.mobile"),
             actions=actions,
         )
     except (DefinitionError, TypeError, ValueError) as error:
@@ -1090,7 +1168,7 @@ def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
         return ExtractorBinding(
             name=name,
             type=extractor_type,
-            options=_snapshot_mapping(value["options"], f"{label}.options"),
+            options=_snapshot_frozen_mapping(value["options"], f"{label}.options"),
         )
     except (DefinitionError, TypeError, ValueError) as error:
         raise ExecutionError(f"invalid retained {label}") from error
@@ -1215,19 +1293,35 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
         raise ExecutionError("invalid retained Task web binding.web_cache_version")
     try:
         quality = QualityPolicy(
-            min_chars=quality_value["min_chars"],
-            min_words=quality_value["min_words"],
-            max_link_ratio=quality_value["max_link_ratio"],
-            reject_challenges=quality_value["reject_challenges"],
-            max_body_bytes=quality_value["max_body_bytes"],
+            min_chars=_snapshot_integer(
+                quality_value["min_chars"], "Task web binding.quality.min_chars"
+            ),
+            min_words=_snapshot_optional_integer(
+                quality_value["min_words"], "Task web binding.quality.min_words"
+            ),
+            max_link_ratio=_snapshot_optional_ratio(
+                quality_value["max_link_ratio"],
+                "Task web binding.quality.max_link_ratio",
+            ),
+            reject_challenges=_snapshot_boolean(
+                quality_value["reject_challenges"],
+                "Task web binding.quality.reject_challenges",
+            ),
+            max_body_bytes=_snapshot_integer(
+                quality_value["max_body_bytes"],
+                "Task web binding.quality.max_body_bytes",
+                minimum=1,
+            ),
         )
         binding = WebBinding(
-            version=value["version"],
+            version=_snapshot_integer(
+                value["version"], "Task web binding.version", minimum=1
+            ),
             direct_provider=direct_provider,
             fetch_chain=fetch_chain,
             extract_chain=extract_chain,
             quality=quality,
-            output=value["output"],
+            output=_snapshot_web_output(value["output"], "Task web binding.output"),
             fetch_chain_name=fetch_chain_name,
             extract_chain_name=extract_chain_name,
             web_cache_version=cache_version,

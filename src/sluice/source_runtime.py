@@ -338,8 +338,7 @@ def _activate_binding(
         # Source schedules live on SourceDef rather than ExecutionPolicy.
         schedule = source.schedule
         next_due = (
-            utc_datetime(datetime.fromisoformat(at_text.replace("Z", "+00:00")))
-            + schedule
+            utc_datetime(datetime.fromisoformat(at_text)) + schedule
             if schedule is not None
             else None
         )
@@ -606,7 +605,7 @@ def _execute_queued_source(app: App, execution_id: int, at: datetime) -> int:
             return execution_id
         expected_json = row["expected_checkpoint_json"]
         config = json.loads(str(row["config_json"]))
-        source_config = config.get("with", {}) if isinstance(config, Mapping) else {}
+        config.get("with", {}) if isinstance(config, Mapping) else {}
     try:
         source = app.definition.sources[source_name]
         contract = app.sources[source_name]

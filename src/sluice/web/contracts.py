@@ -21,6 +21,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    Self,
     TypeAlias,
 )
 from urllib.parse import urlsplit
@@ -800,7 +801,7 @@ class FetchChainExhausted(ExecutionError):
     def __new__(
         cls,
         attempts: tuple[WebAttemptFailure, ...] | list[WebAttemptFailure],
-    ) -> FetchChainExhausted:
+    ) -> Self:
         # Bypass BaseException's default ``__new__`` argument capture.  The
         # only retained payload is the validated attempts tuple below.
         return BaseException.__new__(cls)

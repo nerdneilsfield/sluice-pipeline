@@ -19,7 +19,7 @@ from sluice.web.select import select_list_records
 
 
 def _next_checkpoint(config: Mapping[str, JSONValue]) -> JSONValue:
-    return config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
+    return config.get("next_checkpoint", KEEP_CHECKPOINT)
 
 
 def _record_from_projected(

@@ -258,7 +258,7 @@ def test_invalid_batch_llm_output_stays_failed_and_frozen(tmp_path):
 def test_rebuild_current_failed_batch_uses_exact_history_and_clears_only_current_freeze(
     tmp_path,
 ):
-    app, target, batch_id, item_ids = failed_batch_app(tmp_path)
+    app, target, _batch_id, item_ids = failed_batch_app(tmp_path)
     result = rebuild_stage(app, target, instant(10))
     assert result.forced is True
     assert result.execution_id is not None

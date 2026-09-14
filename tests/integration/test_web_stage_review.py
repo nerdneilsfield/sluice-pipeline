@@ -180,7 +180,7 @@ def test_lost_claim_after_response_cannot_start_paid_fallback_or_retry(
 ) -> None:
     first_started, release = Event(), Event()
     calls: list[str] = []
-    first, second = _provider("first"), _provider("second")
+    _first, _second = _provider("first"), _provider("second")
 
     class Catalog:
         def provider(self, binding: ProviderBinding):

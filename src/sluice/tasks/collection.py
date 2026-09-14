@@ -244,7 +244,7 @@ def dedup(config: Mapping[str, Any], input: object) -> tuple[object, ...]:
     output: list[object] = []
     for index, candidate in enumerate(candidates):
         identity = _identity(candidate, keys)
-        winner_index, winner = selected[identity]
+        winner_index, _winner = selected[identity]
         prior = prior_selected.get(identity)
         if index != winner_index:
             output.append(DROP)

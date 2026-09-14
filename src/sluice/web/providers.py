@@ -1440,7 +1440,7 @@ class ZyteProvider:
 
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
         request = _validate_remote_request_url(self.binding, request)
-        payload, status, response_headers, _response_url = _post_service_json(
+        payload, status, _response_headers, _response_url = _post_service_json(
             self.binding,
             self.runtime,
             "/v1/extract",

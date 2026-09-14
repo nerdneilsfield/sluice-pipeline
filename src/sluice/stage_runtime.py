@@ -1170,7 +1170,7 @@ def _request_materialization(
             _attach_result_tx(app, request, int(current[0]), at_text)
             return _RequestOutcome(execution_id, cached=True, request=request)
 
-        claim_inserted = (
+        (
             app.conn.execute(
                 "INSERT OR IGNORE INTO materialization_claims(stage_name,lookup_key) VALUES (?,?)",
                 (stage.name, lookup_key),

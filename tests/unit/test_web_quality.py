@@ -6,16 +6,16 @@ from sluice.web.sanitize import sanitize_markdown, sanitize_metadata, sanitize_w
 
 
 def _artifact(html: str, **kwargs):
-    values = dict(
-        source_url="https://example.test/article",
-        final_url="https://example.test/article",
-        status_code=200,
-        content_type="text/html",
-        raw_html=html,
-        capabilities=frozenset({"raw_html"}),
-        provider_instance="direct",
-        provider_type="httpx",
-    )
+    values = {
+        "source_url": "https://example.test/article",
+        "final_url": "https://example.test/article",
+        "status_code": 200,
+        "content_type": "text/html",
+        "raw_html": html,
+        "capabilities": frozenset({"raw_html"}),
+        "provider_instance": "direct",
+        "provider_type": "httpx",
+    }
     values.update(kwargs)
     return DocumentArtifact(**values)
 

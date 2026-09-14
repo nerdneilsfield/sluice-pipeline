@@ -216,7 +216,7 @@ def parse_feed_bytes(
 
 
 def _next_checkpoint(config: Mapping[str, JSONValue]) -> JSONValue:
-    return config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
+    return config.get("next_checkpoint", KEEP_CHECKPOINT)
 
 
 def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
