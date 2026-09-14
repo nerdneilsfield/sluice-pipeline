@@ -4,4 +4,9 @@
 .serena/
 .ruff_cache/
 
+# Python 本地构建与运行时副产物
+__pycache__/
+*.egg-info/
+.venv/
+
 
