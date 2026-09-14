@@ -25,6 +25,11 @@ web = [
 ui = ["Flask>=3.0,<4"]
 prefect = ["prefect>=3.0,<4"]
 test = ["pytest>=8.0,<9"]
+dev = [
+  "pytest>=8.0,<9",
+  "ruff>=0.8,<1",
+  "ty>=0.0.1",
+]
 
 [project.scripts]
 sluice = "sluice.cli:main"
