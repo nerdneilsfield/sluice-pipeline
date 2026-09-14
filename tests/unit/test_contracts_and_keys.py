@@ -17,7 +17,6 @@ from sluice.contracts import (
     FORWARD,
     KEEP_CHECKPOINT,
     NEW,
-    BatchInput,
     Drop,
     Item,
     KeepCheckpoint,
@@ -28,7 +27,6 @@ from sluice.contracts import (
 from sluice.errors import ExecutionError
 from sluice.source_runtime import _log_fields
 from sluice.stage_runtime import run_stage_tasks, validate_task_outputs
-
 
 current = Item(
     "current",
@@ -83,9 +81,10 @@ def test_stage_output_markers_cardinality_and_empty_batch():
                 current_items=(current,),
                 history_items=(foreign,),
             )
-    assert validate_task_outputs(
-        "batch", (), current_items=(current,), history_items=()
-    ) == ()
+    assert (
+        validate_task_outputs("batch", (), current_items=(current,), history_items=())
+        == ()
+    )
     aggregate = validate_task_outputs(
         "batch", (NEW([]),), current_items=(current,), history_items=()
     )
@@ -116,9 +115,7 @@ def test_task_chain_cannot_forward_an_item_dropped_by_an_intermediate_new(input_
 
 def test_stage_key_changes_with_item_value():
     same = stage_lookup_key(stage, (current,), ())
-    changed = stage_lookup_key(
-        stage, (replace(current, payload={"title": "B"}),), ()
-    )
+    changed = stage_lookup_key(stage, (replace(current, payload={"title": "B"}),), ())
     assert same != changed
 
 
@@ -151,9 +148,7 @@ def test_derived_identity_and_observed_time_depend_only_on_stage_inputs():
     logical_id = derived_batch_logical_id((source_a, source_b))
     assert materialized_item_id(
         "summary", logical_id, {"summary": "ok"}, {}
-    ) != materialized_item_id(
-        "summary", logical_id, {"summary": "changed"}, {}
-    )
+    ) != materialized_item_id("summary", logical_id, {"summary": "changed"}, {})
 
 
 def test_marker_values_distinguish_drop_forward_new_none_and_checkpoint_keep():

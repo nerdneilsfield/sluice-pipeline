@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 from sluice.app import open_app
@@ -56,7 +56,7 @@ pipelines:
     )
     (tmp_path / "prompt.md").write_text("Return a title object.", encoding="utf-8")
     app = open_app(definition, tmp_path / "state.db", llm_client=ManagementLLM())
-    tick(app, datetime(2026, 8, 14, tzinfo=timezone.utc))
+    tick(app, datetime(2026, 8, 14, tzinfo=UTC))
     return app
 
 
@@ -79,7 +79,9 @@ def test_management_read_model_states_counts_and_actions(tmp_path):
     assert detail_page.content_type.startswith("text/html")
     failed_target = default_rebuild_target(app, "daily_digest", "failed_summary")
     assert failed_target is not None
-    assert client.post("/pipelines/daily_digest/nodes/failed_summary/rebuild").status_code in {
+    assert client.post(
+        "/pipelines/daily_digest/nodes/failed_summary/rebuild"
+    ).status_code in {
         202,
         303,
     }

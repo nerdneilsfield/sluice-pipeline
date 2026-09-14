@@ -56,10 +56,17 @@ def test_content_task_bindings_project_artifacts_and_use_private_client() -> Non
     assert task.web_content_client.invocation is not None
 
 
-def test_extract_content_clears_identity_selection_before_a_new_digest(monkeypatch) -> None:
+def test_extract_content_clears_identity_selection_before_a_new_digest(
+    monkeypatch,
+) -> None:
     from dataclasses import replace
 
-    from sluice.web.contracts import ExtractorBinding, PrivateWebInvocation, QualityPolicy, WebBinding
+    from sluice.web.contracts import (
+        ExtractorBinding,
+        PrivateWebInvocation,
+        QualityPolicy,
+        WebBinding,
+    )
 
     artifact = DocumentArtifact(
         markdown="Provider-origin markdown",
@@ -97,7 +104,12 @@ def test_extract_content_clears_identity_selection_before_a_new_digest(monkeypat
 
 
 def test_extract_content_reruns_a_different_artifact_digest() -> None:
-    from sluice.web.contracts import ExtractorBinding, PrivateWebInvocation, QualityPolicy, WebBinding
+    from sluice.web.contracts import (
+        ExtractorBinding,
+        PrivateWebInvocation,
+        QualityPolicy,
+        WebBinding,
+    )
 
     artifact = DocumentArtifact(
         raw_html="<article><p>Fresh body</p></article>",
@@ -241,7 +253,9 @@ def test_beautifulsoup_plain_mode_excludes_head_and_title_text() -> None:
     assert result.title == "Hidden title"
 
 
-def test_newspaper4k_parses_supplied_html_without_network_or_image_fetch(monkeypatch) -> None:
+def test_newspaper4k_parses_supplied_html_without_network_or_image_fetch(
+    monkeypatch,
+) -> None:
     import types
 
     from sluice.web import extractors as extractor_module
@@ -250,14 +264,18 @@ def test_newspaper4k_parses_supplied_html_without_network_or_image_fetch(monkeyp
 
     class FakeArticle:
         def __init__(self, url: str, **kwargs) -> None:
-            self.config = types.SimpleNamespace(fetch_images=kwargs.get("fetch_images", True))
+            self.config = types.SimpleNamespace(
+                fetch_images=kwargs.get("fetch_images", True)
+            )
             self.fetch_images = lambda: image_fetches.append("fetch")
             self.text = ""
             self.title = ""
             self.authors = []
             self.publish_date = None
 
-        def download(self, *, input_html: str | None = None, ignore_read_more: bool = False):
+        def download(
+            self, *, input_html: str | None = None, ignore_read_more: bool = False
+        ):
             assert input_html is not None
             assert ignore_read_more is True
             self.html = input_html
@@ -314,7 +332,9 @@ def test_auto_projector_preserves_markdown_syntax_for_non_html_input() -> None:
 
 
 def test_markdown_metadata_ignores_links_inside_code_fences() -> None:
-    source = "```md\n[example](https://code.example/)\n```\n[real](https://real.example/)"
+    source = (
+        "```md\n[example](https://code.example/)\n```\n[real](https://real.example/)"
+    )
 
     result = project_markdown(source, input_format="markdown")
 
@@ -398,7 +418,9 @@ def test_html_projector_drops_non_visible_embedded_content() -> None:
 
 
 def test_html_metadata_ignores_links_inside_embedded_content() -> None:
-    source = "<p>Visible</p><object><a href='https://secret.example'>secret</a></object>"
+    source = (
+        "<p>Visible</p><object><a href='https://secret.example'>secret</a></object>"
+    )
 
     result = project_markdown(source, input_format="html")
 
@@ -418,13 +440,18 @@ def test_html_projector_unwraps_nested_parenthesis_unsafe_destinations() -> None
 
 
 def test_html_fallback_escapes_literal_text_nodes_for_markdown() -> None:
-    assert project_markdown("<p>&lt;tag&gt; &amp; text</p>", input_format="html").value == (
-        "&lt;tag&gt; & text"
+    assert project_markdown(
+        "<p>&lt;tag&gt; &amp; text</p>", input_format="html"
+    ).value == ("&lt;tag&gt; & text")
+    assert (
+        project_markdown("<p>*literal*</p>", input_format="html").value
+        == r"\*literal\*"
     )
-    assert project_markdown("<p>*literal*</p>", input_format="html").value == r"\*literal\*"
 
 
-def test_identity_requires_provider_capability_but_accepts_explicit_local_input() -> None:
+def test_identity_requires_provider_capability_but_accepts_explicit_local_input() -> (
+    None
+):
     provider = DocumentArtifact(
         markdown="# Provider body",
         content_type="text/markdown",

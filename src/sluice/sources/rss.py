@@ -8,7 +8,13 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from sluice.canonical import canonical_json
-from sluice.contracts import HTTPClient, JSONValue, KEEP_CHECKPOINT, SourceRecord, SourceResult
+from sluice.contracts import (
+    KEEP_CHECKPOINT,
+    HTTPClient,
+    JSONValue,
+    SourceRecord,
+    SourceResult,
+)
 from sluice.errors import ExecutionError
 from sluice.web.contracts import (
     DocumentArtifact,
@@ -50,7 +56,9 @@ def _link(element: Any, final_url: str) -> str | None:
         if _local_name(getattr(candidate, "tag", None)) != "link":
             continue
         href = candidate.attrib.get("href")
-        value = href.strip() if isinstance(href, str) and href.strip() else _text(candidate)
+        value = (
+            href.strip() if isinstance(href, str) and href.strip() else _text(candidate)
+        )
         if not value:
             continue
         try:
@@ -69,11 +77,19 @@ def _request_url(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> str:
         return url
     if not isinstance(parameter, str) or not parameter:
         raise ExecutionError("RSS cursor_param must be a non-empty string")
-    cursor_text = checkpoint if isinstance(checkpoint, str) else canonical_json(checkpoint)
+    cursor_text = (
+        checkpoint if isinstance(checkpoint, str) else canonical_json(checkpoint)
+    )
     split = urlsplit(url)
-    query = [(key, value) for key, value in parse_qsl(split.query, keep_blank_values=True) if key != parameter]
+    query = [
+        (key, value)
+        for key, value in parse_qsl(split.query, keep_blank_values=True)
+        if key != parameter
+    ]
     query.append((parameter, cursor_text))
-    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+    return urlunsplit(
+        (split.scheme, split.netloc, split.path, urlencode(query), split.fragment)
+    )
 
 
 def _is_html(value: str) -> bool:
@@ -86,24 +102,39 @@ def _feed_entries(root: Any, kind: str) -> tuple[Any, ...]:
 
     children = tuple(root)
     if kind == "atom":
-        return tuple(child for child in children if _local_name(getattr(child, "tag", None)) == "entry")
+        return tuple(
+            child
+            for child in children
+            if _local_name(getattr(child, "tag", None)) == "entry"
+        )
     if kind == "rss1":
-        return tuple(child for child in children if _local_name(getattr(child, "tag", None)) == "item")
+        return tuple(
+            child
+            for child in children
+            if _local_name(getattr(child, "tag", None)) == "item"
+        )
     if kind == "rss2":
         channel = next(
-            (child for child in children if _local_name(getattr(child, "tag", None)) == "channel"),
+            (
+                child
+                for child in children
+                if _local_name(getattr(child, "tag", None)) == "channel"
+            ),
             None,
         )
         if channel is None:
             return ()
         return tuple(
-            child for child in tuple(channel)
+            child
+            for child in tuple(channel)
             if _local_name(getattr(child, "tag", None)) == "item"
         )
     raise ExecutionError("invalid RSS raw source")
 
 
-def _entry_record(entry: Any, index: int, artifact: DocumentArtifact, output: str) -> SourceRecord:
+def _entry_record(
+    entry: Any, index: int, artifact: DocumentArtifact, output: str
+) -> SourceRecord:
     final_url = artifact.final_url
     if not isinstance(final_url, str):
         raise ExecutionError("RSS response has no final URL")
@@ -130,7 +161,9 @@ def _entry_record(entry: Any, index: int, artifact: DocumentArtifact, output: st
         provider_type=artifact.provider_type,
         extraction="feed_parser",
     )
-    projected = project_markdown(source) if output == "markdown" else project_text(source)
+    projected = (
+        project_markdown(source) if output == "markdown" else project_text(source)
+    )
     rendered = getattr(projected, "value", None)
     metadata = getattr(projected, "metadata", None)
     if not isinstance(rendered, str) or not isinstance(metadata, Mapping):
@@ -149,7 +182,13 @@ def _entry_record(entry: Any, index: int, artifact: DocumentArtifact, output: st
     return SourceRecord(logical_id.strip(), payload, metadata)
 
 
-def parse_feed_bytes(raw: bytes, final_url: str, *, artifact: DocumentArtifact | None = None, entry_output: str = "text") -> tuple[SourceRecord, ...]:
+def parse_feed_bytes(
+    raw: bytes,
+    final_url: str,
+    *,
+    artifact: DocumentArtifact | None = None,
+    entry_output: str = "text",
+) -> tuple[SourceRecord, ...]:
     """Parse already-bounded literal feed bytes without retaining the raw body."""
 
     root = validate_raw_feed(raw)
@@ -189,7 +228,11 @@ def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceRes
     if not isinstance(xml, str) or not isinstance(url, str) or not url:
         raise ExecutionError("RSS collect requires literal XML and url")
     return SourceResult(
-        records=parse_feed_bytes(xml.encode("utf-8"), url, entry_output=str(config.get("entry_output", "text"))),
+        records=parse_feed_bytes(
+            xml.encode("utf-8"),
+            url,
+            entry_output=str(config.get("entry_output", "text")),
+        ),
         next_checkpoint=_next_checkpoint(config),
     )
 
@@ -199,10 +242,14 @@ class _RSSSource:
     http_client: HTTPClient | None
     web_content_client: object | None = None
 
-    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+    def collect(
+        self, config: Mapping[str, JSONValue], checkpoint: JSONValue
+    ) -> SourceResult:
         return collect(config, checkpoint)
 
-    def collect_web(self, invocation: PrivateWebInvocation, checkpoint: JSONValue) -> SourceResult:
+    def collect_web(
+        self, invocation: PrivateWebInvocation, checkpoint: JSONValue
+    ) -> SourceResult:
         if not isinstance(invocation, PrivateWebInvocation):
             raise ExecutionError("invalid private web invocation")
         if self.web_content_client is None:
@@ -222,8 +269,11 @@ class _RSSSource:
             preferred=("raw_source",),
             quality=binding.quality,
         )
+
         def project(artifact: object) -> SourceResult:
-            if not isinstance(artifact, DocumentArtifact) or not isinstance(artifact.raw_source, bytes):
+            if not isinstance(artifact, DocumentArtifact) or not isinstance(
+                artifact.raw_source, bytes
+            ):
                 raise ExecutionError("RSS resolution returned no raw source")
             return SourceResult(
                 records=parse_feed_bytes(
@@ -251,5 +301,5 @@ def bind(adapters: object | None) -> _RSSSource:
     """Bind the immutable startup boundary without widening public contracts."""
 
     if hasattr(adapters, "http_client") and hasattr(adapters, "web_content_client"):
-        return _RSSSource(getattr(adapters, "http_client"), getattr(adapters, "web_content_client"))
+        return _RSSSource(adapters.http_client, adapters.web_content_client)
     return _RSSSource(adapters)  # type: ignore[arg-type]

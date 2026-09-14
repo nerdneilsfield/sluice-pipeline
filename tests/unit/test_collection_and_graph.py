@@ -1,16 +1,15 @@
-from datetime import datetime, timedelta, timezone
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import yaml
 
 from sluice.app import open_app
 from sluice.config import load_definition
-from sluice.contracts import BatchInput, Definition, DROP, FORWARD, Item
-from sluice.contracts import BatchPolicy
+from sluice.contracts import DROP, FORWARD, BatchInput, BatchPolicy, Definition, Item
 from sluice.errors import DefinitionError, ExecutionError, GraphError
-from sluice.tasks import collection
 from sluice.reconcile import freeze_eligible
+from sluice.tasks import collection
 
 
 def sink_callable(config, payload, delivery_key):
@@ -83,9 +82,9 @@ def test_filter_sort_and_limit_boundaries():
         BatchInput((low, high), ()),
     )
     assert ordered == (FORWARD(high), FORWARD(low))
-    assert collection.limit(
-        {"count": 1}, BatchInput((high, low), ())
-    ) == (FORWARD(high),)
+    assert collection.limit({"count": 1}, BatchInput((high, low), ())) == (
+        FORWARD(high),
+    )
 
 
 def test_dedup_uses_only_explicit_eligible_history_in_identity_order():
@@ -109,12 +108,12 @@ def test_dedup_uses_only_explicit_eligible_history_in_identity_order():
         "2026-08-13T00:00:00Z",
         1,
     )
-    assert collection.dedup(
-        {"keys": ["url"]}, BatchInput((candidate,), ())
-    ) == (FORWARD(candidate),)
-    assert collection.dedup(
-        {"keys": ["url"]}, BatchInput((candidate,), (prior,))
-    ) == (DROP,)
+    assert collection.dedup({"keys": ["url"]}, BatchInput((candidate,), ())) == (
+        FORWARD(candidate),
+    )
+    assert collection.dedup({"keys": ["url"]}, BatchInput((candidate,), (prior,))) == (
+        DROP,
+    )
     assert collection.select_dedup_history((candidate,), ((prior, ("new",)),)) == ()
     assert collection.select_dedup_history(
         (candidate,), ((prior, ("other-input",)),)
@@ -138,9 +137,9 @@ def test_select_dedup_history_uses_configured_keys_and_strict_prior_order():
         (unrelated_key, ("other-input",)),
         (future, ("future-input",)),
     )
-    assert collection.select_dedup_history(
-        (candidate,), accepted, keys=("url",)
-    ) == (same_key,)
+    assert collection.select_dedup_history((candidate,), accepted, keys=("url",)) == (
+        same_key,
+    )
 
 
 @pytest.mark.parametrize(
@@ -164,7 +163,9 @@ def test_select_dedup_history_uses_configured_keys_and_strict_prior_order():
         },
         {"pipelines": {"p": {"nodes": {"a": {"from": "b"}, "b": {"from": "a"}}}}},
         {
-            "stages": {"s": {"input": "each", "tasks": [{"use": "sluice.tasks.dedup"}]}},
+            "stages": {
+                "s": {"input": "each", "tasks": [{"use": "sluice.tasks.dedup"}]}
+            },
             "pipelines": {
                 "p": {
                     "nodes": {
@@ -250,7 +251,9 @@ pipelines:
     assert definition.sources["s"].web_binding.direct_provider is not None
     assert definition.sources["s"].web_binding.direct_provider.name == "__rss_direct__"
     assert definition.pipelines["p"].nodes["out"].from_refs == ("source.s",)
-    assert definition.pipelines["p"].nodes["out"].policy.timeout == timedelta(seconds=120)
+    assert definition.pipelines["p"].nodes["out"].policy.timeout == timedelta(
+        seconds=120
+    )
 
 
 @pytest.mark.parametrize("version", ["true", "1.0"])
@@ -281,14 +284,20 @@ sources: &sources
 
 
 def test_open_app_requires_a_definition_path(tmp_path):
-    definition = Definition(version=1, database=str(tmp_path / "state.db"), sources={}, stages={}, pipelines={})
+    definition = Definition(
+        version=1,
+        database=str(tmp_path / "state.db"),
+        sources={},
+        stages={},
+        pipelines={},
+    )
 
     with pytest.raises(DefinitionError):
         open_app(definition, tmp_path / "state.db")
 
 
 def instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 14, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 @pytest.mark.parametrize(
@@ -296,7 +305,14 @@ def instant(seconds: int) -> datetime:
     [
         (BatchPolicy(count=2), 1, instant(0), instant(1), False, False),
         (BatchPolicy(count=2), 2, instant(0), instant(1), False, True),
-        (BatchPolicy(max_wait=timedelta(hours=1)), 1, instant(0), instant(3600), False, True),
+        (
+            BatchPolicy(max_wait=timedelta(hours=1)),
+            1,
+            instant(0),
+            instant(3600),
+            False,
+            True,
+        ),
         (BatchPolicy(on_schedule=True), 99, instant(0), instant(1), False, False),
         (BatchPolicy(on_schedule=True), 99, instant(0), instant(1), True, True),
     ],

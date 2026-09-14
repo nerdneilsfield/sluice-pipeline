@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 
 import pytest
@@ -18,7 +18,7 @@ from sluice.source_runtime import collect_source
 
 
 def instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 14, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 def source_collect(config, checkpoint):
@@ -65,7 +65,6 @@ def test_sibling_deliveries_retry_independently_and_null_is_success(tmp_path):
 
     def email(config, payload, key):
         sent.append(("email", key))
-        return None
 
     def telegram(config, payload, key):
         raise RuntimeError("down")
@@ -74,7 +73,9 @@ def test_sibling_deliveries_retry_independently_and_null_is_success(tmp_path):
         tmp_path,
         {"sluice.sinks.email": email, "sluice.sinks.telegram": telegram},
     )
-    tick(app, instant(0))  # generic node admission creates and drains both Delivery rows
+    tick(
+        app, instant(0)
+    )  # generic node admission creates and drains both Delivery rows
     email_key = app.conn.execute(
         "SELECT delivery_key FROM deliveries WHERE node_name='email'"
     ).fetchone()[0]
@@ -99,9 +100,7 @@ def test_sibling_deliveries_retry_independently_and_null_is_success(tmp_path):
         ).fetchone()[0]
         == "failed"
     )
-    upstream_before = app.conn.execute(
-        "SELECT COUNT(*) FROM executions"
-    ).fetchone()[0]
+    upstream_before = app.conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0]
     retry_delivery(app, telegram_key, instant(1))
     assert (
         app.conn.execute("SELECT COUNT(*) FROM executions").fetchone()[0]
@@ -287,7 +286,8 @@ pipelines:
 
     assert new_calls == []
     row = second.conn.execute(
-        "SELECT state,binding_digest,config_json FROM deliveries WHERE delivery_key=?", (key,)
+        "SELECT state,binding_digest,config_json FROM deliveries WHERE delivery_key=?",
+        (key,),
     ).fetchone()
     assert tuple(row) == ("failed", old_binding, old_config)
 
@@ -330,7 +330,9 @@ pipelines:
         sink_clients={"sluice.sinks.email": sink},
     )
     collect_source(app, "feed", instant(0))
-    item_ids = [row[0] for row in app.conn.execute("SELECT id FROM items ORDER BY rowid")]
+    item_ids = [
+        row[0] for row in app.conn.execute("SELECT id FROM items ORDER BY rowid")
+    ]
     first_key = deliver(app, "p", "out", item_ids[0], instant(0))
     second_worker = Thread(
         target=deliver,
@@ -340,24 +342,37 @@ pipelines:
     assert second_started.wait(timeout=5)
 
     retry_delivery(app, first_key, instant(2))
-    assert calls == [first_key, app.conn.execute(
-        "SELECT delivery_key FROM deliveries WHERE rendered_item_id=?", (item_ids[1],)
-    ).fetchone()[0]]
-    assert app.conn.execute(
-        "SELECT state FROM deliveries WHERE delivery_key=?", (first_key,)
-    ).fetchone()[0] == "failed"
+    assert calls == [
+        first_key,
+        app.conn.execute(
+            "SELECT delivery_key FROM deliveries WHERE rendered_item_id=?",
+            (item_ids[1],),
+        ).fetchone()[0],
+    ]
+    assert (
+        app.conn.execute(
+            "SELECT state FROM deliveries WHERE delivery_key=?", (first_key,)
+        ).fetchone()[0]
+        == "failed"
+    )
 
     release_second.set()
     second_worker.join(timeout=5)
     assert not second_worker.is_alive()
-    assert app.conn.execute(
-        "SELECT state FROM deliveries WHERE rendered_item_id=?", (item_ids[1],)
-    ).fetchone()[0] == "succeeded"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM deliveries WHERE rendered_item_id=?", (item_ids[1],)
+        ).fetchone()[0]
+        == "succeeded"
+    )
 
     retry_delivery(app, first_key, instant(3))
-    assert app.conn.execute(
-        "SELECT state FROM deliveries WHERE delivery_key=?", (first_key,)
-    ).fetchone()[0] == "succeeded"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM deliveries WHERE delivery_key=?", (first_key,)
+        ).fetchone()[0]
+        == "succeeded"
+    )
     assert calls[-1] == first_key
 
 
@@ -394,9 +409,12 @@ pipelines:
     collect_source(first, "feed", instant(0))
     item_id = first.conn.execute("SELECT id FROM items").fetchone()[0]
     key = deliver(first, "p", "out", item_id, instant(0))
-    assert first.conn.execute(
-        "SELECT state FROM deliveries WHERE delivery_key=?", (key,)
-    ).fetchone()[0] == "failed"
+    assert (
+        first.conn.execute(
+            "SELECT state FROM deliveries WHERE delivery_key=?", (key,)
+        ).fetchone()[0]
+        == "failed"
+    )
     first.conn.close()
 
     write_definition("tests.integration.test_delivery.source_collect_empty")
@@ -408,9 +426,15 @@ pipelines:
     tick(second, instant(1))
 
     assert old_calls == [key]
-    assert second.conn.execute(
-        "SELECT state FROM deliveries WHERE delivery_key=?", (key,)
-    ).fetchone()[0] == "failed"
-    assert second.conn.execute(
-        "SELECT state FROM node_members WHERE item_id=?", (item_id,)
-    ).fetchone()[0] == "stale"
+    assert (
+        second.conn.execute(
+            "SELECT state FROM deliveries WHERE delivery_key=?", (key,)
+        ).fetchone()[0]
+        == "failed"
+    )
+    assert (
+        second.conn.execute(
+            "SELECT state FROM node_members WHERE item_id=?", (item_id,)
+        ).fetchone()[0]
+        == "stale"
+    )

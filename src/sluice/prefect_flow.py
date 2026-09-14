@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .app import open_app
 from .canonical import utc_datetime
@@ -42,7 +42,7 @@ else:
         try:
             tick(
                 app,
-                utc_datetime(at) if at is not None else datetime.now(timezone.utc),
+                utc_datetime(at) if at is not None else datetime.now(UTC),
             )
         finally:
             app.close()

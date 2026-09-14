@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import replace
 import hashlib
 import json
 import math
 import re
 import time
-from typing import Any
+from collections.abc import Iterable, Mapping
+from dataclasses import replace
 
 from ..errors import ExecutionError, WebSafetyError
 from .contracts import (
+    NO_MATCH,
     DocumentArtifact,
     ExtractorBinding,
     FetchChainExhausted,
     FetchRequest,
-    NO_MATCH,
     PrivateWebInvocation,
     ProviderBinding,
     WebAttemptCancelled,
@@ -31,10 +30,7 @@ from .quality import QualityEvaluation, QualityMetrics, evaluate_quality
 from .sanitize import sanitize_web_error
 from .select import select_list_records
 
-
-_MIME_TYPE = re.compile(
-    r"[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+"
-)
+_MIME_TYPE = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+/[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
 
 def _json_value(value: object) -> object:
@@ -147,7 +143,10 @@ class WebContentClient:
 
     @staticmethod
     def _check_deadline(request: FetchRequest) -> None:
-        if request.stage_deadline is not None and time.monotonic() >= request.stage_deadline:
+        if (
+            request.stage_deadline is not None
+            and time.monotonic() >= request.stage_deadline
+        ):
             raise WebStageDeadlineExpired()
 
     @staticmethod
@@ -176,9 +175,7 @@ class WebContentClient:
     ) -> tuple[float | None, float | None]:
         timeout = cls._provider_timeout(binding)
         provider_deadline = (
-            None
-            if timeout is None
-            else provider_attempt_started + timeout
+            None if timeout is None else provider_attempt_started + timeout
         )
         stage_deadline = request.stage_deadline
         if provider_deadline is None:
@@ -265,8 +262,10 @@ class WebContentClient:
             acquired = acquire(timeout=timeout)
         except TypeError:
             acquired = acquire(timeout)
-        return limiter, bool(acquired), (
-            not bool(acquired) and self._in_cooldown(limiter)
+        return (
+            limiter,
+            bool(acquired),
+            (not bool(acquired) and self._in_cooldown(limiter)),
         )
 
     @staticmethod
@@ -358,9 +357,7 @@ class WebContentClient:
         return replace(artifact, attempts=attempts)
 
     @staticmethod
-    def _source_artifact(
-        artifact: DocumentArtifact, mode: str
-    ) -> DocumentArtifact:
+    def _source_artifact(artifact: DocumentArtifact, mode: str) -> DocumentArtifact:
         """Retain only the representation that can cross a Source boundary."""
 
         common: dict[str, object] = {
@@ -419,8 +416,12 @@ class WebContentClient:
                 raise WebSafetyError("extract_failed")
             raise WebSafetyError("provider_error")
         if isinstance(binding, DocumentArtifact):
-            provider_instance = binding.provider_instance or artifact.provider_instance or "provider"
-            provider_type = binding.provider_type or artifact.provider_type or "provider"
+            provider_instance = (
+                binding.provider_instance or artifact.provider_instance or "provider"
+            )
+            provider_type = (
+                binding.provider_type or artifact.provider_type or "provider"
+            )
         else:
             provider_instance = cls._name(binding)
             provider_type = cls._type(binding)
@@ -447,9 +448,13 @@ class WebContentClient:
         if selected == "raw_html":
             return replace(artifact, content_type="text/html", text=None, markdown=None)
         if selected == "text":
-            return replace(artifact, content_type="text/plain", raw_html=None, markdown=None)
+            return replace(
+                artifact, content_type="text/plain", raw_html=None, markdown=None
+            )
         if selected == "markdown":
-            return replace(artifact, content_type="text/markdown", raw_html=None, text=None)
+            return replace(
+                artifact, content_type="text/markdown", raw_html=None, text=None
+            )
         return artifact
 
     @classmethod
@@ -458,7 +463,9 @@ class WebContentClient:
     ) -> QualityEvaluation:
         selected = artifact.selected_format
         if selected not in request.acceptable or selected not in artifact.capabilities:
-            return QualityEvaluation(QualityMetrics(reason="missing_capability"), artifact)
+            return QualityEvaluation(
+                QualityMetrics(reason="missing_capability"), artifact
+            )
         if not isinstance(cls._field_for(artifact, selected), str):
             return QualityEvaluation(QualityMetrics(reason="empty"), artifact)
         return evaluate_quality(cls._quality_view(artifact), request.quality)
@@ -472,7 +479,9 @@ class WebContentClient:
     ) -> DocumentArtifact:
         if candidate.selected_format is None:
             raise WebSafetyError("extract_failed")
-        quality = evaluate_quality(cls._quality_view(candidate), request.quality).quality
+        quality = evaluate_quality(
+            cls._quality_view(candidate), request.quality
+        ).quality
         return replace(
             candidate,
             quality=quality,
@@ -489,9 +498,7 @@ class WebContentClient:
         if status is not None and (status < 200 or status >= 300 or status == 204):
             return None, "http_status"
         body_sizes = [
-            len(value)
-            for value in (artifact.raw_source,)
-            if isinstance(value, bytes)
+            len(value) for value in (artifact.raw_source,) if isinstance(value, bytes)
         ]
         body_sizes.extend(
             len(value.encode("utf-8"))
@@ -596,9 +603,7 @@ class WebContentClient:
             fast = replace(
                 fast,
                 markdown=(
-                    fast.markdown
-                    if representation == "markdown"
-                    else artifact.markdown
+                    fast.markdown if representation == "markdown" else artifact.markdown
                 ),
                 text=fast.text if representation == "text" else artifact.text,
                 capabilities=artifact.capabilities,
@@ -679,7 +684,9 @@ class WebContentClient:
         content_type = (artifact.content_type or "").split(";", 1)[0].strip().casefold()
         if content_type and content_type not in {"text/html", "application/xhtml+xml"}:
             return "bad_content_type"
-        policy = replace(request.quality, min_chars=0, min_words=None, max_link_ratio=None)
+        policy = replace(
+            request.quality, min_chars=0, min_words=None, max_link_ratio=None
+        )
         evaluation = evaluate_quality(
             replace(
                 artifact,
@@ -705,20 +712,19 @@ class WebContentClient:
             return "http_status"
         if len(artifact.raw_source) > request.quality.max_body_bytes:
             return "body_too_large"
-        content_type = (
-            (artifact.content_type or "").split(";", 1)[0].strip().casefold()
-        )
-        xml_type = (
-            content_type in {"application/xml", "text/xml"}
-            or content_type.endswith("+xml")
-        )
+        content_type = (artifact.content_type or "").split(";", 1)[0].strip().casefold()
+        xml_type = content_type in {
+            "application/xml",
+            "text/xml",
+        } or content_type.endswith("+xml")
         malformed_type = (
             bool(content_type) and _MIME_TYPE.fullmatch(content_type) is None
         )
         text_or_generic_type = (
             malformed_type
             or content_type.startswith("text/")
-            or content_type in {
+            or content_type
+            in {
                 "",
                 "application/octet-stream",
                 "binary/octet-stream",
@@ -728,7 +734,9 @@ class WebContentClient:
             return "bad_content_type"
         if not xml_type and not text_or_generic_type:
             return "bad_content_type"
-        return None if validate_raw_feed(artifact.raw_source) is not None else "unsafe_xml"
+        return (
+            None if validate_raw_feed(artifact.raw_source) is not None else "unsafe_xml"
+        )
 
     def resolve(
         self,
@@ -748,8 +756,7 @@ class WebContentClient:
         extractors = tuple(extract_chain or ())
         if request.mode == "article":
             identity_count = sum(
-                self._type(binding, "extractor") == "identity"
-                for binding in extractors
+                self._type(binding, "extractor") == "identity" for binding in extractors
             )
             if (
                 not extractors
@@ -814,9 +821,7 @@ class WebContentClient:
                             ordinal,
                             "rate_limited" if cooling_down else "provider_busy",
                             started=started,
-                            detail_code=(
-                                "cooldown" if cooling_down else "limiter"
-                            ),
+                            detail_code=("cooldown" if cooling_down else "limiter"),
                         )
                     )
                     continue
@@ -832,7 +837,10 @@ class WebContentClient:
                 artifact = self._provider_artifact(fetched, binding, request)
 
                 consistency_failure = self._artifact_consistency_failure(artifact)
-                if consistency_failure is None and not artifact.capabilities <= capabilities:
+                if (
+                    consistency_failure is None
+                    and not artifact.capabilities <= capabilities
+                ):
                     consistency_failure = "missing_capability"
                 if consistency_failure is not None:
                     attempts.append(
@@ -887,7 +895,8 @@ class WebContentClient:
                     if matches:
                         self._check_probe()
                         return self._with_attempts(
-                            self._source_artifact(artifact, request.mode), tuple(attempts)
+                            self._source_artifact(artifact, request.mode),
+                            tuple(attempts),
                         )
                     if empty_list_candidate is None:
                         empty_list_candidate = self._source_artifact(
@@ -900,7 +909,8 @@ class WebContentClient:
                     if reason is None:
                         self._check_probe()
                         return self._with_attempts(
-                            self._source_artifact(artifact, request.mode), tuple(attempts)
+                            self._source_artifact(artifact, request.mode),
+                            tuple(attempts),
                         )
                     if reason == "http_status" and artifact.status_code == 429:
                         reason = "rate_limited"
@@ -950,9 +960,7 @@ class WebContentClient:
                         getattr(error, "retry_after_seconds", None),
                     )
                 status_code = getattr(error, "status_code", None)
-                if isinstance(status_code, bool) or not isinstance(
-                    status_code, int
-                ):
+                if isinstance(status_code, bool) or not isinstance(status_code, int):
                     status_code = None
                 status_kind = getattr(error, "status_kind", None)
                 attempts.append(

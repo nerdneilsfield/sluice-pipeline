@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
-import re
 from typing import Any
 
-from ..contracts import NEW, HTTPClient, Item
 from ..canonical import canonical_json
+from ..contracts import NEW, HTTPClient, Item
 from ..errors import ExecutionError
 from ..web.contracts import (
     DocumentArtifact,
@@ -58,7 +58,7 @@ class _FetchTask:
     web_content_client: object | None = None
     input_mode: str = "each"
 
-    def bind(self, adapters: object) -> "_FetchTask":
+    def bind(self, adapters: object) -> _FetchTask:
         return _FetchTask(
             getattr(adapters, "http_client", None),
             getattr(adapters, "web_content_client", None),
@@ -164,8 +164,7 @@ _NEGATIVE_HINTS = {
 
 def _normalized_text(parts: list[str]) -> str:
     lines = [
-        re.sub(r"[ \t]+", " ", line).strip()
-        for line in "".join(parts).split("\n")
+        re.sub(r"[ \t]+", " ", line).strip() for line in "".join(parts).split("\n")
     ]
     return "\n".join(line for line in lines if line).strip()
 
@@ -366,7 +365,14 @@ def _clear_extraction(artifact: DocumentArtifact) -> DocumentArtifact:
         "extract_binding_digest": None,
         "quality": None,
     }
-    if artifact.extraction not in {None, "", "input", "provider", "provider_original", "identity"}:
+    if artifact.extraction not in {
+        None,
+        "",
+        "input",
+        "provider",
+        "provider_original",
+        "identity",
+    }:
         fields.update(
             text=None,
             markdown=None,
@@ -383,7 +389,7 @@ def _clear_extraction(artifact: DocumentArtifact) -> DocumentArtifact:
 class _ExtractTask:
     input_mode: str = "each"
 
-    def bind(self, adapters: object) -> "_ExtractTask":
+    def bind(self, adapters: object) -> _ExtractTask:
         del adapters
         return self
 
@@ -401,7 +407,9 @@ class _ExtractTask:
             raise ExecutionError("extract_content.input_format is unsupported")
         artifact = _extract_input_artifact(input, input_format)
         request = FetchRequest(
-            url=artifact.final_url or artifact.source_url or "https://sluice.invalid/input",
+            url=artifact.final_url
+            or artifact.source_url
+            or "https://sluice.invalid/input",
             mode="article",
             acceptable=frozenset({"raw_html", "text", "markdown"}),
             preferred=("markdown", "text", "raw_html"),
@@ -409,8 +417,13 @@ class _ExtractTask:
         )
         from ..web.client import WebContentClient
 
-        digest = WebContentClient._extract_binding_digest(binding.extract_chain, request)
-        if artifact.selected_format is not None and artifact.extract_binding_digest == digest:
+        digest = WebContentClient._extract_binding_digest(
+            binding.extract_chain, request
+        )
+        if (
+            artifact.selected_format is not None
+            and artifact.extract_binding_digest == digest
+        ):
             return NEW(artifact)
         artifact = _clear_extraction(artifact)
         for extractor_binding in binding.extract_chain:
@@ -487,7 +500,20 @@ class _MarkdownParser(HTMLParser):
         elif tag == "a":
             self.parts.append("](" + (self.link_href or "") + ")")
             self.link_href = None
-        if tag in {"p", "div", "section", "article", "blockquote", "li", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        if tag in {
+            "p",
+            "div",
+            "section",
+            "article",
+            "blockquote",
+            "li",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+        }:
             self._newline()
 
     def handle_data(self, data: str):
@@ -538,7 +564,11 @@ class _ProjectTask:
     input_mode: str = "each"
 
     def run(self, config: Mapping[str, Any], input: object) -> object:
-        return _to_markdown(config, input) if self.output == "markdown" else _to_text(config, input)
+        return (
+            _to_markdown(config, input)
+            if self.output == "markdown"
+            else _to_text(config, input)
+        )
 
     def run_web(self, invocation: PrivateWebInvocation, input: object) -> object:
         if not isinstance(invocation, PrivateWebInvocation):
@@ -569,6 +599,7 @@ def _render_payload(config: Mapping[str, Any], input: object) -> str:
         if not isinstance(template, str):
             raise ExecutionError("renderer.template must be a string")
         if isinstance(payload, Mapping):
+
             class _Values(dict[str, object]):
                 def __missing__(self, key: str) -> object:
                     return ""

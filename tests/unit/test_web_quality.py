@@ -1,7 +1,5 @@
 """Red tests for normalized web quality and metadata sanitization."""
 
-import pytest
-
 from sluice.web.contracts import DocumentArtifact, QualityPolicy
 from sluice.web.quality import evaluate_quality
 from sluice.web.sanitize import sanitize_markdown, sanitize_metadata, sanitize_web_error
@@ -24,7 +22,13 @@ def _artifact(html: str, **kwargs):
 
 def test_quality_uses_visible_text_and_link_ratio():
     result = evaluate_quality(
-        _artifact("<script>" + "x" * 1000 + "</script><article>Hello&nbsp;world " + "content " * 20 + "</article>"),
+        _artifact(
+            "<script>"
+            + "x" * 1000
+            + "</script><article>Hello&nbsp;world "
+            + "content " * 20
+            + "</article>"
+        ),
         QualityPolicy(min_chars=11),
     )
     assert result.quality.passed is True
@@ -37,7 +41,9 @@ def test_challenge_and_empty_shell_fail_before_minimum_length():
     )
     assert challenge.quality.reason == "challenge"
     shell = evaluate_quality(
-        _artifact("<html><body><div id='app'></div><script src='app.js'></script></body></html>"),
+        _artifact(
+            "<html><body><div id='app'></div><script src='app.js'></script></body></html>"
+        ),
         QualityPolicy(min_chars=1),
     )
     assert shell.quality.reason == "empty_shell"
@@ -45,7 +51,8 @@ def test_challenge_and_empty_shell_fail_before_minimum_length():
 
 def test_quality_rejects_bad_status_mime_and_short_text():
     status = evaluate_quality(
-        _artifact("<article>good</article>", status_code=204), QualityPolicy(min_chars=1)
+        _artifact("<article>good</article>", status_code=204),
+        QualityPolicy(min_chars=1),
     )
     assert status.quality.reason == "http_status"
     mime = evaluate_quality(
@@ -53,7 +60,10 @@ def test_quality_rejects_bad_status_mime_and_short_text():
         QualityPolicy(min_chars=1),
     )
     assert mime.quality.reason == "bad_content_type"
-    short = evaluate_quality(_artifact("<article>" + "word " * 20 + "</article>"), QualityPolicy(min_chars=200))
+    short = evaluate_quality(
+        _artifact("<article>" + "word " * 20 + "</article>"),
+        QualityPolicy(min_chars=200),
+    )
     assert short.quality.reason == "too_short"
 
 
@@ -66,8 +76,13 @@ def test_quality_excludes_comments_head_and_title_and_rejects_untyped_plain_text
     assert "Hidden title" not in result.quality.visible_text
     assert "hidden comment" not in result.quality.visible_text
 
-    untyped = _artifact("plain text", content_type=None, raw_html=None, text="plain text")
-    assert evaluate_quality(untyped, QualityPolicy(min_chars=1)).quality.reason == "bad_content_type"
+    untyped = _artifact(
+        "plain text", content_type=None, raw_html=None, text="plain text"
+    )
+    assert (
+        evaluate_quality(untyped, QualityPolicy(min_chars=1)).quality.reason
+        == "bad_content_type"
+    )
 
 
 def test_quality_excludes_embedded_fallback_content():
@@ -86,17 +101,26 @@ def test_quality_parser_failures_map_to_provider_error(monkeypatch):
         raise RecursionError("parser recursion")
 
     monkeypatch.setattr("sluice.web.quality.BeautifulSoup", fail)
-    result = evaluate_quality(_artifact("<article>content</article>"), QualityPolicy(min_chars=1))
+    result = evaluate_quality(
+        _artifact("<article>content</article>"), QualityPolicy(min_chars=1)
+    )
     assert result.quality.reason == "provider_error"
 
 
 def test_challenge_phrase_and_link_ratio_are_detected():
     phrase = evaluate_quality(
-        _artifact("<article>Checking   your browser</article>"), QualityPolicy(min_chars=1)
+        _artifact("<article>Checking   your browser</article>"),
+        QualityPolicy(min_chars=1),
     )
     assert phrase.quality.reason == "challenge"
     links = evaluate_quality(
-        _artifact("<article><a href='https://example.test'>" + "x" * 90 + "</a>" + "y" * 10 + "</article>"),
+        _artifact(
+            "<article><a href='https://example.test'>"
+            + "x" * 90
+            + "</a>"
+            + "y" * 10
+            + "</article>"
+        ),
         QualityPolicy(min_chars=1, max_link_ratio=0.5),
     )
     assert links.quality.reason == "too_short"
@@ -125,7 +149,9 @@ def test_unsafe_embedded_markdown_blocks_are_removed():
 
 
 def test_inline_embedded_markdown_nodes_do_not_expose_link_content():
-    sanitized = sanitize_markdown("<canvas>[secret](https://secret.example)</canvas> visible")
+    sanitized = sanitize_markdown(
+        "<canvas>[secret](https://secret.example)</canvas> visible"
+    )
 
     assert "secret" not in sanitized
     assert sanitized.strip() == "visible"
@@ -143,7 +169,9 @@ def test_inline_head_and_title_nodes_do_not_expose_markdown_content():
 
 
 def test_markdown_code_literals_are_not_treated_as_raw_html():
-    sanitized = sanitize_markdown("```html\n<script>literal</script>\n```", "https://example.test/")
+    sanitized = sanitize_markdown(
+        "```html\n<script>literal</script>\n```", "https://example.test/"
+    )
     assert "<script>literal</script>" in sanitized
 
 
@@ -161,7 +189,9 @@ def test_metadata_is_structurally_allowlisted_bounded_and_safe():
                 {"text": "duplicate", "url": "https://example.test/a#fragment"},
                 {"text": "bad", "url": "javascript:alert(1)"},
             ],
-            "json_ld": [{"articleBody": "raw page body", "headline": "<i>Headline</i>"}],
+            "json_ld": [
+                {"articleBody": "raw page body", "headline": "<i>Headline</i>"}
+            ],
             "warnings": ["not-a-warning", "sanitizer_rejected_link"],
         },
         "https://example.test/",
@@ -184,7 +214,8 @@ def test_metadata_dates_jsonld_order_and_output_format_are_bounded_and_typed():
             "json_ld": [
                 {"headline": "first"},
                 {"headline": "second"},
-            ] * 80,
+            ]
+            * 80,
         },
         "https://example.test/",
     )

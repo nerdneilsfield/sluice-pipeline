@@ -1,5 +1,5 @@
-from datetime import datetime, timedelta, timezone
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -54,7 +54,7 @@ def versioned_source(config, checkpoint):
 
 
 def instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 14, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 def llm_app(tmp_path, responses):
@@ -164,14 +164,20 @@ def test_invalid_item_llm_exhaustion_is_cached_empty_dropped_result(tmp_path):
         batch_id=None,
         at=instant(0),
     )
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (execution_id,)
-    ).fetchone()[0] == "dropped"
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM stage_result_items sri JOIN stage_results sr ON sr.id=sri.result_id "
-        "WHERE sr.producer_execution_id=?",
-        (execution_id,),
-    ).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (execution_id,)
+        ).fetchone()[0]
+        == "dropped"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_result_items sri JOIN stage_results sr ON sr.id=sri.result_id "
+            "WHERE sr.producer_execution_id=?",
+            (execution_id,),
+        ).fetchone()[0]
+        == 0
+    )
     cached = execute_stage(
         app,
         "extract",
@@ -182,12 +188,18 @@ def test_invalid_item_llm_exhaustion_is_cached_empty_dropped_result(tmp_path):
         batch_id=None,
         at=instant(3),
     )
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (cached,)
-    ).fetchone()[0] == "cached"
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM stage_results WHERE stage_name='extract'"
-    ).fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (cached,)
+        ).fetchone()[0]
+        == "cached"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE stage_name='extract'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_invalid_batch_llm_output_stays_failed_and_frozen(tmp_path):
@@ -215,16 +227,25 @@ def test_invalid_batch_llm_output_stays_failed_and_frozen(tmp_path):
         batch_id=batch_id,
         at=instant(0),
     )
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (execution_id,)
-    ).fetchone()[0] == "failed"
-    assert app.conn.execute(
-        "SELECT state FROM batches WHERE id=?", (batch_id,)
-    ).fetchone()[0] == "failed"
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM stage_results WHERE producer_execution_id=?",
-        (execution_id,),
-    ).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (execution_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT state FROM batches WHERE id=?", (batch_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE producer_execution_id=?",
+            (execution_id,),
+        ).fetchone()[0]
+        == 0
+    )
     assert [
         row[0]
         for row in app.conn.execute(
@@ -234,7 +255,9 @@ def test_invalid_batch_llm_output_stays_failed_and_frozen(tmp_path):
     ] == item_ids
 
 
-def test_rebuild_current_failed_batch_uses_exact_history_and_clears_only_current_freeze(tmp_path):
+def test_rebuild_current_failed_batch_uses_exact_history_and_clears_only_current_freeze(
+    tmp_path,
+):
     app, target, batch_id, item_ids = failed_batch_app(tmp_path)
     result = rebuild_stage(app, target, instant(10))
     assert result.forced is True
@@ -273,7 +296,9 @@ def test_rebuild_current_failed_batch_uses_exact_history_and_clears_only_current
     ] == ["item-c"]
 
 
-def test_historical_rebuild_publishes_shared_history_but_does_not_touch_current_scope(tmp_path):
+def test_historical_rebuild_publishes_shared_history_but_does_not_touch_current_scope(
+    tmp_path,
+):
     app, target, _original_batch_id, _ = failed_batch_app(tmp_path)
     rebuild_stage(app, target, instant(1))
     collect_source(app, "feed", instant(2))
@@ -284,10 +309,9 @@ def test_historical_rebuild_publishes_shared_history_but_does_not_touch_current_
     ).fetchone()[0]
     rebuilt = rebuild_stage(app, target, instant(10)).execution_id
     assert rebuilt is not None
-    assert (
-        app.conn.execute("SELECT state FROM executions WHERE id=?", (rebuilt,)).fetchone()[0]
-        in {"succeeded", "cached"}
-    )
+    assert app.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (rebuilt,)
+    ).fetchone()[0] in {"succeeded", "cached"}
     assert (
         app.conn.execute(
             "SELECT target_scope_excluded FROM executions WHERE id=?", (rebuilt,)
@@ -374,7 +398,12 @@ pipelines:
         batch_id=first_batch,
         at=instant(0),
     )
-    assert app.conn.execute("SELECT state FROM executions WHERE id=?", (first,)).fetchone()[0] == "succeeded"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (first,)
+        ).fetchone()[0]
+        == "succeeded"
+    )
 
     collect_source(app, "feed", instant(1))
     reconcile_node(app, "p", "select", instant(1))
@@ -412,21 +441,27 @@ pipelines:
         "SELECT retry_parent_id FROM executions WHERE id=?", (failed,)
     ).fetchone()[0]
     assert parent is not None
-    assert tuple(
-        row[0]
-        for row in app.conn.execute(
-            "SELECT item_id FROM execution_inputs WHERE execution_id=? "
-            "AND slot='history' ORDER BY ordinal",
-            (parent,),
+    assert (
+        tuple(
+            row[0]
+            for row in app.conn.execute(
+                "SELECT item_id FROM execution_inputs WHERE execution_id=? "
+                "AND slot='history' ORDER BY ordinal",
+                (parent,),
+            )
         )
-    ) == history_ids
+        == history_ids
+    )
     rebuilt = rebuild_stage(app, failed, instant(2)).execution_id
     assert rebuilt is not None
-    assert tuple(
-        row[0]
-        for row in app.conn.execute(
-            "SELECT item_id FROM execution_inputs WHERE execution_id=? "
-            "AND slot='history' ORDER BY ordinal",
-            (rebuilt,),
+    assert (
+        tuple(
+            row[0]
+            for row in app.conn.execute(
+                "SELECT item_id FROM execution_inputs WHERE execution_id=? "
+                "AND slot='history' ORDER BY ordinal",
+                (rebuilt,),
+            )
         )
-    ) == history_ids
+        == history_ids
+    )

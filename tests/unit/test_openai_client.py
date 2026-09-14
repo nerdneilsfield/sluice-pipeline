@@ -19,7 +19,7 @@ class _Response:
         self._body = json.dumps(payload).encode("utf-8")
         self.status = status
 
-    def __enter__(self) -> "_Response":
+    def __enter__(self) -> _Response:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -53,9 +53,7 @@ def test_openai_client_posts_prompt_and_payload_and_parses_json(
     def fake_urlopen(request: Any, timeout: float) -> _Response:
         body = json.loads(request.data.decode("utf-8"))
         requests.append((request.full_url, dict(request.headers), body, timeout))
-        return _Response(
-            {"choices": [{"message": {"content": '{"summary":"ok"}'}}]}
-        )
+        return _Response({"choices": [{"message": {"content": '{"summary":"ok"}'}}]})
 
     monkeypatch.setattr("sluice.llm.openai_compatible.urlopen", fake_urlopen)
     client = OpenAICompatibleClient(
@@ -157,4 +155,6 @@ def test_llm_task_uses_each_task_prompt_file(tmp_path: Path) -> None:
         _item(),
     )
 
-    assert client.calls == [("model-a", "Summarize only the title.", {"title": "hello"})]
+    assert client.calls == [
+        ("model-a", "Summarize only the title.", {"title": "hello"})
+    ]

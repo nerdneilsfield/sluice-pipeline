@@ -16,7 +16,6 @@ from defusedxml.common import DefusedXmlException
 
 from .contracts import ValidatedFeedRoot
 
-
 MAX_FEED_BYTES = 10_485_760
 _RSS1_NAMESPACE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 _XINCLUDE_NAMESPACE = "http://www.w3.org/2001/XInclude"
@@ -77,12 +76,16 @@ def _tree_contains_xinclude(root: Any) -> bool:
 
 def _has_direct_child(root: Any, wanted: str) -> bool:
     try:
-        return any(_local_name(getattr(child, "tag", None)) == wanted for child in list(root))
+        return any(
+            _local_name(getattr(child, "tag", None)) == wanted for child in list(root)
+        )
     except Exception:
         return False
 
 
-def validate_raw_feed(raw_source: bytes | bytearray | memoryview) -> ValidatedFeedRoot | None:
+def validate_raw_feed(
+    raw_source: bytes | bytearray | memoryview,
+) -> ValidatedFeedRoot | None:
     """Return a validated RSS2/RSS1/Atom root, or ``None`` for any rejection.
 
     The body must already be a decompressed in-memory response.  Size is

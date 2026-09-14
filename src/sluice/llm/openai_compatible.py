@@ -8,10 +8,9 @@ retry policy.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-import json
-import socket
 from time import sleep
 from types import MappingProxyType
 from urllib.error import HTTPError, URLError
@@ -20,7 +19,6 @@ from urllib.request import Request, urlopen
 from ..canonical import canonical_json
 from ..contracts import JSONValue
 from ..errors import ExecutionError
-
 
 _RETRYABLE_HTTP_STATUS = frozenset({408, 429}) | frozenset(range(500, 600))
 
@@ -107,7 +105,10 @@ class OpenAICompatibleClient:
             raise ValueError("timeout must be positive")
         if type(self.max_attempts) is not int or self.max_attempts < 1:
             raise ValueError("max_attempts must be a positive integer")
-        if not isinstance(self.backoff_seconds, (int, float)) or self.backoff_seconds < 0:
+        if (
+            not isinstance(self.backoff_seconds, (int, float))
+            or self.backoff_seconds < 0
+        ):
             raise ValueError("backoff_seconds must be non-negative")
         if (
             not isinstance(self.max_backoff_seconds, (int, float))
@@ -122,7 +123,9 @@ class OpenAICompatibleClient:
         ):
             raise ValueError("extra_headers keys and values must be strings")
         object.__setattr__(self, "base_url", self.base_url.strip().rstrip("/"))
-        object.__setattr__(self, "extra_headers", MappingProxyType(dict(self.extra_headers)))
+        object.__setattr__(
+            self, "extra_headers", MappingProxyType(dict(self.extra_headers))
+        )
 
     def complete(
         self,
@@ -189,7 +192,7 @@ class OpenAICompatibleClient:
                         f"HTTP {error.code}: {description}"
                     ) from error
                 last_error = error
-            except (URLError, TimeoutError, socket.timeout, OSError) as error:
+            except (URLError, TimeoutError, OSError) as error:
                 last_error = error
 
             if attempt + 1 >= self.max_attempts:
@@ -202,6 +205,5 @@ class OpenAICompatibleClient:
                 sleep(delay)
 
         raise ExecutionError(
-            "OpenAI-compatible endpoint failed after "
-            f"{self.max_attempts} attempts"
+            f"OpenAI-compatible endpoint failed after {self.max_attempts} attempts"
         ) from last_error

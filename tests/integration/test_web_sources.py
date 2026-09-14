@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import datetime, timezone
 import logging
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 
@@ -45,7 +45,9 @@ class ScriptedClient:
 def _open(tmp_path: Path, definition: str, client: ScriptedClient):
     path = tmp_path / "definition.yml"
     path.write_text(definition, encoding="utf-8")
-    return open_app(path, tmp_path / "state.db", http_client=_HTTP(), web_content_client=client)
+    return open_app(
+        path, tmp_path / "state.db", http_client=_HTTP(), web_content_client=client
+    )
 
 
 def _raw_artifact(raw: bytes, provider: str = "fallback") -> DocumentArtifact:
@@ -73,7 +75,9 @@ sources:
 """
 
 
-def test_list_source_projects_selected_records_without_persisting_raw_html(tmp_path: Path) -> None:
+def test_list_source_projects_selected_records_without_persisting_raw_html(
+    tmp_path: Path,
+) -> None:
     client = ScriptedClient(
         [
             DocumentArtifact(
@@ -103,14 +107,19 @@ sources:
         client,
     )
     try:
-        collect_source(app, "releases", datetime(2026, 1, 1, tzinfo=timezone.utc))
-        row = app.conn.execute("SELECT logical_id,payload_json,metadata_json FROM items").fetchone()
+        collect_source(app, "releases", datetime(2026, 1, 1, tzinfo=UTC))
+        row = app.conn.execute(
+            "SELECT logical_id,payload_json,metadata_json FROM items"
+        ).fetchone()
     finally:
         app.close()
 
     assert client.calls == [("static", "browser")]
     assert row[0] == "https://example.test/new"
-    assert row[1] == '{"content":"New release","title":"New release","url":"https://example.test/new"}'
+    assert (
+        row[1]
+        == '{"content":"New release","title":"New release","url":"https://example.test/new"}'
+    )
     assert '"extractor":"list_selector"' in row[2]
     assert "raw_html" not in row[1]
     assert "<article" not in row[2]
@@ -138,7 +147,7 @@ def test_rss_invalid_direct_artifact_falls_back_to_valid_zero_entry_atom(
     )
     app = _open(tmp_path, _rss_definition(), client)
     try:
-        collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=timezone.utc))
+        collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=UTC))
         count = app.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     finally:
         app.close()
@@ -159,7 +168,7 @@ sources:
     )
     try:
         with pytest.raises(ExecutionError, match="provider_error"):
-            collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=timezone.utc))
+            collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=UTC))
     finally:
         app.close()
 
@@ -209,7 +218,6 @@ pipelines:
 
         def limiter(self, received):
             del received
-            return None
 
     app = open_app(
         definition_path,
@@ -220,12 +228,12 @@ pipelines:
     caplog.set_level(logging.INFO, logger="sluice.source_runtime")
     try:
         with pytest.raises(ExecutionError, match="provider_error"):
-            collect_source(app, "page", datetime(2026, 1, 1, tzinfo=timezone.utc))
+            collect_source(app, "page", datetime(2026, 1, 1, tzinfo=UTC))
         queued_id = app.conn.execute(
             "SELECT id FROM executions WHERE kind='source' AND state='queued'"
         ).fetchone()[0]
         source_runtime._execute_queued_source(
-            app, queued_id, datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+            app, queued_id, datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)
         )
         errors = [
             str(row[0] or "")
@@ -261,11 +269,18 @@ sources:
     )
     source = app.definition.sources["custom"]
     replacement = replace(source, web_binding=WebBinding())
-    object.__setattr__(app, "definition", replace(app.definition, sources=MappingProxyType({"custom": replacement})))
+    object.__setattr__(
+        app,
+        "definition",
+        replace(app.definition, sources=MappingProxyType({"custom": replacement})),
+    )
     try:
         with pytest.raises(ExecutionError, match="custom source diagnostic"):
-            collect_source(app, "custom", datetime(2026, 1, 1, tzinfo=timezone.utc))
-        assert app.conn.execute("SELECT error FROM executions").fetchone()[0] == "custom source diagnostic"
+            collect_source(app, "custom", datetime(2026, 1, 1, tzinfo=UTC))
+        assert (
+            app.conn.execute("SELECT error FROM executions").fetchone()[0]
+            == "custom source diagnostic"
+        )
     finally:
         app.close()
 
@@ -273,7 +288,9 @@ sources:
 custom_source = _CustomSource()
 
 
-def test_builtin_source_without_web_binding_retains_compatibility_diagnostic(tmp_path: Path) -> None:
+def test_builtin_source_without_web_binding_retains_compatibility_diagnostic(
+    tmp_path: Path,
+) -> None:
     app = _open(
         tmp_path,
         """version: 1
@@ -289,18 +306,26 @@ sources:
     )
     source = app.definition.sources["page"]
     replacement = replace(source, web_binding=None)
-    object.__setattr__(app, "definition", replace(app.definition, sources=MappingProxyType({"page": replacement})))
+    object.__setattr__(
+        app,
+        "definition",
+        replace(app.definition, sources=MappingProxyType({"page": replacement})),
+    )
     try:
-        with pytest.raises(ExecutionError, match="webpage collect requires literal HTML"):
-            collect_source(app, "page", datetime(2026, 1, 1, tzinfo=timezone.utc))
-        assert app.conn.execute("SELECT error FROM executions").fetchone()[0] == "webpage collect requires literal HTML"
+        with pytest.raises(
+            ExecutionError, match="webpage collect requires literal HTML"
+        ):
+            collect_source(app, "page", datetime(2026, 1, 1, tzinfo=UTC))
+        assert (
+            app.conn.execute("SELECT error FROM executions").fetchone()[0]
+            == "webpage collect requires literal HTML"
+        )
     finally:
         app.close()
 
 
 def sink(config, payload, delivery_key):
     del config, payload, delivery_key
-    return None
 
 
 def test_feed_projection_uses_only_kind_specific_direct_entry_children() -> None:
@@ -320,10 +345,22 @@ def test_feed_projection_uses_only_kind_specific_direct_entry_children() -> None
       <entry><id>wrong-rdf-entry</id></entry>
     </rdf:RDF>"""
 
-    assert [record.logical_id for record in parse_feed_bytes(atom, "https://example.test/feed")] == ["root-entry"]
-    assert [record.logical_id for record in parse_feed_bytes(rss2, "https://example.test/feed")] == ["channel-item"]
-    assert [record.logical_id for record in parse_feed_bytes(rss1, "https://example.test/feed")] == ["rdf-item"]
-    assert parse_feed_bytes(
-        b'<feed xmlns="http://www.w3.org/2005/Atom"><extension><entry><id>nested</id></entry></extension></feed>',
-        "https://example.test/feed",
-    ) == ()
+    assert [
+        record.logical_id
+        for record in parse_feed_bytes(atom, "https://example.test/feed")
+    ] == ["root-entry"]
+    assert [
+        record.logical_id
+        for record in parse_feed_bytes(rss2, "https://example.test/feed")
+    ] == ["channel-item"]
+    assert [
+        record.logical_id
+        for record in parse_feed_bytes(rss1, "https://example.test/feed")
+    ] == ["rdf-item"]
+    assert (
+        parse_feed_bytes(
+            b'<feed xmlns="http://www.w3.org/2005/Atom"><extension><entry><id>nested</id></entry></extension></feed>',
+            "https://example.test/feed",
+        )
+        == ()
+    )

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Callable
-import threading
 
 from sluice.config import decode_stage_snapshot, load_definition
 from sluice.contracts import (
@@ -26,8 +25,8 @@ from sluice.errors import DefinitionError, ExecutionError
 from sluice.resolution import (
     BoundaryAdapters,
     freeze_adapters,
-    resolve_sink,
     resolve_retained_tasks,
+    resolve_sink,
     resolve_source,
     resolve_task,
 )
@@ -119,7 +118,10 @@ def open_app(
     *,
     llm_client=None,
     http_client=None,
-    sink_clients: Mapping[str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]] | None = None,
+    sink_clients: Mapping[
+        str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]
+    ]
+    | None = None,
     web_content_client: object | None = None,
 ) -> App:
     """Load and resolve a definition, then return an immutable startup App.
@@ -225,7 +227,12 @@ def open_app(
             try:
                 snapshot = json.loads(config_json)
                 stage = decode_stage_snapshot(snapshot)
-            except (ExecutionError, TypeError, ValueError, json.JSONDecodeError) as error:
+            except (
+                ExecutionError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
                 raise DefinitionError("invalid retained Stage snapshot") from error
             # Validate every retained binding against the same fixed maps.  A
             # terminal snapshot may refer to a retired env secret, so defer
@@ -270,7 +277,7 @@ def open_app(
     from sluice.reconcile import recover_startup
 
     try:
-        recover_startup(app, datetime.now(timezone.utc))
+        recover_startup(app, datetime.now(UTC))
     except BaseException:
         # Startup recovery is part of opening the process boundary.  A
         # failed recovery must not leak the writer connection or provider

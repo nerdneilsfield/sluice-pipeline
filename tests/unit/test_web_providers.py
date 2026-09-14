@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass, replace
-from datetime import timedelta
 import json
 import logging
+from dataclasses import dataclass, replace
+from datetime import timedelta
 from threading import Event, Thread
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -20,10 +20,10 @@ from sluice.web import http as http_module
 from sluice.web import providers as provider_module
 from sluice.web import registry as registry_module
 from sluice.web.contracts import (
+    NO_MATCH,
     DocumentArtifact,
     ExtractorBinding,
     FetchRequest,
-    NO_MATCH,
     ProviderBinding,
     QualityPolicy,
     WebAttemptCancelled,
@@ -61,8 +61,12 @@ def _runtime(transport: object) -> object:
     return type("Runtime", (), {"http_client": transport})()
 
 
-def _request(*, acceptable: frozenset[str] = frozenset({"text", "raw_html", "markdown"})) -> FetchRequest:
-    preferred = tuple(item for item in ("markdown", "raw_html", "text") if item in acceptable)
+def _request(
+    *, acceptable: frozenset[str] = frozenset({"text", "raw_html", "markdown"})
+) -> FetchRequest:
+    preferred = tuple(
+        item for item in ("markdown", "raw_html", "text") if item in acceptable
+    )
     return FetchRequest(
         url="https://example.test/article",
         mode="article",
@@ -91,9 +95,7 @@ class _FakeService:
     ) -> None:
         self.payload = payload
         self.status_code = status_code
-        self.response_headers = response_headers or {
-            "content-type": "application/json"
-        }
+        self.response_headers = response_headers or {"content-type": "application/json"}
         self.requests: list[_ServiceRequest] = []
 
     def post(
@@ -124,9 +126,7 @@ def json_module_dumps(value: object) -> bytes:
 
 
 def test_firecrawl_article_requests_markdown_and_raw_html_once(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {
             "success": True,
@@ -199,9 +199,7 @@ def test_firecrawl_article_requests_markdown_and_raw_html_once(monkeypatch) -> N
 
 
 def test_firecrawl_list_requests_raw_html_only(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {"success": True, "data": {"rawHtml": "<html><body>list</body></html>"}}
     )
@@ -332,9 +330,7 @@ def test_crawl4ai_self_host_can_omit_bearer_authentication(monkeypatch) -> None:
 def test_jina_reader_posts_for_json_markdown_with_declared_reader_headers(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {
             "code": 200,
@@ -358,7 +354,7 @@ def test_jina_reader_posts_for_json_markdown_with_declared_reader_headers(
         capabilities=frozenset({"markdown"}),
     )
 
-    provider = getattr(provider_module, "JinaReaderProvider")(binding, service)
+    provider = provider_module.JinaReaderProvider(binding, service)
     artifact = provider.fetch(_request())
 
     assert [request.path for request in service.requests] == ["/"]
@@ -380,9 +376,7 @@ def test_jina_reader_posts_for_json_markdown_with_declared_reader_headers(
 def test_zyte_browser_mode_maps_page_content_type_action_and_basic_auth(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {
             "url": "https://example.test/article",
@@ -402,14 +396,12 @@ def test_zyte_browser_mode_maps_page_content_type_action_and_basic_auth(
             "api_key": "zyte-secret",
             "mode": "browser",
             "automatic_content": True,
-            "actions": (
-                {"write": {"selector": "#q", "text": "sluice"}},
-            ),
+            "actions": ({"write": {"selector": "#q", "text": "sluice"}},),
         },
         capabilities=frozenset({"raw_html", "text"}),
     )
 
-    provider = getattr(provider_module, "ZyteProvider")(binding, service)
+    provider = provider_module.ZyteProvider(binding, service)
     artifact = provider.fetch(_request())
 
     assert [request.path for request in service.requests] == ["/v1/extract"]
@@ -547,9 +539,7 @@ def test_bright_data_uses_raw_sync_envelope_and_only_requests_markdown_when_conf
     response_content_type: str,
     artifact_content_type: str,
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     body = "# Bright markdown" if output == "markdown" else "<main>Bright HTML</main>"
     service = _FakeService(
         {
@@ -572,14 +562,12 @@ def test_bright_data_uses_raw_sync_envelope_and_only_requests_markdown_when_conf
         capabilities=frozenset({field}),
     )
 
-    provider = getattr(provider_module, "BrightDataProvider")(binding, service)
+    provider = provider_module.BrightDataProvider(binding, service)
     artifact = provider.fetch(_request())
 
     assert [request.path for request in service.requests] == ["/request"]
     assert service.requests[0].json == expected_payload
-    assert service.requests[0].headers == {
-        "Authorization": "Bearer bright-secret"
-    }
+    assert service.requests[0].headers == {"Authorization": "Bearer bright-secret"}
     assert getattr(artifact, field) == body
     assert artifact.capabilities == frozenset({field})
     assert artifact.status_code == 200
@@ -594,9 +582,7 @@ def test_provider_deadline_bounds_service_body_stream(monkeypatch) -> None:
         SimpleNamespace(monotonic=lambda: clock[0]),
         raising=False,
     )
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
 
     class StreamingResponse:
         status_code = 200
@@ -874,9 +860,7 @@ def test_pooled_httpx_request_clamps_connect_and_read_to_remaining_budget(
 
 
 def test_service_429_exposes_only_safe_status_and_retry_after(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {"detail": "vendor-body-with-zyte-secret"},
         status_code=429,
@@ -894,7 +878,7 @@ def test_service_429_exposes_only_safe_status_and_retry_after(monkeypatch) -> No
     )
 
     with pytest.raises(WebSafetyError) as raised:
-        getattr(provider_module, "ZyteProvider")(binding, service).fetch(_request())
+        provider_module.ZyteProvider(binding, service).fetch(_request())
 
     assert raised.value.args == ("rate_limited",)
     assert raised.value.status_code == 429
@@ -905,9 +889,7 @@ def test_service_429_exposes_only_safe_status_and_retry_after(monkeypatch) -> No
 
 
 def test_service_429_ignores_an_unbounded_retry_after_value(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {"detail": "vendor error"},
         status_code=429,
@@ -925,7 +907,7 @@ def test_service_429_ignores_an_unbounded_retry_after_value(monkeypatch) -> None
     )
 
     with pytest.raises(WebSafetyError) as raised:
-        getattr(provider_module, "ZyteProvider")(binding, service).fetch(_request())
+        provider_module.ZyteProvider(binding, service).fetch(_request())
 
     assert raised.value.args == ("rate_limited",)
     assert raised.value.status_code == 429
@@ -950,9 +932,7 @@ def test_runtime_digest_shares_provider_transport_limiter_and_cooldown() -> None
         binding,
         cooldown=timedelta(seconds=31),
     )
-    catalog = WebRuntimeCatalog(
-        (binding, retained_copy, operationally_distinct)
-    )
+    catalog = WebRuntimeCatalog((binding, retained_copy, operationally_distinct))
     try:
         shared_limiter = catalog.limiter(binding)
         shared_limiter.cooldown(5)
@@ -961,9 +941,7 @@ def test_runtime_digest_shares_provider_transport_limiter_and_cooldown() -> None
         assert catalog.transport_for(binding) is catalog.transport_for(retained_copy)
         assert shared_limiter is catalog.limiter(retained_copy)
         assert catalog.limiter(retained_copy).in_cooldown() is True
-        assert catalog.provider(binding) is not catalog.provider(
-            operationally_distinct
-        )
+        assert catalog.provider(binding) is not catalog.provider(operationally_distinct)
         assert catalog.transport_for(binding) is not catalog.transport_for(
             operationally_distinct
         )
@@ -1019,9 +997,7 @@ def test_hosted_provider_adapters_are_in_the_public_fixed_map(
 def test_catalog_hosted_provider_prefers_binding_pinned_transport_over_global_http_client(
     monkeypatch, provider_type: str, base_url: str, address: str
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: [address]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: [address])
 
     class GlobalCompatibilityHTTPClient:
         def __init__(self) -> None:
@@ -1099,7 +1075,10 @@ def test_catalog_hosted_provider_prefers_binding_pinned_transport_over_global_ht
     assert artifact.raw_html == "<html>binding</html>"
     assert global_client.calls == 0
     assert binding_transport.calls == [
-        (f"{base_url}/{'v2/scrape' if provider_type == 'firecrawl' else 'crawl'}", (address,))
+        (
+            f"{base_url}/{'v2/scrape' if provider_type == 'firecrawl' else 'crawl'}",
+            (address,),
+        )
     ]
 
 
@@ -1111,9 +1090,7 @@ def test_remote_provider_rejects_mixed_service_dns_before_post(
         "sluice.web.url.resolve_host",
         lambda host: ["93.184.216.34", "10.0.0.8"],
     )
-    service = _FakeService(
-        {"success": True, "data": {"rawHtml": "<html>body</html>"}}
-    )
+    service = _FakeService({"success": True, "data": {"rawHtml": "<html>body</html>"}})
     binding = ProviderBinding(
         name="remote",
         type=provider_type,
@@ -1133,9 +1110,7 @@ def test_remote_provider_rejects_mixed_service_dns_before_post(
 
 
 def test_service_type_error_after_send_is_not_retried(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
 
     class TypeErrorAfterSend:
         calls = 0
@@ -1161,12 +1136,8 @@ def test_service_type_error_after_send_is_not_retried(monkeypatch) -> None:
 def test_remote_provider_requires_https_for_public_service_before_post(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
-    service = _FakeService(
-        {"success": True, "data": {"rawHtml": "<html>body</html>"}}
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+    service = _FakeService({"success": True, "data": {"rawHtml": "<html>body</html>"}})
     binding = ProviderBinding(
         name="fire",
         type="firecrawl",
@@ -1182,9 +1153,7 @@ def test_remote_provider_requires_https_for_public_service_before_post(
 def test_remote_provider_rejects_service_redirect_without_following(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
 
     class RedirectingService:
         calls = 0
@@ -1214,9 +1183,7 @@ def test_remote_provider_rejects_service_redirect_without_following(
 
 
 def test_remote_provider_rejects_unapproved_service_peer(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
 
     class ReboundService:
         calls = 0
@@ -1249,9 +1216,7 @@ def test_remote_provider_rejects_unapproved_service_peer(monkeypatch) -> None:
 
 
 def test_remote_provider_rejects_changed_service_response_url(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
 
     class ChangedURLService:
         calls = 0
@@ -1287,12 +1252,8 @@ def test_remote_provider_rejects_changed_service_response_url(monkeypatch) -> No
 def test_remote_provider_rejects_protected_target_headers_before_post(
     monkeypatch, provider_type: str
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
-    service = _FakeService(
-        {"success": True, "data": {"rawHtml": "<html>body</html>"}}
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+    service = _FakeService({"success": True, "data": {"rawHtml": "<html>body</html>"}})
     binding = ProviderBinding(
         name="remote",
         type=provider_type,
@@ -1325,9 +1286,7 @@ def test_catalog_rejects_ambiguous_typed_and_header_service_auth() -> None:
 
 
 def test_catalog_service_post_uses_pinned_streaming_httpx_client(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     created: list[object] = []
     requests: list[object] = []
 
@@ -1340,7 +1299,7 @@ def test_catalog_service_post_uses_pinned_streaming_httpx_client(monkeypatch) ->
         headers = {"content-type": "application/json"}
 
         def __init__(self, request: object) -> None:
-            self.url = getattr(request, "url")
+            self.url = request.url
             self.extensions = {"network_stream": Stream()}
 
         def iter_bytes(self):
@@ -1369,9 +1328,7 @@ def test_catalog_service_post_uses_pinned_streaming_httpx_client(monkeypatch) ->
         name="fire",
         type="firecrawl",
         base_url="https://api.firecrawl.dev",
-        capabilities=frozenset(
-            {"raw_html", "raw_source", "markdown", "rendered_js"}
-        ),
+        capabilities=frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
     )
     catalog = WebRuntimeCatalog((binding,))
     try:
@@ -1384,11 +1341,9 @@ def test_catalog_service_post_uses_pinned_streaming_httpx_client(monkeypatch) ->
     assert created[0].kwargs["follow_redirects"] is False
     assert created[0].kwargs["trust_env"] is False
     assert len(requests) == 1
-    assert getattr(requests[0], "method") == "POST"
-    assert str(getattr(requests[0], "url")) == "https://api.firecrawl.dev/v2/scrape"
-    assert getattr(requests[0], "extensions") == {
-        "sluice.addresses": ("93.184.216.34",)
-    }
+    assert requests[0].method == "POST"
+    assert str(requests[0].url) == "https://api.firecrawl.dev/v2/scrape"
+    assert requests[0].extensions == {"sluice.addresses": ("93.184.216.34",)}
 
 
 def test_crawl4ai_raw_source_accepts_exact_body_field(monkeypatch) -> None:
@@ -1411,9 +1366,7 @@ def test_crawl4ai_raw_source_accepts_exact_body_field(monkeypatch) -> None:
         name="browser",
         type="crawl4ai",
         base_url="http://crawl4ai.internal:11235",
-        capabilities=frozenset(
-            {"raw_html", "raw_source", "markdown", "rendered_js"}
-        ),
+        capabilities=frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
     )
     request = FetchRequest(
         url="https://example.test/article",
@@ -1433,11 +1386,7 @@ def test_crawl4ai_raw_source_accepts_exact_body_field(monkeypatch) -> None:
     "returned_source",
     [
         {"cleaned_html": '<feed xmlns="http://www.w3.org/2005/Atom" />'},
-        {
-            "body": {
-                "value": '<feed xmlns="http://www.w3.org/2005/Atom" />'
-            }
-        },
+        {"body": {"value": '<feed xmlns="http://www.w3.org/2005/Atom" />'}},
     ],
     ids=("cleaned-html", "normalized-body-object"),
 )
@@ -1461,9 +1410,7 @@ def test_crawl4ai_raw_source_never_uses_normalized_html(
         name="browser",
         type="crawl4ai",
         base_url="http://crawl4ai.internal:11235",
-        capabilities=frozenset(
-            {"raw_html", "raw_source", "markdown", "rendered_js"}
-        ),
+        capabilities=frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
     )
     request = FetchRequest(
         url="https://example.test/article",
@@ -1480,9 +1427,7 @@ def test_crawl4ai_raw_source_never_uses_normalized_html(
 
 
 def test_present_non_string_reported_final_url_fails(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     service = _FakeService(
         {
             "success": True,
@@ -1541,17 +1486,21 @@ def test_firecrawl_rejects_v1_before_sending_a_request() -> None:
     assert service.requests == []
 
 
-def test_trafilatura_provider_returns_raw_html_and_provider_original_markdown(monkeypatch) -> None:
+def test_trafilatura_provider_returns_raw_html_and_provider_original_markdown(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     monkeypatch.setattr(
         "sluice.web.providers.importlib.import_module",
-        lambda name: type(
-            "TrafilaturaModule",
-            (),
-            {"extract": staticmethod(lambda *args, **kwargs: "body")},
-        )()
-        if name == "trafilatura"
-        else __import__(name),
+        lambda name: (
+            type(
+                "TrafilaturaModule",
+                (),
+                {"extract": staticmethod(lambda *args, **kwargs: "body")},
+            )()
+            if name == "trafilatura"
+            else __import__(name)
+        ),
     )
     provider = build_provider(
         ProviderBinding(
@@ -1688,13 +1637,15 @@ def test_httpx_profiles_require_remote_dns_proxy_opt_in(
     if provider_type == "trafilatura":
         monkeypatch.setattr(
             "sluice.web.providers.importlib.import_module",
-            lambda name: type(
-                "TrafilaturaModule",
-                (),
-                {"extract": staticmethod(lambda *args, **kwargs: "body")},
-            )()
-            if name == "trafilatura"
-            else __import__(name),
+            lambda name: (
+                type(
+                    "TrafilaturaModule",
+                    (),
+                    {"extract": staticmethod(lambda *args, **kwargs: "body")},
+                )()
+                if name == "trafilatura"
+                else __import__(name)
+            ),
         )
     binding = ProviderBinding(
         name=f"{provider_type}-direct",
@@ -1720,13 +1671,15 @@ def test_httpx_profiles_use_resolved_proxy_but_guard_every_redirect_locally(
     if provider_type == "trafilatura":
         monkeypatch.setattr(
             "sluice.web.providers.importlib.import_module",
-            lambda name: type(
-                "TrafilaturaModule",
-                (),
-                {"extract": staticmethod(lambda *args, **kwargs: "body")},
-            )()
-            if name == "trafilatura"
-            else __import__(name),
+            lambda name: (
+                type(
+                    "TrafilaturaModule",
+                    (),
+                    {"extract": staticmethod(lambda *args, **kwargs: "body")},
+                )()
+                if name == "trafilatura"
+                else __import__(name)
+            ),
         )
 
     requests: list[object] = []
@@ -1741,7 +1694,7 @@ def test_httpx_profiles_use_resolved_proxy_but_guard_every_redirect_locally(
         headers = {"location": "http://127.0.0.1/metadata"}
 
         def __init__(self, request: object) -> None:
-            self.url = getattr(request, "url")
+            self.url = request.url
             self.extensions = {"network_stream": Stream()}
 
         def iter_bytes(self):
@@ -1787,18 +1740,15 @@ def test_httpx_profiles_use_resolved_proxy_but_guard_every_redirect_locally(
         catalog = WebRuntimeCatalog((binding,))
     try:
         with pytest.raises(WebSafetyError, match="ssrf_blocked"):
-            catalog.provider(binding).fetch(
-                _request(acceptable=frozenset({"text"}))
-            )
+            catalog.provider(binding).fetch(_request(acceptable=frozenset({"text"})))
 
         assert resolutions == ["example.test"]
         assert len(requests) == 1
-        assert str(getattr(requests[0], "url")) == "https://example.test/article"
-        assert "sluice.addresses" not in getattr(requests[0], "extensions")
+        assert str(requests[0].url) == "https://example.test/article"
+        assert "sluice.addresses" not in requests[0].extensions
         assert created[0].kwargs["proxy"] == resolved_proxy
         assert any(
-            provider_type in warning
-            and "pinning cannot be verified" in warning
+            provider_type in warning and "pinning cannot be verified" in warning
             for warning in catalog.warnings
         )
         persisted = str(WebBinding(fetch_chain=(binding,)).semantic_projection())
@@ -1825,7 +1775,7 @@ def test_httpx_socks5_proxy_keeps_approved_target_address_and_original_identity(
         headers = {"content-type": "text/plain"}
 
         def __init__(self, request: object) -> None:
-            self.url = getattr(request, "url")
+            self.url = request.url
             self.extensions = {"network_stream": Stream()}
 
         def iter_bytes(self):
@@ -1870,13 +1820,13 @@ def test_httpx_socks5_proxy_keeps_approved_target_address_and_original_identity(
         assert artifact.text == "ok"
         assert artifact.final_url == "https://example.test/article"
         assert created[0].kwargs["proxy"] == "socks5://proxy.example:1080"
-        assert [str(getattr(sent, "url")) for sent in requests] == [
+        assert [str(sent.url) for sent in requests] == [
             "https://93.184.216.34/article",
             "https://93.184.216.35/article",
         ]
         sent = requests[-1]
-        assert getattr(sent, "headers")["host"] == "example.test"
-        assert getattr(sent, "extensions")["sni_hostname"] == "example.test"
+        assert sent.headers["host"] == "example.test"
+        assert sent.extensions["sni_hostname"] == "example.test"
         assert not catalog.warnings
     finally:
         catalog.close()
@@ -1905,7 +1855,9 @@ def test_startup_http_requires_trust_and_has_no_peer_claim() -> None:
 
 def test_unknown_provider_type_is_rejected_by_fixed_map() -> None:
     with pytest.raises(DefinitionError, match="unsupported"):
-        build_provider(ProviderBinding(name="bad", type="not_a_provider"), _runtime(None))
+        build_provider(
+            ProviderBinding(name="bad", type="not_a_provider"), _runtime(None)
+        )
 
 
 def test_catalog_creates_one_direct_httpx_client_and_closes_it(monkeypatch) -> None:
@@ -1979,9 +1931,7 @@ def test_catalog_closes_new_owned_transport_when_close_wins_creation_race(
         def close(self) -> None:
             self.close_calls += 1
 
-    monkeypatch.setattr(
-        registry_module, "_PooledPinnedHTTPXClient", BlockingTransport
-    )
+    monkeypatch.setattr(registry_module, "_PooledPinnedHTTPXClient", BlockingTransport)
     catalog = WebRuntimeCatalog()
     binding = ProviderBinding(name="direct", type="httpx")
     failures: list[BaseException] = []
@@ -2242,9 +2192,7 @@ def test_catalog_curl_caps_decompressed_callback_body(monkeypatch) -> None:
     catalog = WebRuntimeCatalog((binding,))
     try:
         with pytest.raises(WebSafetyError, match="body_too_large"):
-            catalog.provider(binding).fetch(
-                _request(acceptable=frozenset({"text"}))
-            )
+            catalog.provider(binding).fetch(_request(acceptable=frozenset({"text"})))
     finally:
         catalog.close()
 
@@ -2385,9 +2333,7 @@ def test_catalog_rejects_missing_configured_optional_extractor_by_instance(
     catalog = WebRuntimeCatalog()
     try:
         with pytest.raises(DefinitionError, match=instance_name):
-            catalog.extractor(
-                ExtractorBinding(name=instance_name, type=extractor_type)
-            )
+            catalog.extractor(ExtractorBinding(name=instance_name, type=extractor_type))
     finally:
         catalog.close()
 
@@ -2453,7 +2399,9 @@ def test_optional_extractors_return_no_match_after_validated_runtime_failure(
         catalog.close()
 
 
-def test_invalid_reported_final_url_fails_instead_of_using_request_url(monkeypatch) -> None:
+def test_invalid_reported_final_url_fails_instead_of_using_request_url(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(
         "sluice.web.providers.bounded_manual_get",
         lambda *args, **kwargs: DirectResponse(
@@ -2470,7 +2418,11 @@ def test_invalid_reported_final_url_fails_instead_of_using_request_url(monkeypat
     )
     with pytest.raises(WebSafetyError) as error:
         provider.fetch(_request(acceptable=frozenset({"text"})))
-    assert getattr(error.value, "reason", None) in {"bad_url", "ssrf_blocked", "provider_error"}
+    assert getattr(error.value, "reason", None) in {
+        "bad_url",
+        "ssrf_blocked",
+        "provider_error",
+    }
 
 
 def test_startup_http_does_not_hide_invalid_reported_final_url() -> None:

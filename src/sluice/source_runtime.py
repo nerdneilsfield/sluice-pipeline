@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
 import json
 import logging
 import sqlite3
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
 from sluice.app import App
-from sluice.canonical import canonical_json, content_hash, digest, make_item_id, utc_datetime
+from sluice.canonical import (
+    canonical_json,
+    content_hash,
+    digest,
+    make_item_id,
+    utc_datetime,
+)
 from sluice.contracts import (
     KEEP_CHECKPOINT,
     Item,
@@ -24,7 +30,6 @@ from sluice.logging import log_event
 from sluice.web.contracts import PrivateWebInvocation
 from sluice.web.sanitize import sanitize_web_error
 
-
 _LOGGER = logging.getLogger("sluice.source_runtime")
 
 
@@ -36,7 +41,9 @@ def _fresh_json(value: object) -> object:
     return value
 
 
-def _source_execution_config(name: str | Any, source: Any | None = None) -> dict[str, object]:
+def _source_execution_config(
+    name: str | Any, source: Any | None = None
+) -> dict[str, object]:
     """Authored Source configuration persisted for collection/retry only."""
 
     if source is None:
@@ -50,7 +57,9 @@ def _source_execution_config(name: str | Any, source: Any | None = None) -> dict
     }
 
 
-def _source_identity_config(name: str | Any, source: Any | None = None) -> dict[str, object]:
+def _source_identity_config(
+    name: str | Any, source: Any | None = None
+) -> dict[str, object]:
     """Result-affecting Source identity, including expanded web semantics."""
 
     if source is None:
@@ -82,7 +91,11 @@ def _policy_json(source: Any) -> str:
     policy = source.policy
     timeout = None if policy.timeout is None else policy.timeout.total_seconds()
     return canonical_json(
-        {"timeout_seconds": timeout, "retries": policy.retries, "concurrency": policy.concurrency}
+        {
+            "timeout_seconds": timeout,
+            "retries": policy.retries,
+            "concurrency": policy.concurrency,
+        }
     )
 
 
@@ -138,17 +151,20 @@ def _strict_json(
     raise ExecutionError(f"{label} is not JSON-compatible")
 
 
-def _collect_contract(app: App, source: Any, contract: Any, checkpoint: JSONValue) -> SourceResult:
+def _collect_contract(
+    app: App, source: Any, contract: Any, checkpoint: JSONValue
+) -> SourceResult:
     """Run a built-in web Source through its private bound wrapper."""
 
-    if (
-        getattr(source, "web_binding", None) is not None
-        and getattr(source, "use", None) in {"sluice.sources.rss", "sluice.sources.webpage"}
-    ):
+    if getattr(source, "web_binding", None) is not None and getattr(
+        source, "use", None
+    ) in {"sluice.sources.rss", "sluice.sources.webpage"}:
         runner = getattr(contract, "collect_web", None)
         if not callable(runner):
             raise ExecutionError("built-in web Source has no private collect operation")
-        return runner(PrivateWebInvocation(source.with_config, source.web_binding), checkpoint)
+        return runner(
+            PrivateWebInvocation(source.with_config, source.web_binding), checkpoint
+        )
     return contract.collect(_fresh_json(source.with_config), checkpoint)
 
 
@@ -161,7 +177,9 @@ def _validate_result(result: object) -> SourceResult:
     normalized: list[SourceRecord] = []
     for record in records:
         if not isinstance(record, SourceRecord):
-            raise ExecutionError("SourceResult.records must contain SourceRecord values")
+            raise ExecutionError(
+                "SourceResult.records must contain SourceRecord values"
+            )
         if not isinstance(record.logical_id, str) or not record.logical_id.strip():
             raise ExecutionError("SourceRecord.logical_id must be a non-empty string")
         if not isinstance(record.metadata, Mapping):
@@ -201,9 +219,7 @@ def _log_fields(
     # Keep the structured contract JSON-compatible even when a diagnostic
     # caller passes the identity-only checkpoint sentinel.
     checkpoint_value: JSONValue = (
-        {"marker": "KEEP_CHECKPOINT"}
-        if checkpoint is KEEP_CHECKPOINT
-        else checkpoint  # type: ignore[assignment]
+        {"marker": "KEEP_CHECKPOINT"} if checkpoint is KEEP_CHECKPOINT else checkpoint  # type: ignore[assignment]
     )
     return {
         "source": source,
@@ -322,7 +338,8 @@ def _activate_binding(
         # Source schedules live on SourceDef rather than ExecutionPolicy.
         schedule = source.schedule
         next_due = (
-            utc_datetime(datetime.fromisoformat(at_text.replace("Z", "+00:00"))) + schedule
+            utc_datetime(datetime.fromisoformat(at_text.replace("Z", "+00:00")))
+            + schedule
             if schedule is not None
             else None
         )
@@ -343,7 +360,9 @@ def _activate_binding(
                 ),
             )
         except sqlite3.IntegrityError as error:
-            raise ExecutionError("Source binding already has an active execution") from error
+            raise ExecutionError(
+                "Source binding already has an active execution"
+            ) from error
         execution_id = int(cursor.lastrowid)
         conn.execute(
             "UPDATE source_state SET next_due_at=?,active_execution_id=? "
@@ -730,7 +749,10 @@ def _finalize_success(
         publication_id = int(publication.lastrowid)
         conn.executemany(
             "INSERT INTO publication_members(publication_id,ordinal,item_id) VALUES (?,?,?)",
-            ((publication_id, ordinal, item_id) for ordinal, item_id in enumerate(inserted_ids)),
+            (
+                (publication_id, ordinal, item_id)
+                for ordinal, item_id in enumerate(inserted_ids)
+            ),
         )
         if result.next_checkpoint is not KEEP_CHECKPOINT:
             checkpoint_json = canonical_json(result.next_checkpoint)
@@ -826,16 +848,28 @@ def collect_source(
         log_event(
             _LOGGER,
             "source_external_completion",
-            **_log_fields(source_name, binding, execution_id, checkpoint, None, "returned"),
+            **_log_fields(
+                source_name, binding, execution_id, checkpoint, None, "returned"
+            ),
         )
     except BaseException as error:
         log_event(
             _LOGGER,
             "source_external_completion",
-            **_log_fields(source_name, binding, execution_id, checkpoint, None, "failed"),
+            **_log_fields(
+                source_name, binding, execution_id, checkpoint, None, "failed"
+            ),
         )
         wrapped = _source_failure(error, source)
-        _record_failure(app, source_name, binding, execution_id, _checkpoint_json(app, source_name, binding, execution_id), wrapped, at_text)
+        _record_failure(
+            app,
+            source_name,
+            binding,
+            execution_id,
+            _checkpoint_json(app, source_name, binding, execution_id),
+            wrapped,
+            at_text,
+        )
         raise wrapped
 
     expected_json = _checkpoint_json(app, source_name, binding, execution_id)
@@ -854,9 +888,13 @@ def collect_source(
             log_event(
                 _LOGGER,
                 "source_stale_finalization",
-                **_log_fields(source_name, binding, execution_id, checkpoint, None, "stale"),
+                **_log_fields(
+                    source_name, binding, execution_id, checkpoint, None, "stale"
+                ),
             )
-            _record_failure(app, source_name, binding, execution_id, expected_json, stale, at_text)
+            _record_failure(
+                app, source_name, binding, execution_id, expected_json, stale, at_text
+            )
             # A late callback is an expected crash-recovery outcome.  Its
             # guarded finalization already rejected every output; return the
             # terminal attempt rather than surfacing an unhandled worker
@@ -867,13 +905,17 @@ def collect_source(
     except BaseException as error:
         wrapped = ExecutionError("Source finalization failed")
         wrapped.__cause__ = error
-        _record_failure(app, source_name, binding, execution_id, expected_json, wrapped, at_text)
+        _record_failure(
+            app, source_name, binding, execution_id, expected_json, wrapped, at_text
+        )
         raise wrapped
 
     log_event(
         _LOGGER,
         "source_finalization",
-        **_log_fields(source_name, binding, execution_id, checkpoint, revision, "succeeded"),
+        **_log_fields(
+            source_name, binding, execution_id, checkpoint, revision, "succeeded"
+        ),
     )
     return execution_id
 

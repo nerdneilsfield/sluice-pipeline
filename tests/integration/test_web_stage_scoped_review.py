@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,18 +14,19 @@ from sluice.read_model import pipeline_list
 from sluice.reconcile import tick
 from sluice.stage_runtime import terminal_fetch_drop_eligible
 from sluice.web.client import WebContentClient
-from sluice.web.contracts import ProviderBinding
 from sluice.web.providers import FirecrawlProvider
 from sluice.web.registry import resolve_provider_binding
 
 
 def instant(seconds: int = 0) -> datetime:
-    return datetime(2026, 8, 19, 0, 0, seconds, tzinfo=timezone.utc)
+    return datetime(2026, 8, 19, 0, 0, seconds, tzinfo=UTC)
 
 
 def source(config, checkpoint):
     del config, checkpoint
-    return SourceResult((SourceRecord("article", {"url": "https://example.test/article"}),), "done")
+    return SourceResult(
+        (SourceRecord("article", {"url": "https://example.test/article"}),), "done"
+    )
 
 
 def sink(config, payload, delivery_key):
@@ -41,7 +42,8 @@ def write_web(
     chain: str = "[direct]",
 ) -> None:
     timeout_field = "" if timeout is None else f", timeout: {timeout}"
-    path.write_text(f"""version: 1
+    path.write_text(
+        f"""version: 1
 database: state.db
 web:
   providers: {{{providers}}}
@@ -61,22 +63,56 @@ pipelines:
     nodes:
       web: {{stage: web, from: source.feed, retries: {retries}{timeout_field}}}
       out: {{from: web, deliver: {{use: tests.integration.test_web_stage_scoped_review.sink, with: {{}}}}}}
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
 
 def _stage(*uses: str, input_mode: str = "each") -> StageDef:
-    return StageDef("shape", input_mode, tuple(TaskDef(use, {}) for use in uses), None, 1, "{}")
+    return StageDef(
+        "shape", input_mode, tuple(TaskDef(use, {}) for use in uses), None, 1, "{}"
+    )
 
 
 @pytest.mark.parametrize(
     ("stage", "failed_task_index"),
     [
-        (_stage("sluice.tasks.fetch_webpage", "sluice.tasks.to_text", input_mode="batch"), 0),
-        (_stage("custom.before", "sluice.tasks.fetch_webpage", "sluice.tasks.to_text"), 1),
-        (_stage("sluice.tasks.fetch_webpage", "custom.after", "sluice.tasks.to_text"), 0),
-        (_stage("sluice.tasks.fetch_webpage", "sluice.tasks.extract_content", "sluice.tasks.extract_content", "sluice.tasks.to_text"), 0),
+        (
+            _stage(
+                "sluice.tasks.fetch_webpage", "sluice.tasks.to_text", input_mode="batch"
+            ),
+            0,
+        ),
+        (
+            _stage(
+                "custom.before", "sluice.tasks.fetch_webpage", "sluice.tasks.to_text"
+            ),
+            1,
+        ),
+        (
+            _stage(
+                "sluice.tasks.fetch_webpage", "custom.after", "sluice.tasks.to_text"
+            ),
+            0,
+        ),
+        (
+            _stage(
+                "sluice.tasks.fetch_webpage",
+                "sluice.tasks.extract_content",
+                "sluice.tasks.extract_content",
+                "sluice.tasks.to_text",
+            ),
+            0,
+        ),
         (_stage("sluice.tasks.fetch_webpage"), 0),
-        (_stage("sluice.tasks.fetch_webpage", "sluice.tasks.to_text", "sluice.tasks.to_markdown"), 0),
+        (
+            _stage(
+                "sluice.tasks.fetch_webpage",
+                "sluice.tasks.to_text",
+                "sluice.tasks.to_markdown",
+            ),
+            0,
+        ),
         (_stage("custom.failure"), 0),
         (_stage("sluice.tasks.extract_content", "sluice.tasks.to_text"), 0),
     ],
@@ -113,7 +149,10 @@ def test_production_chain_deadline_stops_second_provider_and_fails(
             "SELECT state,retry_count FROM executions WHERE kind='stage' ORDER BY id"
         ).fetchall()
         assert [(row[0], row[1]) for row in rows] == [("failed", 0)]
-        assert app.conn.execute("SELECT COUNT(*) FROM stage_result_current").fetchone()[0] == 0
+        assert (
+            app.conn.execute("SELECT COUNT(*) FROM stage_result_current").fetchone()[0]
+            == 0
+        )
     finally:
         app.close()
 
@@ -164,12 +203,22 @@ def test_noneligible_real_failures_never_publish_empty_result(
     tmp_path: Path, definition_text: str
 ) -> None:
     definition = tmp_path / "definition.yml"
-    definition.write_text("version: 1\ndatabase: state.db\n" + definition_text, encoding="utf-8")
+    definition.write_text(
+        "version: 1\ndatabase: state.db\n" + definition_text, encoding="utf-8"
+    )
     app = open_app(definition, tmp_path / "state.db")
     try:
         tick(app, instant())
-        assert app.conn.execute("SELECT state FROM executions WHERE kind='stage'").fetchone()[0] == "failed"
-        assert app.conn.execute("SELECT COUNT(*) FROM stage_result_current").fetchone()[0] == 0
+        assert (
+            app.conn.execute(
+                "SELECT state FROM executions WHERE kind='stage'"
+            ).fetchone()[0]
+            == "failed"
+        )
+        assert (
+            app.conn.execute("SELECT COUNT(*) FROM stage_result_current").fetchone()[0]
+            == 0
+        )
     finally:
         app.close()
 
@@ -195,7 +244,10 @@ def test_resolved_secret_and_vendor_body_never_reach_durable_or_log_views(
             raise RuntimeError(f"vendor body contains {secret}")
 
     from sluice.config import load_definition
-    binding = load_definition(definition).stages["web"].tasks[0].web_binding.providers[0]
+
+    binding = (
+        load_definition(definition).stages["web"].tasks[0].web_binding.providers[0]
+    )
     resolved = resolve_provider_binding(binding)
     assert resolved.options["api_key"] == secret
     provider = FirecrawlProvider(resolved, SimpleNamespace(service_client=Transport()))
@@ -204,20 +256,29 @@ def test_resolved_secret_and_vendor_body_never_reach_durable_or_log_views(
         def provider(self, received):
             assert received.name == "vendor"
             return provider
+
         def limiter(self, received):
             del received
-            return None
 
     client = WebContentClient(Catalog())
-    app = open_app(definition, tmp_path / "state.db", http_client=Transport(), web_content_client=client)
+    app = open_app(
+        definition,
+        tmp_path / "state.db",
+        http_client=Transport(),
+        web_content_client=client,
+    )
     try:
         tick(app, instant())
         errors = [
             str(row[0] or "")
-            for row in app.conn.execute("SELECT error FROM executions WHERE kind='stage'")
+            for row in app.conn.execute(
+                "SELECT error FROM executions WHERE kind='stage'"
+            )
         ]
         assert seen and secret in str(seen[0]), errors
-        assert all(secret not in error and "vendor body" not in error for error in errors)
+        assert all(
+            secret not in error and "vendor body" not in error for error in errors
+        )
         assert secret not in caplog.text and "vendor body" not in caplog.text
         management_view = pipeline_list(app)
         assert secret not in str(management_view)

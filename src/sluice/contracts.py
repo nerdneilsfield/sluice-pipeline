@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Mapping, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
 
 if TYPE_CHECKING:
-    from .web.contracts import WebBinding
     from .web.config import WebRegistryConfig
+    from .web.contracts import WebBinding
 
 
 JSONValue: TypeAlias = (
@@ -190,9 +191,7 @@ class HTTPClient(Protocol):
 
 
 class LLMClient(Protocol):
-    def complete(
-        self, model: str, prompt: str, input_payload: JSONValue
-    ) -> JSONValue:
+    def complete(self, model: str, prompt: str, input_payload: JSONValue) -> JSONValue:
         raise NotImplementedError
 
 
@@ -222,7 +221,9 @@ class SourceDef:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "with_config", freeze_item_json(self.with_config))
-        if self.web_binding is not None and not isinstance(self.web_binding, WebBinding):
+        if self.web_binding is not None and not isinstance(
+            self.web_binding, WebBinding
+        ):
             raise TypeError("web_binding must be a WebBinding or null")
 
 
@@ -234,7 +235,9 @@ class TaskDef:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "with_config", freeze_item_json(self.with_config))
-        if self.web_binding is not None and not isinstance(self.web_binding, WebBinding):
+        if self.web_binding is not None and not isinstance(
+            self.web_binding, WebBinding
+        ):
             raise TypeError("web_binding must be a WebBinding or null")
 
 
@@ -285,5 +288,5 @@ class Definition:
 # can be imported on its own.  Importing the type here after the core contract
 # definitions are complete keeps ``typing.get_type_hints`` useful without
 # introducing an import cycle during module initialisation.
-from .web.contracts import WebBinding  # noqa: E402  (intentional late import)
-from .web.config import WebRegistryConfig  # noqa: E402  (intentional late import)
+from .web.config import WebRegistryConfig
+from .web.contracts import WebBinding

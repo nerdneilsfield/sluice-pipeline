@@ -12,11 +12,10 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
@@ -43,7 +42,6 @@ from sluice.web.contracts import (
     QualityPolicy,
     WebBinding,
 )
-
 
 # This map is intentionally a literal.  It is a validation aid only; it is
 # not a plugin registry and does not import or discover implementation modules.
@@ -267,10 +265,14 @@ def parse_timeout(text: str) -> timedelta:
     """Parse a positive whole-second/minute/hour timeout."""
 
     if not isinstance(text, str):
-        raise DefinitionError("timeout must be a positive integer followed by s, m, or h")
+        raise DefinitionError(
+            "timeout must be a positive integer followed by s, m, or h"
+        )
     match = re.fullmatch(r"([1-9][0-9]*)(s|m|h)", text)
     if not match:
-        raise DefinitionError("timeout must be a positive integer followed by s, m, or h")
+        raise DefinitionError(
+            "timeout must be a positive integer followed by s, m, or h"
+        )
     amount, unit = int(match.group(1)), match.group(2)
     try:
         return {
@@ -339,7 +341,9 @@ def _decode_sources(
         decoded[name] = SourceDef(
             name=name,
             use=use,
-            schedule=_optional_interval(spec.get("schedule"), f"sources.{name}.schedule"),
+            schedule=_optional_interval(
+                spec.get("schedule"), f"sources.{name}.schedule"
+            ),
             with_config=freeze_json(with_config),
             policy=_decode_source_policy(spec, f"sources.{name}"),
             web_binding=web_binding,
@@ -347,7 +351,9 @@ def _decode_sources(
     return decoded
 
 
-def _normalize_task_file_paths(config: dict[str, object], base_dir: Path) -> dict[str, object]:
+def _normalize_task_file_paths(
+    config: dict[str, object], base_dir: Path
+) -> dict[str, object]:
     normalized = dict(config)
     for key in _FILE_CONFIG_KEYS:
         value = normalized.get(key)
@@ -386,10 +392,16 @@ def _validate_artifact_task_chain(name: str, tasks: tuple[TaskDef, ...]) -> None
     valid = (
         projector_count == 1
         and uses[-1] in projectors
-        and ((fetch_count == 1 and extract_count == 0 and len(uses) == 2)
-             or (fetch_count == 1 and extract_count == 1 and len(uses) == 3
-                 and uses[1] == "sluice.tasks.extract_content")
-             or (fetch_count == 0 and extract_count == 1 and len(uses) == 2))
+        and (
+            (fetch_count == 1 and extract_count == 0 and len(uses) == 2)
+            or (
+                fetch_count == 1
+                and extract_count == 1
+                and len(uses) == 3
+                and uses[1] == "sluice.tasks.extract_content"
+            )
+            or (fetch_count == 0 and extract_count == 1 and len(uses) == 2)
+        )
     )
     if not valid:
         raise DefinitionError(
@@ -505,7 +517,9 @@ def _decode_node(name: str, spec: Mapping[str, object], label: str) -> NodeDef:
     if len(set(from_refs)) != len(from_refs):
         raise GraphError(f"{label}.from contains duplicate references")
     stage_value = spec.get("stage")
-    if stage_value is not None and (not isinstance(stage_value, str) or not stage_value):
+    if stage_value is not None and (
+        not isinstance(stage_value, str) or not stage_value
+    ):
         raise DefinitionError(f"{label}.stage must be a non-empty string")
     deliver = (
         _decode_delivery(spec["deliver"], f"{label}.deliver")
@@ -559,9 +573,7 @@ def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
             _decode_sources(_mapping(raw.get("sources"), "sources"), registry)
         ),
         stages=MappingProxyType(
-            _decode_stages(
-                _mapping(raw.get("stages"), "stages"), base_dir, registry
-            )
+            _decode_stages(_mapping(raw.get("stages"), "stages"), base_dir, registry)
         ),
         pipelines=MappingProxyType(
             _decode_pipelines(_mapping(raw.get("pipelines"), "pipelines"))
@@ -615,8 +627,7 @@ def _validate_batch_policy(
     if batch.count is not None:
         _integer(batch.count, f"{label}.batch.count", minimum=1)
     if batch.max_wait is not None and (
-        not isinstance(batch.max_wait, timedelta)
-        or batch.max_wait <= timedelta(0)
+        not isinstance(batch.max_wait, timedelta) or batch.max_wait <= timedelta(0)
     ):
         raise DefinitionError(f"{label}.batch.max_wait must be positive")
     if not isinstance(batch.on_schedule, bool) or not isinstance(
@@ -640,7 +651,9 @@ def _validate_pipeline(pipeline: PipelineDef, definition: Definition) -> None:
         if node.deliver is not None:
             deliveries += 1
             if node.stage is not None:
-                raise GraphError(f"delivery node {pipeline.name}.{name} cannot have a stage")
+                raise GraphError(
+                    f"delivery node {pipeline.name}.{name} cannot have a stage"
+                )
             if node.batch is not None:
                 raise GraphError(f"delivery node {pipeline.name}.{name} cannot batch")
         elif node.stage is None:
@@ -652,12 +665,16 @@ def _validate_pipeline(pipeline: PipelineDef, definition: Definition) -> None:
                 raise GraphError(
                     f"unknown Stage {node.stage!r} in pipeline {pipeline.name}.{name}"
                 ) from error
-            _validate_batch_policy(node.batch, stage, node, f"pipelines.{pipeline.name}.{name}")
+            _validate_batch_policy(
+                node.batch, stage, node, f"pipelines.{pipeline.name}.{name}"
+            )
         _validate_policy(node.policy, f"pipelines.{pipeline.name}.{name}")
         if node.schedule is not None and (
             not isinstance(node.schedule, timedelta) or node.schedule <= timedelta(0)
         ):
-            raise DefinitionError(f"pipelines.{pipeline.name}.{name}.schedule must be positive")
+            raise DefinitionError(
+                f"pipelines.{pipeline.name}.{name}.schedule must be positive"
+            )
         if node.deliver is not None and not node.from_refs:
             raise GraphError(f"delivery node {pipeline.name}.{name} needs an input")
         if node.stage is not None and not node.from_refs:
@@ -709,9 +726,11 @@ def validate_definition(definition: Definition) -> None:
         raise DefinitionError("version: 1 is required")
     if not isinstance(definition.database, str) or not definition.database:
         raise DefinitionError("database must be a non-empty string")
-    if not isinstance(definition.sources, Mapping) or not isinstance(
-        definition.stages, Mapping
-    ) or not isinstance(definition.pipelines, Mapping):
+    if (
+        not isinstance(definition.sources, Mapping)
+        or not isinstance(definition.stages, Mapping)
+        or not isinstance(definition.pipelines, Mapping)
+    ):
         raise DefinitionError("definition collections must be mappings")
     if definition.web is not None and not isinstance(definition.web, WebRegistryConfig):
         raise DefinitionError("definition.web must be a WebRegistryConfig or null")
@@ -850,7 +869,9 @@ def verify_stage_files(stage: StageDef) -> None:
             try:
                 current_digest = hashlib.sha256(file_path.read_bytes()).hexdigest()
             except OSError as error:
-                raise DefinitionError(f"stage file changed or is missing: {file_path}") from error
+                raise DefinitionError(
+                    f"stage file changed or is missing: {file_path}"
+                ) from error
             if current_digest != recorded_digest:
                 raise DefinitionError(f"stage file changed or is missing: {file_path}")
 
@@ -965,9 +986,7 @@ def _snapshot_duration(
 ) -> timedelta | None:
     """Decode a canonical WebBinding duration expressed in whole seconds."""
 
-    seconds = _snapshot_seconds(
-        value, label, allow_zero=allow_zero, required=required
-    )
+    seconds = _snapshot_seconds(value, label, allow_zero=allow_zero, required=required)
     if seconds is None:
         return None
     try:
@@ -986,15 +1005,18 @@ def _decode_snapshot_provider(value: object, label: str) -> ProviderBinding:
     value = _snapshot_projection_mapping(value, label, _WEB_PROVIDER_KEYS)
     name = value["name"]
     provider_type = value["type"]
-    if not isinstance(name, str) or not name or not isinstance(provider_type, str) or not provider_type:
+    if (
+        not isinstance(name, str)
+        or not name
+        or not isinstance(provider_type, str)
+        or not provider_type
+    ):
         raise ExecutionError(f"invalid retained {label}")
     capabilities = _snapshot_sequence(value["capabilities"], f"{label}.capabilities")
     if any(not isinstance(capability, str) for capability in capabilities):
         raise ExecutionError(f"invalid retained {label}.capabilities")
     actions = _snapshot_sequence(value["actions"], f"{label}.actions")
-    timeout = _snapshot_duration(
-        value["timeout"], f"{label}.timeout", required=True
-    )
+    timeout = _snapshot_duration(value["timeout"], f"{label}.timeout", required=True)
     connect_timeout = _snapshot_duration(
         value["connect_timeout"], f"{label}.connect_timeout", required=True
     )
@@ -1057,7 +1079,12 @@ def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
     value = _snapshot_projection_mapping(value, label, _WEB_EXTRACTOR_KEYS)
     name = value["name"]
     extractor_type = value["type"]
-    if not isinstance(name, str) or not name or not isinstance(extractor_type, str) or not extractor_type:
+    if (
+        not isinstance(name, str)
+        or not name
+        or not isinstance(extractor_type, str)
+        or not extractor_type
+    ):
         raise ExecutionError(f"invalid retained {label}")
     try:
         return ExtractorBinding(
@@ -1069,7 +1096,9 @@ def _decode_snapshot_extractor(value: object, label: str) -> ExtractorBinding:
         raise ExecutionError(f"invalid retained {label}") from error
 
 
-def _normalise_snapshot_binding_projection(value: Mapping[str, object]) -> Mapping[str, object]:
+def _normalise_snapshot_binding_projection(
+    value: Mapping[str, object],
+) -> Mapping[str, object]:
     """Normalize whole-number timing floats before semantic comparison."""
 
     result = dict(value)
@@ -1128,7 +1157,9 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
         if not isinstance(fetch_chain_name, str) or not fetch_chain_name:
             raise ExecutionError("invalid retained Task web binding.fetch_chain.name")
         fetch_chain = tuple(
-            _decode_snapshot_provider(provider, f"Task web binding.fetch_chain.providers[{index}]")
+            _decode_snapshot_provider(
+                provider, f"Task web binding.fetch_chain.providers[{index}]"
+            )
             for index, provider in enumerate(
                 _snapshot_sequence(
                     fetch_value["providers"],
@@ -1153,7 +1184,9 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
         if not isinstance(extract_chain_name, str) or not extract_chain_name:
             raise ExecutionError("invalid retained Task web binding.extract_chain.name")
         extract_chain = tuple(
-            _decode_snapshot_extractor(extractor, f"Task web binding.extract_chain.extractors[{index}]")
+            _decode_snapshot_extractor(
+                extractor, f"Task web binding.extract_chain.extractors[{index}]"
+            )
             for index, extractor in enumerate(
                 _snapshot_sequence(
                     extract_value["extractors"],
@@ -1170,7 +1203,9 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
         value["quality"], "Task web binding.quality", _WEB_QUALITY_KEYS
     )
     if quality_value["reject_challenges"] is not True:
-        raise ExecutionError("invalid retained Task web binding.quality.reject_challenges")
+        raise ExecutionError(
+            "invalid retained Task web binding.quality.reject_challenges"
+        )
     cache_version = value.get("web_cache_version")
     if cache_version is not None and (
         isinstance(cache_version, bool)
@@ -1198,7 +1233,9 @@ def _decode_snapshot_web_binding(value: object) -> WebBinding:
             web_cache_version=cache_version,
         )
         normalized_value = _normalise_snapshot_binding_projection(value)
-        if canonical_json(binding.semantic_projection()) != canonical_json(normalized_value):
+        if canonical_json(binding.semantic_projection()) != canonical_json(
+            normalized_value
+        ):
             raise ExecutionError("invalid retained Task web binding")
         return binding
     except (TypeError, ValueError) as error:
@@ -1237,9 +1274,7 @@ def _validate_snapshot_task_binding(use: str, binding: WebBinding | None) -> Non
         ):
             raise ExecutionError("invalid retained extract_content binding")
     else:
-        expected_output = (
-            "markdown" if use == "sluice.tasks.to_markdown" else "text"
-        )
+        expected_output = "markdown" if use == "sluice.tasks.to_markdown" else "text"
         if (
             binding.output != expected_output
             or binding.fetch_chain is not None
@@ -1266,7 +1301,11 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
     encoded_tasks = value.get("tasks")
     if not isinstance(name, str) or not name:
         raise ExecutionError("invalid retained Stage configuration")
-    if isinstance(cache_version, bool) or not isinstance(cache_version, int) or cache_version < 1:
+    if (
+        isinstance(cache_version, bool)
+        or not isinstance(cache_version, int)
+        or cache_version < 1
+    ):
         raise ExecutionError("invalid retained Stage cache version")
     if not isinstance(encoded_tasks, list) or not encoded_tasks:
         raise ExecutionError("invalid retained Task configuration")

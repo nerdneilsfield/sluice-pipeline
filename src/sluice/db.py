@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
 import fcntl
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from threading import RLock
-from typing import IO, Iterator
+from typing import IO
 
 
 class LockedConnection(sqlite3.Connection):
@@ -240,8 +241,7 @@ def init_schema(connection: sqlite3.Connection) -> None:
             "history_persisted INTEGER NOT NULL DEFAULT 0"
         )
     execution_columns = {
-        str(row[1])
-        for row in connection.execute("PRAGMA table_info(executions)")
+        str(row[1]) for row in connection.execute("PRAGMA table_info(executions)")
     }
     if "history_persisted" not in execution_columns:
         connection.execute(

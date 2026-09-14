@@ -7,28 +7,35 @@ populated but unselected representations are never guessed or persisted.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime, timezone
-import html as html_lib
 import importlib
 import json
 import re
 import unicodedata
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 from markdown_it import MarkdownIt
 
-from ..contracts import Item, NEW
+from ..contracts import NEW, Item
 from ..errors import ExecutionError
 from .contracts import DocumentArtifact
 from .sanitize import sanitize_markdown, sanitize_metadata
 
-
 INPUT_FORMATS = frozenset({"auto", "html", "text", "markdown"})
-_HIDDEN_TAGS = ("script", "style", "template", "noscript", "svg", "canvas", "head", "title")
+_HIDDEN_TAGS = (
+    "script",
+    "style",
+    "template",
+    "noscript",
+    "svg",
+    "canvas",
+    "head",
+    "title",
+)
 _HIDDEN_TAGS = _HIDDEN_TAGS + ("iframe", "object", "embed")
 _HTML_START_TAGS = frozenset(
     {
@@ -185,6 +192,8 @@ _BLOCK_TAGS = frozenset(
 )
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 _WHITESPACE = re.compile(r"\s+")
+
+
 @dataclass(frozen=True, slots=True)
 class _CoercedInput:
     artifact: DocumentArtifact
@@ -233,9 +242,13 @@ def _is_html(value: str) -> bool:
     # the paired close keeps this extension deterministic without reintroducing
     # URI/email autolink false positives.
     for tag in soup.find_all(True):
-        if not isinstance(tag, Tag) or not re.fullmatch(r"[a-z][a-z0-9-]*", tag.name.casefold()):
+        if not isinstance(tag, Tag) or not re.fullmatch(
+            r"[a-z][a-z0-9-]*", tag.name.casefold()
+        ):
             continue
-        if re.search(rf"</\s*{re.escape(tag.name)}\s*>", candidate, flags=re.IGNORECASE):
+        if re.search(
+            rf"</\s*{re.escape(tag.name)}\s*>", candidate, flags=re.IGNORECASE
+        ):
             return True
     return False
 
@@ -248,7 +261,9 @@ def _item_content(item: Item) -> tuple[str, Mapping[str, Any]]:
         content = payload.get("content")
         if isinstance(content, str):
             return content, payload
-    raise ExecutionError("web projector Item payload must be a string or object with string content")
+    raise ExecutionError(
+        "web projector Item payload must be a string or object with string content"
+    )
 
 
 def _input_url(payload: Mapping[str, Any]) -> str | None:
@@ -280,7 +295,9 @@ def _coerce(value: DocumentArtifact | Item | str, input_format: str) -> _Coerced
             "markdown": value.markdown,
         }[selected]
         if not isinstance(field, str):
-            raise ExecutionError("web Artifact selected_format has no corresponding value")
+            raise ExecutionError(
+                "web Artifact selected_format has no corresponding value"
+            )
         return _CoercedInput(value, {}, selected)
 
     item_metadata: dict[str, Any] = {}
@@ -601,7 +618,9 @@ def _html_metadata(value: str, base_url: str | None) -> dict[str, Any]:
         if not isinstance(href, str) or not href.strip():
             continue
         text = _normalise_text(anchor.get_text(" ", strip=True))
-        links.append({"text": text, "url": urljoin(base_url, href) if base_url else href})
+        links.append(
+            {"text": text, "url": urljoin(base_url, href) if base_url else href}
+        )
     if links:
         result["links"] = links
 
@@ -661,12 +680,21 @@ def _markdown_metadata(value: str, base_url: str | None) -> dict[str, Any]:
                         open_link["url"] = (
                             destination
                             if destination.startswith("#")
-                            else urljoin(base_url, destination) if base_url else destination
+                            else urljoin(base_url, destination)
+                            if base_url
+                            else destination
                         )
                         links.append(open_link)
                 open_link = None
-            elif open_link is not None and child.type in {"text", "code_inline", "softbreak", "hardbreak"}:
-                open_link["text"] += " " if child.type in {"softbreak", "hardbreak"} else child.content
+            elif open_link is not None and child.type in {
+                "text",
+                "code_inline",
+                "softbreak",
+                "hardbreak",
+            }:
+                open_link["text"] += (
+                    " " if child.type in {"softbreak", "hardbreak"} else child.content
+                )
     if not links:
         return {}
     return {"links": links}
@@ -674,8 +702,10 @@ def _markdown_metadata(value: str, base_url: str | None) -> dict[str, Any]:
 
 def _date_iso(value: Any) -> Any:
     if isinstance(value, datetime):
-        parsed = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        parsed = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return (
+            parsed.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        )
     return value
 
 
@@ -747,7 +777,9 @@ def _metadata_web(
     return sanitize_metadata(raw, base_url)
 
 
-def _project(input_value: DocumentArtifact | Item | str, *, input_format: str, output: str) -> NEW:
+def _project(
+    input_value: DocumentArtifact | Item | str, *, input_format: str, output: str
+) -> NEW:
     coerced = _coerce(input_value, input_format)
     artifact = coerced.artifact
     selected = artifact.selected_format
@@ -757,14 +789,24 @@ def _project(input_value: DocumentArtifact | Item | str, *, input_format: str, o
 
     if selected == "raw_html":
         source_metadata = _html_metadata(value, base_url)
-        rendered = _html_to_markdown(value, base_url) if output == "markdown" else _visible_html(value)
+        rendered = (
+            _html_to_markdown(value, base_url)
+            if output == "markdown"
+            else _visible_html(value)
+        )
     elif selected == "markdown":
         sanitized = sanitize_markdown(value, base_url)
         source_metadata = _markdown_metadata(sanitized, base_url)
-        rendered = sanitized.strip() if output == "markdown" else _markdown_to_text(sanitized, base_url)
+        rendered = (
+            sanitized.strip()
+            if output == "markdown"
+            else _markdown_to_text(sanitized, base_url)
+        )
     else:
         if output == "markdown":
-            rendered = value if coerced.preserve_markup else _escape_plain_markdown(value)
+            rendered = (
+                value if coerced.preserve_markup else _escape_plain_markdown(value)
+            )
         else:
             rendered = _normalise_text(value)
 
@@ -772,7 +814,9 @@ def _project(input_value: DocumentArtifact | Item | str, *, input_format: str, o
         artifact,
         kind=coerced.input_kind,
         output=output,
-        rendered=_markdown_to_text(rendered, base_url) if output == "markdown" else rendered,
+        rendered=_markdown_to_text(rendered, base_url)
+        if output == "markdown"
+        else rendered,
         source_metadata=source_metadata,
     )
     metadata = dict(coerced.item_metadata)
@@ -788,7 +832,9 @@ def project_markdown(
     return _project(input, input_format=input_format, output="markdown")
 
 
-def project_text(input: DocumentArtifact | Item | str, *, input_format: str = "auto") -> NEW:
+def project_text(
+    input: DocumentArtifact | Item | str, *, input_format: str = "auto"
+) -> NEW:
     """Project an Artifact, Item, or string into normalized visible text."""
 
     return _project(input, input_format=input_format, output="text")

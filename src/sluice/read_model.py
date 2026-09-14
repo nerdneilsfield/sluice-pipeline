@@ -8,18 +8,17 @@ dataclasses without introducing another state machine or a JSON API.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-import json
 from types import MappingProxyType
 from typing import Literal
 
 from .app import App
 from .canonical import utc_datetime
+from .delivery import retry_delivery
 from .errors import ExecutionError
 from .stage_runtime import RebuildResult, rebuild_stage
-from .delivery import retry_delivery
-
 
 PipelineState = Literal["idle", "waiting", "running", "failed"]
 
@@ -53,7 +52,9 @@ class PipelineDetail:
     def __post_init__(self) -> None:
         # Accept ordinary mappings at the constructor boundary while keeping
         # the published projection immutable to callers.
-        object.__setattr__(self, "frozen_batches", MappingProxyType(dict(self.frozen_batches)))
+        object.__setattr__(
+            self, "frozen_batches", MappingProxyType(dict(self.frozen_batches))
+        )
         object.__setattr__(self, "deliveries", MappingProxyType(dict(self.deliveries)))
 
 
@@ -87,7 +88,9 @@ def _current_source_binding(app: App, source_name: str) -> str | None:
     return None if row is None else str(row[0])
 
 
-def _current_batch_id(app: App, pipeline_name: str, node_name: str, binding: str) -> int | None:
+def _current_batch_id(
+    app: App, pipeline_name: str, node_name: str, binding: str
+) -> int | None:
     row = app.conn.execute(
         "SELECT current_frozen_batch_id FROM node_state WHERE pipeline_name=? "
         "AND node_name=? AND binding_digest=?",
@@ -99,7 +102,9 @@ def _current_batch_id(app: App, pipeline_name: str, node_name: str, binding: str
 def _batch_state(app: App, batch_id: int | None) -> str | None:
     if batch_id is None:
         return None
-    row = app.conn.execute("SELECT state FROM batches WHERE id=?", (batch_id,)).fetchone()
+    row = app.conn.execute(
+        "SELECT state FROM batches WHERE id=?", (batch_id,)
+    ).fetchone()
     return None if row is None else str(row[0])
 
 
@@ -112,7 +117,9 @@ def _execution_children(app: App, execution_id: int) -> bool:
     )
 
 
-def _execution_scope_current(app: App, row, *, require_unsatisfied: bool = False) -> bool:
+def _execution_scope_current(
+    app: App, row, *, require_unsatisfied: bool = False
+) -> bool:
     """Return whether one Stage row still belongs to active node work.
 
     A binding digest is the durable scope boundary.  The member checks below
@@ -159,7 +166,9 @@ def _execution_scope_current(app: App, row, *, require_unsatisfied: bool = False
             return False
     batch_id = row["batch_id"]
     if batch_id is not None:
-        current_batch = _current_batch_id(app, str(pipeline_name), str(node_name), binding)
+        current_batch = _current_batch_id(
+            app, str(pipeline_name), str(node_name), binding
+        )
         if current_batch != int(batch_id):
             return False
         if require_unsatisfied and _batch_state(app, current_batch) != "failed":
@@ -167,7 +176,9 @@ def _execution_scope_current(app: App, row, *, require_unsatisfied: bool = False
     return True
 
 
-def _leaf_stage_rows(app: App, pipeline_name: str, node_name: str, binding: str) -> list:
+def _leaf_stage_rows(
+    app: App, pipeline_name: str, node_name: str, binding: str
+) -> list:
     rows = app.conn.execute(
         "SELECT * FROM executions WHERE kind='stage' AND pipeline_name=? "
         "AND node_name=? AND binding_digest=? ORDER BY id",
@@ -184,7 +195,9 @@ def _leaf_stage_rows(app: App, pipeline_name: str, node_name: str, binding: str)
     ]
 
 
-def _failed_stage_rows(app: App, pipeline_name: str, node_name: str, binding: str) -> list:
+def _failed_stage_rows(
+    app: App, pipeline_name: str, node_name: str, binding: str
+) -> list:
     return [
         row
         for row in _leaf_stage_rows(app, pipeline_name, node_name, binding)
@@ -257,7 +270,9 @@ def _current_delivery_rows(app: App, pipeline_name: str):
     return rows
 
 
-def _pending_for_node(app: App, pipeline_name: str, node_name: str, binding: str) -> int:
+def _pending_for_node(
+    app: App, pipeline_name: str, node_name: str, binding: str
+) -> int:
     pending = int(
         app.conn.execute(
             "SELECT COUNT(*) FROM node_members WHERE pipeline_name=? AND node_name=? "
@@ -296,7 +311,9 @@ def _delivery_retry_limit(row) -> int:
 
 
 def _delivery_is_retryable(row) -> bool:
-    return str(row["state"]) == "failed" and int(row["retry_count"]) < _delivery_retry_limit(row)
+    return str(row["state"]) == "failed" and int(
+        row["retry_count"]
+    ) < _delivery_retry_limit(row)
 
 
 def _delivery_pending_count(rows: list) -> int:
@@ -398,7 +415,10 @@ def _pipeline_health(
                 )
             )
         current_batch = _current_batch_id(app, pipeline_name, node_name, binding)
-        if current_batch is not None and _batch_state(app, current_batch) in {"frozen", "failed"}:
+        if current_batch is not None and _batch_state(app, current_batch) in {
+            "frozen",
+            "failed",
+        }:
             waiting = True
 
     deliveries = _current_delivery_rows(app, pipeline_name)
@@ -431,7 +451,9 @@ def pipeline_list(app: App) -> tuple[PipelineSummary, ...]:
     _require_app(app)
     result: list[PipelineSummary] = []
     for name in app.definition.pipelines:
-        state, pending, failed, latest_delivery, latest_error = _pipeline_health(app, name)
+        state, pending, failed, latest_delivery, latest_error = _pipeline_health(
+            app, name
+        )
         result.append(
             PipelineSummary(
                 name=name,
@@ -463,7 +485,10 @@ def pipeline_detail(app: App, pipeline_name: str) -> PipelineDetail:
         delivery_keys: tuple[str, ...] = ()
         if binding is not None:
             if node.stage is not None:
-                executions = tuple(int(row["id"]) for row in _leaf_stage_rows(app, pipeline_name, node_name, binding))
+                executions = tuple(
+                    int(row["id"])
+                    for row in _leaf_stage_rows(app, pipeline_name, node_name, binding)
+                )
                 batch_id = _current_batch_id(app, pipeline_name, node_name, binding)
                 state = _batch_state(app, batch_id)
                 if batch_id is not None and state in {"frozen", "failed"}:
@@ -527,12 +552,12 @@ def retry_delivery_action(app: App, delivery_key: str, at) -> str:
 
 
 __all__ = [
-    "PipelineSummary",
     "NodeDetail",
     "PipelineDetail",
-    "pipeline_list",
-    "pipeline_detail",
+    "PipelineSummary",
     "default_rebuild_target",
+    "pipeline_detail",
+    "pipeline_list",
     "rebuild_action",
     "retry_delivery_action",
 ]

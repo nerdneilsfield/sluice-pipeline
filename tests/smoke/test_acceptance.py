@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult
@@ -50,14 +50,16 @@ pipelines:
 """,
         encoding="utf-8",
     )
-    (tmp_path / "prompt.md").write_text("Summarize the ordered items.", encoding="utf-8")
+    (tmp_path / "prompt.md").write_text(
+        "Summarize the ordered items.", encoding="utf-8"
+    )
     return open_app(definition, tmp_path / "state.db", llm_client=AcceptanceLLM())
 
 
 def test_branching_merging_sources_shared_summary_and_two_deliveries(tmp_path):
     app = acceptance_app(tmp_path)
-    tick(app, datetime(2026, 8, 14, tzinfo=timezone.utc))
-    tick(app, datetime(2026, 8, 14, 1, tzinfo=timezone.utc))
+    tick(app, datetime(2026, 8, 14, tzinfo=UTC))
+    tick(app, datetime(2026, 8, 14, 1, tzinfo=UTC))
     logical_ids = [
         row[0]
         for row in app.conn.execute(
@@ -67,7 +69,9 @@ def test_branching_merging_sources_shared_summary_and_two_deliveries(tmp_path):
     ]
     assert logical_ids == ["rss-a", "site-b"]
     assert (
-        app.conn.execute("SELECT COUNT(*) FROM stage_results WHERE stage_name='summary'").fetchone()[0]
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE stage_name='summary'"
+        ).fetchone()[0]
         == 1
     )
     assert {

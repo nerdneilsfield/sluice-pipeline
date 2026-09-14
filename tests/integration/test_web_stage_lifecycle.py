@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult
@@ -15,17 +13,18 @@ from sluice.web.contracts import FetchChainExhausted
 
 
 def instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 19, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 19, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 def web_source(config, checkpoint):
     del config, checkpoint
-    return SourceResult((SourceRecord("article", {"url": "https://example.test/article"}),), "done")
+    return SourceResult(
+        (SourceRecord("article", {"url": "https://example.test/article"}),), "done"
+    )
 
 
 def web_sink(config, payload, delivery_key):
     del config, payload, delivery_key
-    return None
 
 
 class FailingClient:
@@ -90,7 +89,10 @@ def test_fetch_exhaustion_retries_then_publishes_empty_success(tmp_path: Path) -
         ).fetchall()
         assert [(row[0], row[2]) for row in rows] == [("failed", 0), ("succeeded", 1)]
         assert rows[-1][1] is None
-        assert app.conn.execute("SELECT COUNT(*) FROM stage_result_current").fetchone()[0] == 1
+        assert (
+            app.conn.execute("SELECT COUNT(*) FROM stage_result_current").fetchone()[0]
+            == 1
+        )
         assert client.calls == 2
     finally:
         app.close()

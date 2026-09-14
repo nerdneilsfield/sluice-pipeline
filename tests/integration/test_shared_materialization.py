@@ -1,12 +1,11 @@
-from datetime import datetime, timedelta, timezone
-from threading import Event, Lock, Thread
 import time
+from datetime import UTC, datetime, timedelta
+from threading import Event, Lock, Thread
 
 import pytest
 
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult, StageEnvelope
-from sluice.errors import ExecutionError
 from sluice.reconcile import reconcile, reconcile_node, tick
 from sluice.source_runtime import collect_source
 from sluice.stage_runtime import (
@@ -22,7 +21,7 @@ def sink_callable(config, payload, delivery_key):
 
 
 def instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 14, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 def reconcile_source_collect(config, checkpoint):
@@ -199,13 +198,16 @@ pipelines:
     collect_source(app, "feed", instant(1))
     reconcile_node(app, "p", "documents", instant(1))
 
-    assert tuple(
-        app.conn.execute(
-            "SELECT item_id,state,visible_result_id FROM node_members "
-            "WHERE pipeline_name='p' AND node_name='documents' AND item_id=?",
-            (old_id,),
-        ).fetchone()
-    ) == old_member
+    assert (
+        tuple(
+            app.conn.execute(
+                "SELECT item_id,state,visible_result_id FROM node_members "
+                "WHERE pipeline_name='p' AND node_name='documents' AND item_id=?",
+                (old_id,),
+            ).fetchone()
+        )
+        == old_member
+    )
     publication_id = app.conn.execute(
         "SELECT current_publication_id FROM node_state "
         "WHERE pipeline_name='p' AND node_name='documents'"
@@ -217,11 +219,14 @@ pipelines:
             (publication_id,),
         )
     ] == [old_id]
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM node_members WHERE pipeline_name='p' AND node_name='documents' "
-        "AND state!='stale' AND item_id!=?",
-        (old_id,),
-    ).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM node_members WHERE pipeline_name='p' AND node_name='documents' "
+            "AND state!='stale' AND item_id!=?",
+            (old_id,),
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_each_stage_admits_new_source_generation_after_prior_terminal(tmp_path):
@@ -257,9 +262,12 @@ pipelines:
         batch_id=None,
         at=instant(0),
     )
-    assert app.conn.execute(
-        "SELECT state FROM node_members WHERE item_id=?", (old_id,)
-    ).fetchone()[0] == "terminal"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM node_members WHERE item_id=?", (old_id,)
+        ).fetchone()[0]
+        == "terminal"
+    )
 
     collect_source(app, "feed", instant(1))
     reconcile_node(app, "p", "documents", instant(1))
@@ -308,10 +316,13 @@ pipelines:
             "AND pipeline_name='p' ORDER BY id"
         )
     ] == ["succeeded", "succeeded"]
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM deliveries WHERE pipeline_name='p' AND node_name='email' "
-        "AND state='succeeded'"
-    ).fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM deliveries WHERE pipeline_name='p' AND node_name='email' "
+            "AND state='succeeded'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_ordinary_batch_drop_is_a_succeeded_empty_materialization(tmp_path):
@@ -355,14 +366,20 @@ pipelines:
         batch_id=batch_id,
         at=instant(0),
     )
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (execution_id,)
-    ).fetchone()[0] == "succeeded"
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM stage_result_items sri "
-        "JOIN stage_results sr ON sr.id=sri.result_id WHERE sr.producer_execution_id=?",
-        (execution_id,),
-    ).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (execution_id,)
+        ).fetchone()[0]
+        == "succeeded"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_result_items sri "
+            "JOIN stage_results sr ON sr.id=sri.result_id WHERE sr.producer_execution_id=?",
+            (execution_id,),
+        ).fetchone()[0]
+        == 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -372,7 +389,9 @@ pipelines:
         "schedule: 1h\n        batch: {on_schedule: true}",
     ],
 )
-def test_max_wait_and_on_schedule_freeze_only_at_persisted_due_time(tmp_path, node_policy):
+def test_max_wait_and_on_schedule_freeze_only_at_persisted_due_time(
+    tmp_path, node_policy
+):
     definition = tmp_path / "due.yml"
     definition.write_text(
         f"""
@@ -403,17 +422,24 @@ pipelines:
 def source_collect(config, checkpoint):
     count = int(config.get("count", 1))
     return SourceResult(
-        tuple(SourceRecord(f"i-{index}", {"url": f"https://example.test/{index}"}) for index in range(count)),
+        tuple(
+            SourceRecord(f"i-{index}", {"url": f"https://example.test/{index}"})
+            for index in range(count)
+        ),
         "done",
     )
 
 
 def first_binding_source(config, checkpoint):
-    return SourceResult((SourceRecord("old", {"title": "Old", "content": "Old"}),), "old-done")
+    return SourceResult(
+        (SourceRecord("old", {"title": "Old", "content": "Old"}),), "old-done"
+    )
 
 
 def second_binding_source(config, checkpoint):
-    return SourceResult((SourceRecord("new", {"title": "New", "content": "New"}),), "new-done")
+    return SourceResult(
+        (SourceRecord("new", {"title": "New", "content": "New"}),), "new-done"
+    )
 
 
 def write_binding_definition(path, source_path):
@@ -436,17 +462,27 @@ pipelines:
 def test_tick_repairs_missed_callback_and_source_binding_switch_resets_edge(tmp_path):
     definition = tmp_path / "binding.yml"
     database = tmp_path / "state.db"
-    write_binding_definition(definition, "tests.integration.test_shared_materialization.first_binding_source")
+    write_binding_definition(
+        definition, "tests.integration.test_shared_materialization.first_binding_source"
+    )
     first = open_app(definition, database)
     collect_source(first, "feed", instant(0))
     first.conn.close()
 
     replay = open_app(definition, database)
     tick(replay, instant(1))
-    assert replay.conn.execute("SELECT COUNT(*) FROM stage_results WHERE stage_name='documents'").fetchone()[0] == 1
+    assert (
+        replay.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE stage_name='documents'"
+        ).fetchone()[0]
+        == 1
+    )
     replay.conn.close()
 
-    write_binding_definition(definition, "tests.integration.test_shared_materialization.second_binding_source")
+    write_binding_definition(
+        definition,
+        "tests.integration.test_shared_materialization.second_binding_source",
+    )
     changed = open_app(definition, database)
     collect_source(changed, "feed", instant(2))
     reconcile(changed, "p", "documents", instant(2))
@@ -472,7 +508,11 @@ class BarrierHttp:
             self.started[url].set()
             if not self.release[url].wait(timeout=5):
                 raise RuntimeError("test barrier was not released")
-        return f"<html><body><article>{url} " + ("shared materialized content " * 8) + "</article></body></html>"
+        return (
+            f"<html><body><article>{url} "
+            + ("shared materialized content " * 8)
+            + "</article></body></html>"
+        )
 
 
 class VersionedHttp:
@@ -481,7 +521,11 @@ class VersionedHttp:
 
     def get(self, url):
         self.calls += 1
-        return f"<html><body><article>{url}-version-{self.calls} " + ("versioned shared content " * 8) + "</article></body></html>"
+        return (
+            f"<html><body><article>{url}-version-{self.calls} "
+            + ("versioned shared content " * 8)
+            + "</article></body></html>"
+        )
 
 
 class VersionedLLM:
@@ -544,19 +588,38 @@ def test_shared_owner_waiter_survives_restart_and_waiter_uses_cached_result(tmp_
     worker = Thread(target=tick, args=(app, instant(0)))
     worker.start()
     assert http.started[url].wait(timeout=5)
-    old_id = app.conn.execute("SELECT owner_execution_id FROM materialization_claims").fetchone()[0]
-    assert app.conn.execute("SELECT COUNT(*) FROM materialization_waiters").fetchone()[0] == 1
+    old_id = app.conn.execute(
+        "SELECT owner_execution_id FROM materialization_claims"
+    ).fetchone()[0]
+    assert (
+        app.conn.execute("SELECT COUNT(*) FROM materialization_waiters").fetchone()[0]
+        == 1
+    )
     from sluice.reconcile import recover_startup
+
     recover_startup(app, instant(1))
     http.release[url].set()
     worker.join(timeout=5)
     assert not worker.is_alive()
     tick(app, instant(2))
-    assert app.conn.execute("SELECT state FROM executions WHERE id=?", (old_id,)).fetchone()[0] == "failed"
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE pipeline_name='p2' AND node_name='prepare' ORDER BY id DESC LIMIT 1"
-    ).fetchone()[0] == "cached"
-    assert app.conn.execute("SELECT COUNT(*) FROM stage_results WHERE stage_name='prepare'").fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (old_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE pipeline_name='p2' AND node_name='prepare' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+        == "cached"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE stage_name='prepare'"
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_late_completion_after_timeout_cannot_publish(tmp_path):
@@ -566,15 +629,26 @@ def test_late_completion_after_timeout_cannot_publish(tmp_path):
     worker = Thread(target=tick, args=(app, instant(0)))
     worker.start()
     assert http.started[url].wait(timeout=5)
-    old_id = app.conn.execute("SELECT owner_execution_id FROM materialization_claims").fetchone()[0]
+    old_id = app.conn.execute(
+        "SELECT owner_execution_id FROM materialization_claims"
+    ).fetchone()[0]
     tick(app, instant(1))
     http.release[url].set()
     worker.join(timeout=5)
     assert not worker.is_alive()
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM stage_results WHERE producer_execution_id=?", (old_id,)
-    ).fetchone()[0] == 0
-    assert app.conn.execute("SELECT COUNT(*) FROM executions WHERE retry_parent_id=?", (old_id,)).fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE producer_execution_id=?",
+            (old_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE retry_parent_id=?", (old_id,)
+        ).fetchone()[0]
+        == 1
+    )
 
 
 def test_each_completion_publishes_only_longest_resolved_prefix(tmp_path):
@@ -585,12 +659,20 @@ def test_each_completion_publishes_only_longest_resolved_prefix(tmp_path):
     members = app.conn.execute(
         "SELECT item_id,generation FROM node_members WHERE pipeline_name='p1' AND node_name='prepare' ORDER BY ordinal"
     ).fetchall()
-    workers = [Thread(
-        target=execute_stage,
-        args=(app, "prepare", StageEnvelope((item_id,))),
-        kwargs={"pipeline_name": "p1", "node_name": "prepare", "generation": generation,
-                "batch_id": None, "at": instant(0)},
-    ) for item_id, generation in members]
+    workers = [
+        Thread(
+            target=execute_stage,
+            args=(app, "prepare", StageEnvelope((item_id,))),
+            kwargs={
+                "pipeline_name": "p1",
+                "node_name": "prepare",
+                "generation": generation,
+                "batch_id": None,
+                "at": instant(0),
+            },
+        )
+        for item_id, generation in members
+    ]
     for worker in workers:
         worker.start()
     assert http.started[first_url].wait(timeout=5)
@@ -603,22 +685,33 @@ def test_each_completion_publishes_only_longest_resolved_prefix(tmp_path):
         "ON ns.pipeline_name=nb.pipeline_name AND ns.node_name=nb.node_name AND ns.binding_digest=nb.binding_digest "
         "WHERE nb.pipeline_name='p1' AND nb.node_name='prepare'"
     ).fetchone()[0]
-    assert app.conn.execute("SELECT COUNT(*) FROM publication_members WHERE publication_id=?", (current,)).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM publication_members WHERE publication_id=?",
+            (current,),
+        ).fetchone()[0]
+        == 0
+    )
     http.release[first_url].set()
     workers[0].join(timeout=5)
     assert not workers[0].is_alive()
-    logical_ids = [row[0] for row in app.conn.execute(
-        "SELECT i.logical_id FROM node_current_bindings nb JOIN node_state ns "
-        "ON ns.pipeline_name=nb.pipeline_name AND ns.node_name=nb.node_name AND ns.binding_digest=nb.binding_digest "
-        "JOIN publication_members pm ON pm.publication_id=ns.current_publication_id "
-        "JOIN items i ON i.id=pm.item_id WHERE nb.pipeline_name='p1' AND nb.node_name='prepare' ORDER BY pm.ordinal"
-    )]
+    logical_ids = [
+        row[0]
+        for row in app.conn.execute(
+            "SELECT i.logical_id FROM node_current_bindings nb JOIN node_state ns "
+            "ON ns.pipeline_name=nb.pipeline_name AND ns.node_name=nb.node_name AND ns.binding_digest=nb.binding_digest "
+            "JOIN publication_members pm ON pm.publication_id=ns.current_publication_id "
+            "JOIN items i ON i.id=pm.item_id WHERE nb.pipeline_name='p1' AND nb.node_name='prepare' ORDER BY pm.ordinal"
+        )
+    ]
     assert len(logical_ids) == 2
 
 
 def sequential_source(config, checkpoint):
     ordinal = 1 if checkpoint is None else 2
-    return SourceResult((SourceRecord(f"item-{ordinal}", {"title": f"Item {ordinal}"}),), str(ordinal))
+    return SourceResult(
+        (SourceRecord(f"item-{ordinal}", {"title": f"Item {ordinal}"}),), str(ordinal)
+    )
 
 
 def test_tick_resets_max_wait_from_first_post_freeze_arrival(tmp_path):
@@ -638,9 +731,11 @@ pipelines:
         encoding="utf-8",
     )
     app = open_app(definition, tmp_path / "state.db")
-    collect_source(app, "feed", instant(0)); reconcile_node(app, "p", "summary", instant(0))
+    collect_source(app, "feed", instant(0))
+    reconcile_node(app, "p", "summary", instant(0))
     tick(app, instant(3600))
-    collect_source(app, "feed", instant(3700)); reconcile_node(app, "p", "summary", instant(3700))
+    collect_source(app, "feed", instant(3700))
+    reconcile_node(app, "p", "summary", instant(3700))
     tick(app, instant(7299))
     assert app.conn.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 1
     tick(app, instant(7300))
@@ -665,11 +760,27 @@ pipelines:
         encoding="utf-8",
     )
     app = open_app(definition, tmp_path / "state.db")
-    tick(app, instant(0)); tick(app, instant(600))
-    assert app.conn.execute("SELECT COUNT(*) FROM executions WHERE kind='source'").fetchone()[0] == 2
-    assert app.conn.execute("SELECT COUNT(*) FROM executions WHERE kind='stage'").fetchone()[0] == 0
+    tick(app, instant(0))
+    tick(app, instant(600))
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE kind='source'"
+        ).fetchone()[0]
+        == 2
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE kind='stage'"
+        ).fetchone()[0]
+        == 0
+    )
     tick(app, instant(3600))
-    assert app.conn.execute("SELECT COUNT(*) FROM executions WHERE kind='stage'").fetchone()[0] >= 1
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE kind='stage'"
+        ).fetchone()[0]
+        >= 1
+    )
 
 
 def test_stage_attachment_keeps_computed_lookup_key_on_node_member(tmp_path):
@@ -735,12 +846,17 @@ def test_execute_stage_waiter_returns_its_cached_terminal_attempt(tmp_path):
     waiter.join(timeout=5)
     assert not owner.is_alive() and not waiter.is_alive()
     assert results["waiter"] != results["owner"]
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (results["waiter"],)
-    ).fetchone()[0] == "cached"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (results["waiter"],)
+        ).fetchone()[0]
+        == "cached"
+    )
 
 
-def test_forced_rebuild_heals_all_shared_terminal_consumers_without_rerunning_tasks(tmp_path):
+def test_forced_rebuild_heals_all_shared_terminal_consumers_without_rerunning_tasks(
+    tmp_path,
+):
     http = VersionedHttp()
     app = shared_app(tmp_path, http)
     reconcile_node(app, "p1", "prepare", instant(0))
@@ -798,12 +914,17 @@ def test_forced_rebuild_heals_all_shared_terminal_consumers_without_rerunning_ta
         )
     ]
     assert members == [(current[1], current[0]), (current[1], current[0])]
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (waiter_id,)
-    ).fetchone()[0] == "cached"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (waiter_id,)
+        ).fetchone()[0]
+        == "cached"
+    )
 
 
-def test_batch_healing_preserves_empty_dedup_history_when_live_history_changes(tmp_path):
+def test_batch_healing_preserves_empty_dedup_history_when_live_history_changes(
+    tmp_path,
+):
     llm = VersionedLLM()
     definition = tmp_path / "dedup-heal.yml"
     definition.write_text(
@@ -883,13 +1004,19 @@ pipelines:
     first_result = app.conn.execute(
         "SELECT result_id FROM executions WHERE id=?", (first_owner,)
     ).fetchone()[0]
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM execution_inputs WHERE execution_id=? AND slot='history'",
-        (first_owner,),
-    ).fetchone()[0] == 0
-    assert app.conn.execute(
-        "SELECT history_persisted FROM executions WHERE id=?", (first_owner,)
-    ).fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM execution_inputs WHERE execution_id=? AND slot='history'",
+            (first_owner,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        app.conn.execute(
+            "SELECT history_persisted FROM executions WHERE id=?", (first_owner,)
+        ).fetchone()[0]
+        == 1
+    )
 
     collect_source(app, "feed", instant(-1))
     reconcile_node(app, "p1", "summary", instant(1))
@@ -960,13 +1087,19 @@ pipelines:
         "SELECT id FROM executions WHERE pipeline_name='p2' AND id>? ORDER BY id DESC LIMIT 1",
         (rebuilt.execution_id,),
     ).fetchone()[0]
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM execution_inputs WHERE execution_id=? AND slot='history'",
-        (healed_execution,),
-    ).fetchone()[0] == 0
-    assert app.conn.execute(
-        "SELECT history_persisted FROM executions WHERE id=?", (healed_execution,)
-    ).fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM execution_inputs WHERE execution_id=? AND slot='history'",
+            (healed_execution,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        app.conn.execute(
+            "SELECT history_persisted FROM executions WHERE id=?", (healed_execution,)
+        ).fetchone()[0]
+        == 1
+    )
     rebuilt_sequence = app.conn.execute(
         "SELECT sequence FROM stage_results WHERE id=?", (rebuilt_result,)
     ).fetchone()[0]
@@ -1042,9 +1175,12 @@ def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(tmp
             break
         time.sleep(0.001)
     with app.conn.transaction_lock:
-        assert app.conn.execute(
-            "SELECT COUNT(*) FROM materialization_waiters WHERE force=0"
-        ).fetchone()[0] == 1
+        assert (
+            app.conn.execute(
+                "SELECT COUNT(*) FROM materialization_waiters WHERE force=0"
+            ).fetchone()[0]
+            == 1
+        )
 
     rebuild = rebuild_stage(app, owner_id, instant(1))
     assert rebuild.execution_id is None
@@ -1068,12 +1204,18 @@ def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(tmp
     _execute_claimed_stage(app, forced_id, instant(2))
     waiter.join(timeout=5)
     assert not waiter.is_alive()
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (forced_id,)
-    ).fetchone()[0] == "succeeded"
-    assert app.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (results["waiter"],)
-    ).fetchone()[0] == "cached"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (forced_id,)
+        ).fetchone()[0]
+        == "succeeded"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (results["waiter"],)
+        ).fetchone()[0]
+        == "cached"
+    )
 
 
 def test_stale_waiter_after_failed_owner_terminates_deterministically(tmp_path):
@@ -1162,9 +1304,13 @@ def test_reconcile_marks_omitted_claimed_member_stale_and_rejects_late_result(tm
         "ON ns.pipeline_name=nb.pipeline_name AND ns.node_name=nb.node_name AND ns.binding_digest=nb.binding_digest "
         "WHERE nb.pipeline_name='p1' AND nb.node_name='prepare'"
     ).fetchone()[0]
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM publication_members WHERE publication_id=?", (current,)
-    ).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM publication_members WHERE publication_id=?",
+            (current,),
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_targeted_reconcile_does_not_timeout_unrelated_running_owner(tmp_path):
@@ -1206,7 +1352,10 @@ def test_targeted_reconcile_does_not_timeout_unrelated_running_owner(tmp_path):
 
 def ordered_source(config, checkpoint):
     return SourceResult(
-        (SourceRecord("a", {"title": "A", "content": "A"}), SourceRecord("b", {"title": "B", "content": "B"})),
+        (
+            SourceRecord("a", {"title": "A", "content": "A"}),
+            SourceRecord("b", {"title": "B", "content": "B"}),
+        ),
         "done",
     )
 
@@ -1234,34 +1383,53 @@ pipelines:
     )
 
 
-def test_reorder_duplicate_fallback_and_snapshot_omission_preserve_current_union(tmp_path):
+def test_reorder_duplicate_fallback_and_snapshot_omission_preserve_current_union(
+    tmp_path,
+):
     definition = tmp_path / "union.yml"
     write_union_definition(definition, "asc")
     first = open_app(definition, tmp_path / "state.db")
     tick(first, instant(0))
-    assert [row[0] for row in first.conn.execute(
-        "SELECT i.logical_id FROM node_members nm JOIN items i ON i.id=nm.item_id "
-        "WHERE nm.pipeline_name='p' AND nm.node_name='documents' AND nm.state!='stale' ORDER BY nm.ordinal"
-    )] == ["a", "b"]
-    right_results = first.conn.execute("SELECT COUNT(*) FROM stage_results WHERE stage_name='desc'").fetchone()[0]
+    assert [
+        row[0]
+        for row in first.conn.execute(
+            "SELECT i.logical_id FROM node_members nm JOIN items i ON i.id=nm.item_id "
+            "WHERE nm.pipeline_name='p' AND nm.node_name='documents' AND nm.state!='stale' ORDER BY nm.ordinal"
+        )
+    ] == ["a", "b"]
+    right_results = first.conn.execute(
+        "SELECT COUNT(*) FROM stage_results WHERE stage_name='desc'"
+    ).fetchone()[0]
     first.conn.close()
 
     write_union_definition(definition, "empty")
     second = open_app(definition, tmp_path / "state.db")
     tick(second, instant(1))
-    assert [row[0] for row in second.conn.execute(
-        "SELECT i.logical_id FROM node_members nm JOIN items i ON i.id=nm.item_id "
-        "WHERE nm.pipeline_name='p' AND nm.node_name='documents' AND nm.state!='stale' ORDER BY nm.ordinal"
-    )] == ["b", "a"]
+    assert [
+        row[0]
+        for row in second.conn.execute(
+            "SELECT i.logical_id FROM node_members nm JOIN items i ON i.id=nm.item_id "
+            "WHERE nm.pipeline_name='p' AND nm.node_name='documents' AND nm.state!='stale' ORDER BY nm.ordinal"
+        )
+    ] == ["b", "a"]
     empty_publication = second.conn.execute(
         "SELECT ns.current_publication_id FROM node_current_bindings nb JOIN node_state ns "
         "ON ns.pipeline_name=nb.pipeline_name AND ns.node_name=nb.node_name AND ns.binding_digest=nb.binding_digest "
         "WHERE nb.pipeline_name='p' AND nb.node_name='left'"
     ).fetchone()[0]
-    assert second.conn.execute(
-        "SELECT COUNT(*) FROM publication_members WHERE publication_id=?", (empty_publication,)
-    ).fetchone()[0] == 0
-    assert second.conn.execute("SELECT COUNT(*) FROM stage_results WHERE stage_name='desc'").fetchone()[0] == right_results
+    assert (
+        second.conn.execute(
+            "SELECT COUNT(*) FROM publication_members WHERE publication_id=?",
+            (empty_publication,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        second.conn.execute(
+            "SELECT COUNT(*) FROM stage_results WHERE stage_name='desc'"
+        ).fetchone()[0]
+        == right_results
+    )
 
 
 def test_admission_reorder_publishes_snapshot_without_new_stage_completion(tmp_path):
@@ -1274,10 +1442,13 @@ def test_admission_reorder_publishes_snapshot_without_new_stage_completion(tmp_p
         "ON ns.pipeline_name=nb.pipeline_name AND ns.node_name=nb.node_name AND ns.binding_digest=nb.binding_digest "
         "WHERE nb.pipeline_name='p' AND nb.node_name='documents'"
     ).fetchone()[0]
-    members_before = [row[0] for row in first.conn.execute(
-        "SELECT item_id FROM publication_members WHERE publication_id=? ORDER BY ordinal",
-        (current_before,),
-    )]
+    members_before = [
+        row[0]
+        for row in first.conn.execute(
+            "SELECT item_id FROM publication_members WHERE publication_id=? ORDER BY ordinal",
+            (current_before,),
+        )
+    ]
     first.conn.close()
 
     write_union_definition(definition, "empty")
@@ -1296,14 +1467,20 @@ def test_admission_reorder_publishes_snapshot_without_new_stage_completion(tmp_p
         "WHERE nb.pipeline_name='p' AND nb.node_name='documents'"
     ).fetchone()[0]
     assert current_after != current_before
-    members_after = [row[0] for row in second.conn.execute(
-        "SELECT pm.item_id FROM publication_members pm "
-        "WHERE pm.publication_id=? ORDER BY pm.ordinal", (current_after,)
-    )]
+    members_after = [
+        row[0]
+        for row in second.conn.execute(
+            "SELECT pm.item_id FROM publication_members pm "
+            "WHERE pm.publication_id=? ORDER BY pm.ordinal",
+            (current_after,),
+        )
+    ]
     assert members_after == list(reversed(members_before))
 
 
-def test_targeted_reconcile_activates_changed_source_binding_without_collection(tmp_path):
+def test_targeted_reconcile_activates_changed_source_binding_without_collection(
+    tmp_path,
+):
     definition = tmp_path / "binding.yml"
     database = tmp_path / "state.db"
     write_binding_definition(
@@ -1316,10 +1493,13 @@ def test_targeted_reconcile_activates_changed_source_binding_without_collection(
     old_binding = first.conn.execute(
         "SELECT binding_digest FROM source_current_bindings WHERE source_name='feed'"
     ).fetchone()[0]
-    assert first.conn.execute(
-        "SELECT COUNT(*) FROM publications WHERE producer_key='feed' AND binding_digest=?",
-        (old_binding,),
-    ).fetchone()[0] >= 1
+    assert (
+        first.conn.execute(
+            "SELECT COUNT(*) FROM publications WHERE producer_key='feed' AND binding_digest=?",
+            (old_binding,),
+        ).fetchone()[0]
+        >= 1
+    )
     first.conn.close()
 
     write_binding_definition(
@@ -1332,14 +1512,20 @@ def test_targeted_reconcile_activates_changed_source_binding_without_collection(
         "SELECT binding_digest FROM source_current_bindings WHERE source_name='feed'"
     ).fetchone()[0]
     assert new_binding != old_binding
-    assert changed.conn.execute(
-        "SELECT COUNT(*) FROM source_state WHERE source_name='feed' AND binding_digest=?",
-        (new_binding,),
-    ).fetchone()[0] == 1
-    assert changed.conn.execute(
-        "SELECT COUNT(*) FROM publications WHERE producer_key='feed' AND binding_digest=?",
-        (old_binding,),
-    ).fetchone()[0] >= 1
+    assert (
+        changed.conn.execute(
+            "SELECT COUNT(*) FROM source_state WHERE source_name='feed' AND binding_digest=?",
+            (new_binding,),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        changed.conn.execute(
+            "SELECT COUNT(*) FROM publications WHERE producer_key='feed' AND binding_digest=?",
+            (old_binding,),
+        ).fetchone()[0]
+        >= 1
+    )
     new_publications = changed.conn.execute(
         "SELECT revision,kind,digest FROM publications WHERE producer_key='feed' "
         "AND binding_digest=? ORDER BY revision",
@@ -1354,14 +1540,20 @@ def test_targeted_reconcile_activates_changed_source_binding_without_collection(
     assert edge[0] == new_binding
     assert edge[1] == 0
     assert edge[2] == new_publications[0][2]
-    assert changed.conn.execute(
-        "SELECT COUNT(*) FROM node_edge_members WHERE pipeline_name='p' "
-        "AND node_name='documents' AND edge_index=0 AND active=1"
-    ).fetchone()[0] == 0
-    assert changed.conn.execute(
-        "SELECT COUNT(*) FROM node_members WHERE pipeline_name='p' AND node_name='documents' "
-        "AND state!='stale'"
-    ).fetchone()[0] == 0
+    assert (
+        changed.conn.execute(
+            "SELECT COUNT(*) FROM node_edge_members WHERE pipeline_name='p' "
+            "AND node_name='documents' AND edge_index=0 AND active=1"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        changed.conn.execute(
+            "SELECT COUNT(*) FROM node_members WHERE pipeline_name='p' AND node_name='documents' "
+            "AND state!='stale'"
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_targeted_source_activation_is_due_immediately_and_advances_schedule(tmp_path):
@@ -1395,10 +1587,16 @@ pipelines:
     ).fetchone()[0]
     assert due == "2026-08-14T00:00:00Z"
     tick(app, instant(1))
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM executions WHERE kind='source' AND state='succeeded'"
-    ).fetchone()[0] == 1
-    assert app.conn.execute(
-        "SELECT next_due_at FROM source_state WHERE source_name='feed' AND binding_digest=?",
-        (binding,),
-    ).fetchone()[0] == "2026-08-14T01:00:01Z"
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE kind='source' AND state='succeeded'"
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        app.conn.execute(
+            "SELECT next_due_at FROM source_state WHERE source_name='feed' AND binding_digest=?",
+            (binding,),
+        ).fetchone()[0]
+        == "2026-08-14T01:00:01Z"
+    )

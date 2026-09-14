@@ -7,8 +7,6 @@ credentials remain in process memory and are never part of those keys.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, MutableMapping
-from dataclasses import dataclass, field
 import importlib
 import inspect
 import ipaddress
@@ -17,6 +15,8 @@ import os
 import re
 import threading
 import time
+from collections.abc import Iterable, Mapping, MutableMapping
+from dataclasses import dataclass, field
 from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
@@ -28,10 +28,10 @@ from .extractors import (
     validate_extractor_runtime,
 )
 from .http import (
-    DirectResponse,
     MAX_BODY_BYTES,
-    _PooledPinnedHTTPXClient,
+    DirectResponse,
     _check_execution_probe,
+    _PooledPinnedHTTPXClient,
 )
 from .providers import (
     CORE_PROVIDER_BUILDERS,
@@ -41,7 +41,6 @@ from .providers import (
     build_provider,
 )
 from .url import NormalizedURL
-
 
 _ENV_REFERENCE = re.compile(r"^env:[A-Z_][A-Z0-9_]*$")
 _LOG = logging.getLogger("sluice.web.registry")
@@ -71,7 +70,9 @@ def _provider_identity(binding: ProviderBinding) -> str:
     # ProviderBinding intentionally keeps identity projection on the enclosing
     # WebBinding contract.  Reuse that canonical implementation for catalog
     # deduplication instead of hashing repr() or resolved values.
-    projection = WebBinding(fetch_chain=(binding,), fetch_chain_name="catalog").semantic_projection()
+    projection = WebBinding(
+        fetch_chain=(binding,), fetch_chain_name="catalog"
+    ).semantic_projection()
     return _canonical_json(projection["fetch_chain"])
 
 
@@ -88,11 +89,22 @@ def _resolve_secret(value: Any, *, field: str, allow_missing: bool = False) -> A
             raise DefinitionError(f"missing environment secret {name}")
         return resolved
     if isinstance(value, Mapping):
-        return {str(key): _resolve_secret(item, field=f"{field}.{key}", allow_missing=allow_missing) for key, item in value.items()}
+        return {
+            str(key): _resolve_secret(
+                item, field=f"{field}.{key}", allow_missing=allow_missing
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, tuple):
-        return tuple(_resolve_secret(item, field=field, allow_missing=allow_missing) for item in value)
+        return tuple(
+            _resolve_secret(item, field=field, allow_missing=allow_missing)
+            for item in value
+        )
     if isinstance(value, list):
-        return [_resolve_secret(item, field=field, allow_missing=allow_missing) for item in value]
+        return [
+            _resolve_secret(item, field=field, allow_missing=allow_missing)
+            for item in value
+        ]
     return value
 
 
@@ -147,8 +159,7 @@ def resolve_provider_binding(
             allow_missing=allow_missing_secrets,
         )
         if "api_key" in resolved_options and any(
-            str(name).casefold() == "authorization"
-            for name in resolved_service_headers
+            str(name).casefold() == "authorization" for name in resolved_service_headers
         ):
             raise DefinitionError(
                 f"provider {binding.name!r} cannot combine api_key with Authorization"
@@ -166,9 +177,21 @@ def resolve_provider_binding(
             cooldown=binding.cooldown,
             capabilities=binding.capabilities,
             service_headers=resolved_service_headers,
-            target_headers=_resolve_secret(binding.target_headers, field=f"provider {binding.name}.target_headers", allow_missing=allow_missing_secrets),
-            cookies=_resolve_secret(binding.cookies, field=f"provider {binding.name}.cookies", allow_missing=allow_missing_secrets),
-            proxy=_resolve_secret(binding.proxy, field=f"provider {binding.name}.proxy", allow_missing=allow_missing_secrets),
+            target_headers=_resolve_secret(
+                binding.target_headers,
+                field=f"provider {binding.name}.target_headers",
+                allow_missing=allow_missing_secrets,
+            ),
+            cookies=_resolve_secret(
+                binding.cookies,
+                field=f"provider {binding.name}.cookies",
+                allow_missing=allow_missing_secrets,
+            ),
+            proxy=_resolve_secret(
+                binding.proxy,
+                field=f"provider {binding.name}.proxy",
+                allow_missing=allow_missing_secrets,
+            ),
             target_policy=binding.target_policy,
             timeout_seconds=binding.timeout_seconds,
             only_main_content=binding.only_main_content,
@@ -253,9 +276,7 @@ class _ThreadLocalCurlSession:
         self._module = module
         self._provider_name = provider_name
         self._impersonate = impersonate
-        self._http_version = (
-            None if http_version == "auto" else f"v{http_version}"
-        )
+        self._http_version = None if http_version == "auto" else f"v{http_version}"
         curl_options = getattr(curl_module, "CurlOpt", None)
         self._resolve_option = getattr(curl_options, "RESOLVE", None)
         self._fresh_connect_option = getattr(curl_options, "FRESH_CONNECT", None)
@@ -324,8 +345,7 @@ class _ThreadLocalCurlSession:
         except (TypeError, ValueError):
             raise self._invalid_runtime() from None
         accepts_kwargs = any(
-            parameter.kind is inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
         )
         names = {parameter.name for parameter in parameters}
         required = {
@@ -359,21 +379,18 @@ class _ThreadLocalCurlSession:
     def _web_error(reason: str) -> WebSafetyError:
         error = WebSafetyError(reason)
         try:
-            setattr(error, "reason", reason)
+            error.reason = reason
         except Exception:
             pass
         return error
 
     @staticmethod
-    def _resolve_rule(
-        target: NormalizedURL, addresses: tuple[str, ...]
-    ) -> str | None:
+    def _resolve_rule(target: NormalizedURL, addresses: tuple[str, ...]) -> str | None:
         try:
             ipaddress.ip_address(target.host)
         except ValueError:
             formatted = [
-                f"[{address}]" if ":" in address else address
-                for address in addresses
+                f"[{address}]" if ":" in address else address for address in addresses
             ]
             if not formatted:
                 raise _ThreadLocalCurlSession._web_error("ssrf_blocked")
@@ -488,9 +505,7 @@ class _ThreadLocalCurlSession:
         except BaseException:
             if overflowed:
                 raise self._web_error("body_too_large") from None
-            if timed_out or (
-                deadline is not None and time.monotonic() >= deadline
-            ):
+            if timed_out or (deadline is not None and time.monotonic() >= deadline):
                 raise self._web_error("timeout") from None
             raise self._web_error("provider_error") from None
         check_deadline()
@@ -569,7 +584,9 @@ class WebRuntimeCatalog:
             )
             if binding_mapping:
                 bindings = tuple(candidate.values())
-            elif hasattr(candidate, "http_client") or (isinstance(candidate, Mapping) and not binding_mapping):
+            elif hasattr(candidate, "http_client") or (
+                isinstance(candidate, Mapping) and not binding_mapping
+            ):
                 runtime = candidate
                 bindings = ()
         if runtime is not None and http_client is None:
@@ -588,7 +605,11 @@ class WebRuntimeCatalog:
         self._warnings: list[str] = []
         self._logger = logger or _LOG
         self._resolve_secrets = bool(resolve_secrets)
-        self._runtime = runtime if runtime is not None else SimpleNamespace(http_client=http_client, catalog=self)
+        self._runtime = (
+            runtime
+            if runtime is not None
+            else SimpleNamespace(http_client=http_client, catalog=self)
+        )
         self._web_content_client = web_content_client
         try:
             for binding in bindings:
@@ -608,8 +629,14 @@ class WebRuntimeCatalog:
         http_client: object | None = None,
         web_content_client: object | None = None,
         resolve_secrets: bool = True,
-    ) -> "WebRuntimeCatalog":
-        return cls(bindings, runtime, http_client=http_client, web_content_client=web_content_client, resolve_secrets=resolve_secrets)
+    ) -> WebRuntimeCatalog:
+        return cls(
+            bindings,
+            runtime,
+            http_client=http_client,
+            web_content_client=web_content_client,
+            resolve_secrets=resolve_secrets,
+        )
 
     @classmethod
     def from_definition(
@@ -618,7 +645,7 @@ class WebRuntimeCatalog:
         *,
         http_client: object | None = None,
         web_content_client: object | None = None,
-    ) -> "WebRuntimeCatalog":
+    ) -> WebRuntimeCatalog:
         bindings: list[ProviderBinding] = []
         extractor_bindings: list[ExtractorBinding] = []
         seen: set[str] = set()
@@ -650,7 +677,9 @@ class WebRuntimeCatalog:
                         add(provider)
                     for extractor in web.extractors:
                         extractor_bindings.append(extractor)
-        catalog = cls(bindings, http_client=http_client, web_content_client=web_content_client)
+        catalog = cls(
+            bindings, http_client=http_client, web_content_client=web_content_client
+        )
         try:
             for extractor in extractor_bindings:
                 catalog.extractor(extractor)
@@ -659,14 +688,22 @@ class WebRuntimeCatalog:
             raise
         return catalog
 
-    def register_provider(self, binding: ProviderBinding, *, allow_missing_secrets: bool | None = None) -> WebProvider:
+    def register_provider(
+        self, binding: ProviderBinding, *, allow_missing_secrets: bool | None = None
+    ) -> WebProvider:
         if not isinstance(binding, ProviderBinding):
             raise DefinitionError("provider binding must be a ProviderBinding")
         with self._lock:
             if self._closed or self._closing:
                 raise DefinitionError("web runtime catalog is closed")
-        missing = self._resolve_secrets is False if allow_missing_secrets is None else allow_missing_secrets
-        runtime_binding = resolve_provider_binding(binding, allow_missing_secrets=missing)
+        missing = (
+            self._resolve_secrets is False
+            if allow_missing_secrets is None
+            else allow_missing_secrets
+        )
+        runtime_binding = resolve_provider_binding(
+            binding, allow_missing_secrets=missing
+        )
         key = _binding_runtime_key(binding)
         with self._lock:
             if self._closed or self._closing:
@@ -689,16 +726,19 @@ class WebRuntimeCatalog:
             provider = build_provider(runtime_binding, provider_runtime)
             self._providers[key] = provider
             self._provider_bindings[key] = binding
-            self._limiters[key] = ProviderLimiter(binding.concurrency, binding.cooldown.total_seconds())
+            self._limiters[key] = ProviderLimiter(
+                binding.concurrency, binding.cooldown.total_seconds()
+            )
             if binding.type == "startup_http":
                 warning = f"trusted startup_http provider configured: {binding.name}"
                 if warning not in self._warnings:
                     self._warnings.append(warning)
                     self._logger.warning(warning)
-            if (
-                binding.type in {"httpx", "curl_cffi", "trafilatura"}
-                and _direct_remote_dns_proxy(runtime_binding)
-            ):
+            if binding.type in {
+                "httpx",
+                "curl_cffi",
+                "trafilatura",
+            } and _direct_remote_dns_proxy(runtime_binding):
                 warning = (
                     f"{binding.type} provider {binding.name} uses a remote-DNS proxy; "
                     "target DNS/peer pinning cannot be verified"
@@ -880,7 +920,10 @@ class WebRuntimeCatalog:
         # Reconstruct the immutable binding so malformed nested values are
         # rejected while unresolved env references remain untouched.
         resolve_provider_binding(binding, allow_missing_secrets=True)
-        if binding.type == "startup_http" and binding.options.get("trusted") is not True:
+        if (
+            binding.type == "startup_http"
+            and binding.options.get("trusted") is not True
+        ):
             raise DefinitionError(
                 f"startup_http provider {binding.name!r} requires trusted: true"
             )
@@ -905,7 +948,18 @@ class WebRuntimeCatalog:
         if not isinstance(binding, ExtractorBinding):
             raise DefinitionError("extractor binding must be an ExtractorBinding")
         validate_extractor_runtime(binding)
-        key = (binding.name, _canonical_json(binding.semantic_projection() if hasattr(binding, "semantic_projection") else {"name": binding.name, "type": binding.type, "options": binding.options}))
+        key = (
+            binding.name,
+            _canonical_json(
+                binding.semantic_projection()
+                if hasattr(binding, "semantic_projection")
+                else {
+                    "name": binding.name,
+                    "type": binding.type,
+                    "options": binding.options,
+                }
+            ),
+        )
         with self._lock:
             if self._closed or self._closing:
                 raise DefinitionError("web runtime catalog is closed")

@@ -17,10 +17,10 @@ def _write(tmp_path, text: str):
     return path
 
 
-def _base_web(*, chain: tuple[str, ...] = ("http",), min_chars: int = 500, cache: int = 1) -> str:
-    providers = "\n".join(
-        f"        - {name}" for name in chain
-    )
+def _base_web(
+    *, chain: tuple[str, ...] = ("http",), min_chars: int = 500, cache: int = 1
+) -> str:
+    providers = "\n".join(f"        - {name}" for name in chain)
     provider_rows = "\n".join(
         f"    {name}:\n      type: startup_http\n      trusted: true"
         for name in dict.fromkeys(chain)
@@ -78,7 +78,9 @@ stages:
         load_definition(path)
 
 
-def test_expansion_materializes_defaults_without_resolving_secret(monkeypatch, tmp_path):
+def test_expansion_materializes_defaults_without_resolving_secret(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("TEST_KEY", "actual-secret")
     path = _write(
         tmp_path,
@@ -202,7 +204,9 @@ def test_malformed_provider_urls_raise_definition_error(tmp_path, field):
     if field == "base_url":
         provider = "      type: crawl4ai\n      base_url: 'http://['"
     else:
-        provider = "      type: startup_http\n      trusted: true\n      proxy: 'http://['"
+        provider = (
+            "      type: startup_http\n      trusted: true\n      proxy: 'http://['"
+        )
     path = _write(
         tmp_path,
         f"""version: 1
@@ -260,10 +264,20 @@ web:
 
 def test_provider_order_and_minimum_change_stage_key(tmp_path):
     left = load_definition(_write(tmp_path, _base_web(chain=("a", "b"), min_chars=100)))
-    reordered = load_definition(_write(tmp_path, _base_web(chain=("b", "a"), min_chars=100)))
-    threshold = load_definition(_write(tmp_path, _base_web(chain=("a", "b"), min_chars=101)))
-    assert left.stages["article"].canonical_config_json != reordered.stages["article"].canonical_config_json
-    assert left.stages["article"].canonical_config_json != threshold.stages["article"].canonical_config_json
+    reordered = load_definition(
+        _write(tmp_path, _base_web(chain=("b", "a"), min_chars=100))
+    )
+    threshold = load_definition(
+        _write(tmp_path, _base_web(chain=("a", "b"), min_chars=101))
+    )
+    assert (
+        left.stages["article"].canonical_config_json
+        != reordered.stages["article"].canonical_config_json
+    )
+    assert (
+        left.stages["article"].canonical_config_json
+        != threshold.stages["article"].canonical_config_json
+    )
 
 
 def test_web_source_cache_version_participates_in_semantic_binding(tmp_path):
@@ -273,7 +287,10 @@ def test_web_source_cache_version_participates_in_semantic_binding(tmp_path):
     assert second.web_binding is not None
     assert first.with_config["web_cache_version"] == 1
     assert second.with_config["web_cache_version"] == 2
-    assert first.web_binding.semantic_projection() != second.web_binding.semantic_projection()
+    assert (
+        first.web_binding.semantic_projection()
+        != second.web_binding.semantic_projection()
+    )
 
 
 @pytest.mark.parametrize(
@@ -373,10 +390,14 @@ stages:
         )
     )
     snapshot = json.loads(definition.stages["pass"].canonical_config_json)
-    assert snapshot["tasks"] == [{"use": "custom.task", "with": {"value": 1}, "web_binding": None}]
+    assert snapshot["tasks"] == [
+        {"use": "custom.task", "with": {"value": 1}, "web_binding": None}
+    ]
 
 
-def test_stage_canonical_config_keeps_env_reference_without_secret(monkeypatch, tmp_path):
+def test_stage_canonical_config_keeps_env_reference_without_secret(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("TEST_KEY", "actual-secret")
     definition = load_definition(
         _write(

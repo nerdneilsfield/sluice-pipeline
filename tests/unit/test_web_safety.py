@@ -49,11 +49,15 @@ def test_noncanonical_mixed_base_ipv4_aliases_are_rejected_before_dns(host):
 
 
 def test_url_normalization_is_idna_canonical_and_diagnostics_are_redacted():
-    target = normalize_target_url("HTTPS://Bücher.Example.:443/a%20b?q=one&token=secret#frag")
+    target = normalize_target_url(
+        "HTTPS://Bücher.Example.:443/a%20b?q=one&token=secret#frag"
+    )
     assert target.host == "xn--bcher-kva.example"
     assert target.port == 443
     assert str(target).startswith("https://xn--bcher-kva.example/a%20b?")
-    diagnostic = redact_url("https://user:password@example.test/a?x=1&token=secret#frag")
+    diagnostic = redact_url(
+        "https://user:password@example.test/a?x=1&token=secret#frag"
+    )
     assert "password" not in diagnostic and "secret" not in diagnostic
     assert "x=" in diagnostic and "token=" in diagnostic
 
@@ -217,7 +221,9 @@ def test_manual_get_limits_redirects(monkeypatch):
         bounded_manual_get(_request(), binding, transport=transport)
 
 
-def test_cross_host_redirect_drops_target_authorization_and_cookie_before_send(monkeypatch):
+def test_cross_host_redirect_drops_target_authorization_and_cookie_before_send(
+    monkeypatch,
+):
     transport = _FakeTransport(
         [
             DirectResponse(
@@ -257,7 +263,9 @@ def test_cross_host_redirect_drops_target_authorization_and_cookie_before_send(m
     assert transport.requests[1][1]["X-Trace"] == "keep"
 
 
-def test_cross_host_redirect_drops_sensitive_header_name_fragments_before_send(monkeypatch):
+def test_cross_host_redirect_drops_sensitive_header_name_fragments_before_send(
+    monkeypatch,
+):
     transport = _FakeTransport(
         [
             DirectResponse(
@@ -323,10 +331,16 @@ def test_cross_host_redirect_to_service_endpoint_is_rejected_before_send(monkeyp
     assert transport.calls == 1
 
 
-def test_service_get_rejects_target_protected_headers_and_allows_private_http(monkeypatch):
+def test_service_get_rejects_target_protected_headers_and_allows_private_http(
+    monkeypatch,
+):
     monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["127.0.0.1"])
     transport = _FakeTransport(
-        [DirectResponse(status_code=200, headers={"content-type": "text/plain"}, body=b"ok")]
+        [
+            DirectResponse(
+                status_code=200, headers={"content-type": "text/plain"}, body=b"ok"
+            )
+        ]
     )
     binding = ProviderBinding("local", "crawl4ai", base_url="http://localhost:8080")
     with pytest.raises(WebSafetyError, match="forbidden_header"):
@@ -336,9 +350,12 @@ def test_service_get_rejects_target_protected_headers_and_allows_private_http(mo
             headers={"Host": "internal.test"},
             transport=transport,
         )
-    assert bounded_service_get(
-        "http://localhost:8080/v1", binding, transport=transport
-    ).body == b"ok"
+    assert (
+        bounded_service_get(
+            "http://localhost:8080/v1", binding, transport=transport
+        ).body
+        == b"ok"
+    )
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "10.0.0.8"])
@@ -367,7 +384,9 @@ def test_public_service_requires_https_and_transport_errors_are_safe(monkeypatch
     monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     binding = ProviderBinding("cloud", "firecrawl", base_url="http://api.example.test")
     with pytest.raises(WebSafetyError, match="service_https_required"):
-        bounded_service_get("http://api.example.test/v1", binding, transport=_FakeTransport([]))
+        bounded_service_get(
+            "http://api.example.test/v1", binding, transport=_FakeTransport([])
+        )
 
     class RaisingTransport:
         def get(self, *args, **kwargs):
@@ -375,7 +394,9 @@ def test_public_service_requires_https_and_transport_errors_are_safe(monkeypatch
 
     secure = ProviderBinding("cloud", "firecrawl", base_url="https://api.example.test")
     with pytest.raises(WebSafetyError, match="provider_error") as captured:
-        bounded_service_get("https://api.example.test/v1", secure, transport=RaisingTransport())
+        bounded_service_get(
+            "https://api.example.test/v1", secure, transport=RaisingTransport()
+        )
     assert "Authorization" not in str(captured.value)
 
 
@@ -417,7 +438,9 @@ def test_public_service_rejects_private_or_mixed_dns_peers(monkeypatch):
         "sluice.web.url.resolve_host",
         lambda host: ["93.184.216.34", "10.0.0.1"],
     )
-    binding = ProviderBinding("cloud", "firecrawl", base_url="https://api.firecrawl.com")
+    binding = ProviderBinding(
+        "cloud", "firecrawl", base_url="https://api.firecrawl.com"
+    )
     transport = _FakeTransport(
         [DirectResponse(status_code=200, body=b"private", peer="10.0.0.1")]
     )

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
-from sluice.contracts import HTTPClient, JSONValue, KEEP_CHECKPOINT, SourceRecord, SourceResult
+from sluice.contracts import (
+    KEEP_CHECKPOINT,
+    HTTPClient,
+    JSONValue,
+    SourceRecord,
+    SourceResult,
+)
 from sluice.errors import ExecutionError
 from sluice.web.contracts import DocumentArtifact, FetchRequest, PrivateWebInvocation
 from sluice.web.projectors import project_markdown, project_text
@@ -16,7 +22,9 @@ def _next_checkpoint(config: Mapping[str, JSONValue]) -> JSONValue:
     return config["next_checkpoint"] if "next_checkpoint" in config else KEEP_CHECKPOINT
 
 
-def _record_from_projected(logical_id: str, url: str, projected: object, title: str | None) -> SourceRecord:
+def _record_from_projected(
+    logical_id: str, url: str, projected: object, title: str | None
+) -> SourceRecord:
     value = getattr(projected, "value", None)
     metadata = getattr(projected, "metadata", None)
     if not isinstance(value, str) or not isinstance(metadata, Mapping):
@@ -63,8 +71,12 @@ def _list_records(
 def _page_record(artifact: DocumentArtifact, output: str) -> SourceRecord:
     if artifact.final_url is None:
         raise ExecutionError("webpage response has no final URL")
-    projected = project_markdown(artifact) if output == "markdown" else project_text(artifact)
-    return _record_from_projected(artifact.final_url, artifact.final_url, projected, artifact.title)
+    projected = (
+        project_markdown(artifact) if output == "markdown" else project_text(artifact)
+    )
+    return _record_from_projected(
+        artifact.final_url, artifact.final_url, projected, artifact.title
+    )
 
 
 def _collect_html(config: Mapping[str, JSONValue], html: str) -> SourceResult:
@@ -112,11 +124,15 @@ class _WebpageSource:
     http_client: HTTPClient | None
     web_content_client: object | None = None
 
-    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+    def collect(
+        self, config: Mapping[str, JSONValue], checkpoint: JSONValue
+    ) -> SourceResult:
         del checkpoint
         return collect(config, KEEP_CHECKPOINT)
 
-    def collect_web(self, invocation: PrivateWebInvocation, checkpoint: JSONValue) -> SourceResult:
+    def collect_web(
+        self, invocation: PrivateWebInvocation, checkpoint: JSONValue
+    ) -> SourceResult:
         del checkpoint
         if not isinstance(invocation, PrivateWebInvocation):
             raise ExecutionError("invalid private web invocation")
@@ -146,7 +162,9 @@ class _WebpageSource:
                 binding.fetch_chain,
                 None,
             )
-            if not isinstance(artifact, DocumentArtifact) or not isinstance(artifact.raw_html, str):
+            if not isinstance(artifact, DocumentArtifact) or not isinstance(
+                artifact.raw_html, str
+            ):
                 raise ExecutionError("webpage list resolution returned no HTML")
             final_url = artifact.final_url or url
             records = _list_records(
@@ -158,7 +176,10 @@ class _WebpageSource:
                 provider_type=artifact.provider_type,
             )
         else:
-            if binding.extract_chain is None or binding.output not in {"markdown", "text"}:
+            if binding.extract_chain is None or binding.output not in {
+                "markdown",
+                "text",
+            }:
                 raise ExecutionError("webpage Source has no article projection")
             artifact = resolve(
                 FetchRequest(
@@ -181,5 +202,5 @@ def bind(adapters: object | None) -> _WebpageSource:
     """Bind the immutable startup boundary without widening public contracts."""
 
     if hasattr(adapters, "http_client") and hasattr(adapters, "web_content_client"):
-        return _WebpageSource(getattr(adapters, "http_client"), getattr(adapters, "web_content_client"))
+        return _WebpageSource(adapters.http_client, adapters.web_content_client)
     return _WebpageSource(adapters)  # type: ignore[arg-type]

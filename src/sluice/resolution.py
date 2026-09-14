@@ -18,11 +18,11 @@ from sluice.contracts import (
     JSONValue,
     LLMClient,
     SinkContract,
-    StageDef,
     SourceContract,
     SourceResult,
-    TaskDef,
+    StageDef,
     TaskContract,
+    TaskDef,
 )
 from sluice.errors import DefinitionError
 from sluice.web.contracts import PrivateWebInvocation
@@ -32,7 +32,9 @@ from sluice.web.contracts import PrivateWebInvocation
 class BoundaryAdapters:
     http_client: HTTPClient | None
     llm_client: LLMClient | None
-    sink_clients: Mapping[str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]]
+    sink_clients: Mapping[
+        str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]
+    ]
     web_content_client: object | None = None
 
 
@@ -84,7 +86,9 @@ def _fresh_json(value: object) -> object:
 class FunctionSource:
     function: Callable[[Mapping[str, JSONValue], JSONValue], SourceResult]
 
-    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+    def collect(
+        self, config: Mapping[str, JSONValue], checkpoint: JSONValue
+    ) -> SourceResult:
         copied = _fresh_json(config)
         return self.function(copied, checkpoint)  # type: ignore[arg-type]
 
@@ -105,16 +109,22 @@ class BuiltinWebSource:
 
     source: object
 
-    def collect(self, config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceResult:
+    def collect(
+        self, config: Mapping[str, JSONValue], checkpoint: JSONValue
+    ) -> SourceResult:
         collector = getattr(self.source, "collect", None)
         if not callable(collector):
             raise DefinitionError("built-in web Source has no collect operation")
         return collector(config, checkpoint)
 
-    def collect_web(self, invocation: PrivateWebInvocation, checkpoint: JSONValue) -> SourceResult:
+    def collect_web(
+        self, invocation: PrivateWebInvocation, checkpoint: JSONValue
+    ) -> SourceResult:
         collector = getattr(self.source, "collect_web", None)
         if not callable(collector):
-            raise DefinitionError("built-in web Source has no private collect operation")
+            raise DefinitionError(
+                "built-in web Source has no private collect operation"
+            )
         return collector(invocation, checkpoint)
 
 
@@ -195,14 +205,20 @@ def _bound_builtin(binding: str, path: str) -> object:
     return binder
 
 
-def bind_builtin_source(path: str, adapters: BoundaryAdapters | HTTPClient | None) -> SourceContract:
+def bind_builtin_source(
+    path: str, adapters: BoundaryAdapters | HTTPClient | None
+) -> SourceContract:
     """Bind one built-in Source against the immutable startup boundary.
 
     The v4 Source modules still expose ``bind(http_client)`` for compatibility;
     accepting the full adapter bundle here lets newer wrappers consume the
     shared WebContentClient without changing public custom Source contracts.
     """
-    boundary = adapters if isinstance(adapters, BoundaryAdapters) else freeze_adapters(http_client=adapters)
+    boundary = (
+        adapters
+        if isinstance(adapters, BoundaryAdapters)
+        else freeze_adapters(http_client=adapters)
+    )
     try:
         binder = _bound_builtin(BUILTIN_SOURCE_BINDERS[path], path)
         try:
@@ -246,7 +262,9 @@ def bind_builtin_task(path: str, adapters: BoundaryAdapters) -> TaskContract:
 
 def bind_builtin_sink(
     path: str,
-    sink_clients: Mapping[str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]],
+    sink_clients: Mapping[
+        str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]
+    ],
 ) -> SinkContract:
     try:
         binder = _bound_builtin(BUILTIN_SINK_BINDERS[path], path)
@@ -259,7 +277,9 @@ def bind_builtin_sink(
     return value  # normalized by resolve_sink below
 
 
-def require_call_shape(path: str, function: Callable[..., object], *sample_args: object) -> None:
+def require_call_shape(
+    path: str, function: Callable[..., object], *sample_args: object
+) -> None:
     if not callable(function):
         raise DefinitionError(f"{path} is not callable")
     try:
@@ -309,7 +329,9 @@ def resolve_task(
     else:
         raise DefinitionError(f"{path} is not a Task callable with input_mode")
     if task.input_mode != expected_mode:
-        raise DefinitionError(f"{path} declares {task.input_mode}, expected {expected_mode}")
+        raise DefinitionError(
+            f"{path} declares {task.input_mode}, expected {expected_mode}"
+        )
     if path in BUILTIN_WEB_TASKS:
         return BuiltinWebTask(value, task.input_mode)
     return task
@@ -361,7 +383,10 @@ def freeze_adapters(
     *,
     http_client: HTTPClient | None = None,
     llm_client: LLMClient | None = None,
-    sink_clients: Mapping[str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]] | None = None,
+    sink_clients: Mapping[
+        str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]
+    ]
+    | None = None,
     web_content_client: object | None = None,
 ) -> BoundaryAdapters:
     """Copy the startup boundary bundle into immutable mapping storage."""

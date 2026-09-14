@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 import importlib
 import json
 import math
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -19,10 +19,10 @@ from bs4 import BeautifulSoup
 
 from ..errors import DefinitionError, ExecutionError, WebSafetyError
 from .contracts import (
+    NO_MATCH,
     DocumentArtifact,
     ExtractorBinding,
     FetchRequest,
-    NO_MATCH,
     ProviderBinding,
     WebAttemptCancelled,
     WebStageDeadlineExpired,
@@ -91,7 +91,12 @@ def _response_body(response: Any) -> tuple[int, Mapping[str, str], bytes, str | 
     if isinstance(response, (bytes, bytearray, memoryview)):
         return 200, {}, bytes(response), None
     if isinstance(response, DirectResponse):
-        return response.status_code, response.headers, response.body, response.final_url or response.url
+        return (
+            response.status_code,
+            response.headers,
+            response.body,
+            response.final_url or response.url,
+        )
     if isinstance(response, Mapping):
         raw = response.get("body", response.get("content", b""))
         if isinstance(raw, str):
@@ -100,10 +105,16 @@ def _response_body(response: Any) -> tuple[int, Mapping[str, str], bytes, str | 
             int(response.get("status_code", response.get("status", 200)) or 0),
             {str(k): str(v) for k, v in dict(response.get("headers", {})).items()},
             bytes(raw or b""),
-            None if response.get("final_url", response.get("url")) is None else str(response.get("final_url", response.get("url"))),
+            None
+            if response.get("final_url", response.get("url")) is None
+            else str(response.get("final_url", response.get("url"))),
         )
-    status = int(getattr(response, "status_code", getattr(response, "status", 200)) or 0)
-    headers = {str(k): str(v) for k, v in dict(getattr(response, "headers", {}) or {}).items()}
+    status = int(
+        getattr(response, "status_code", getattr(response, "status", 200)) or 0
+    )
+    headers = {
+        str(k): str(v) for k, v in dict(getattr(response, "headers", {}) or {}).items()
+    }
     body = getattr(response, "content", None)
     if body is None:
         body = getattr(response, "body", None)
@@ -127,7 +138,11 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
 
 def _decode(body: bytes, headers: Mapping[str, str]) -> str:
     charset = "utf-8"
-    match = re.search(r"charset\s*=\s*[\"']?([^;\"'\s]+)", _header(headers, "content-type") or "", flags=re.I)
+    match = re.search(
+        r"charset\s*=\s*[\"']?([^;\"'\s]+)",
+        _header(headers, "content-type") or "",
+        flags=re.IGNORECASE,
+    )
     if match:
         charset = match.group(1)
     try:
@@ -142,7 +157,9 @@ def _sniff_content_type(body: bytes, supplied: str | None) -> str:
     prefix = body.lstrip()[:512].lower()
     if prefix.startswith((b"<?xml", b"<rss", b"<feed", b"<rdf:rdf")):
         return "application/xml"
-    if prefix.startswith(b"<") and re.match(rb"<\s*(?:!doctype\s+html|html|article|main|body|div|p)\b", prefix):
+    if prefix.startswith(b"<") and re.match(
+        rb"<\s*(?:!doctype\s+html|html|article|main|body|div|p)\b", prefix
+    ):
         return "text/html"
     return "text/plain"
 
@@ -150,7 +167,16 @@ def _sniff_content_type(body: bytes, supplied: str | None) -> str:
 def _allowed_representation(request: FetchRequest, content_type: str) -> str | None:
     if request.mode == "raw_source":
         return "raw_source" if "raw_source" in request.acceptable else None
-    if content_type in {"application/xml", "text/xml", "application/rss+xml", "application/atom+xml"} and "raw_source" in request.acceptable:
+    if (
+        content_type
+        in {
+            "application/xml",
+            "text/xml",
+            "application/rss+xml",
+            "application/atom+xml",
+        }
+        and "raw_source" in request.acceptable
+    ):
         return "raw_source"
     is_html = content_type in {"text/html", "application/xhtml+xml"}
     if is_html and "raw_html" in request.acceptable:
@@ -225,8 +251,16 @@ class HTTPXProvider:
     runtime: object | None = None
 
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
-        response = _safe_fetch(lambda: bounded_manual_get(request, self.binding, transport=_transport_for(self.runtime, self.binding)))
-        return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
+        response = _safe_fetch(
+            lambda: bounded_manual_get(
+                request,
+                self.binding,
+                transport=_transport_for(self.runtime, self.binding),
+            )
+        )
+        return _safe_fetch(
+            lambda: _artifact_from_response(self.binding, request, response)
+        )
 
 
 HttpxProvider = HTTPXProvider
@@ -239,7 +273,9 @@ class StartupHTTPProvider:
 
     def __post_init__(self) -> None:
         if self.binding.options.get("trusted") is not True:
-            raise DefinitionError(f"startup_http provider {self.binding.name!r} requires trusted: true")
+            raise DefinitionError(
+                f"startup_http provider {self.binding.name!r} requires trusted: true"
+            )
         # This compatibility adapter is deliberately explicit: it is only
         # valid when startup supplied the process HTTP boundary.  A later
         # fetch must not discover or construct an arbitrary client.
@@ -255,18 +291,33 @@ class StartupHTTPProvider:
         client = _transport_for(self.runtime, self.binding)
         getter = getattr(client, "get", None) if client is not None else None
         if not callable(getter) and not callable(client):
-            raise ExecutionError(f"startup_http provider {self.binding.name!r} has no injected HTTP client")
+            raise ExecutionError(
+                f"startup_http provider {self.binding.name!r} has no injected HTTP client"
+            )
         try:
-            response = client(request.url) if callable(client) and not callable(getter) else getter(request.url)
+            response = (
+                client(request.url)
+                if callable(client) and not callable(getter)
+                else getter(request.url)
+            )
         except BaseException:
             raise WebSafetyError("provider_error") from None
         force_final_url: str | None = None
         if isinstance(response, str):
-            response = DirectResponse(status_code=200, body=response.encode("utf-8"), url=request.url, final_url=request.url)
+            response = DirectResponse(
+                status_code=200,
+                body=response.encode("utf-8"),
+                url=request.url,
+                final_url=request.url,
+            )
             force_final_url = request.url
         return _safe_fetch(
             lambda: _artifact_from_response(
-                self.binding, request, response, default_status=200, force_final_url=force_final_url
+                self.binding,
+                request,
+                response,
+                default_status=200,
+                force_final_url=force_final_url,
             )
         )
 
@@ -308,7 +359,9 @@ class CurlCffiProvider:
         response = _safe_fetch(
             lambda: bounded_manual_get(request, self.binding, transport=transport)
         )
-        return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
+        return _safe_fetch(
+            lambda: _artifact_from_response(self.binding, request, response)
+        )
 
 
 def _curl_remote_dns_proxy(binding: ProviderBinding) -> bool:
@@ -371,28 +424,61 @@ class TrafilaturaProvider:
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
         internal = request
         if "raw_html" not in request.acceptable:
-            internal = FetchRequest(url=request.url, mode=request.mode, acceptable=frozenset(set(request.acceptable) | {"raw_html"}), preferred=request.preferred, list_selector=request.list_selector, target_headers=request.target_headers, quality=request.quality, stage_deadline=request.stage_deadline)
-        response = _safe_fetch(lambda: bounded_manual_get(internal, self.binding, transport=_transport_for(self.runtime, self.binding)))
-        base = _safe_fetch(lambda: _artifact_from_response(self.binding, internal, response))
+            internal = FetchRequest(
+                url=request.url,
+                mode=request.mode,
+                acceptable=frozenset(set(request.acceptable) | {"raw_html"}),
+                preferred=request.preferred,
+                list_selector=request.list_selector,
+                target_headers=request.target_headers,
+                quality=request.quality,
+                stage_deadline=request.stage_deadline,
+            )
+        response = _safe_fetch(
+            lambda: bounded_manual_get(
+                internal,
+                self.binding,
+                transport=_transport_for(self.runtime, self.binding),
+            )
+        )
+        base = _safe_fetch(
+            lambda: _artifact_from_response(self.binding, internal, response)
+        )
         if request.mode != "article":
             # List and raw-feed requests are representation-constrained.  The
             # combined profile still performs only the one bounded fetch, but
             # must not run an article extractor on a raw winner.
-            return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
+            return _safe_fetch(
+                lambda: _artifact_from_response(self.binding, request, response)
+            )
         if base.raw_html is None:
-            return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
+            return _safe_fetch(
+                lambda: _artifact_from_response(self.binding, request, response)
+            )
         if not {"markdown", "text"}.intersection(request.acceptable):
-            return _safe_fetch(lambda: _artifact_from_response(self.binding, request, response))
+            return _safe_fetch(
+                lambda: _artifact_from_response(self.binding, request, response)
+            )
         markdown = _trafilatura_markdown(base.raw_html, self.binding.options)
         if markdown is NO_MATCH:
             return NO_MATCH
-        fields: dict[str, Any] = {"source_url": base.source_url, "final_url": base.final_url, "status_code": base.status_code, "content_type": base.content_type, "provider_instance": self.binding.name, "provider_type": self.binding.type, "capabilities": frozenset()}
+        fields: dict[str, Any] = {
+            "source_url": base.source_url,
+            "final_url": base.final_url,
+            "status_code": base.status_code,
+            "content_type": base.content_type,
+            "provider_instance": self.binding.name,
+            "provider_type": self.binding.type,
+            "capabilities": frozenset(),
+        }
         if "raw_html" in request.acceptable:
             fields["raw_html"] = base.raw_html
             fields["capabilities"] = frozenset({"raw_html"})
         if markdown and "markdown" in request.acceptable:
             fields["markdown"] = markdown
-            fields["capabilities"] = frozenset(set(fields["capabilities"]) | {"markdown"})
+            fields["capabilities"] = frozenset(
+                set(fields["capabilities"]) | {"markdown"}
+            )
         if markdown and "text" in request.acceptable:
             fields["text"] = _visible_text(markdown)
             fields["capabilities"] = frozenset(set(fields["capabilities"]) | {"text"})
@@ -417,7 +503,14 @@ def _trafilatura_markdown(raw_html: str, options: Mapping[str, Any]) -> str | ob
     except Exception:
         return NO_MATCH
     try:
-        result = module.extract(raw_html, output_format="markdown", include_tables=bool(options.get("include_tables", True)), include_comments=bool(options.get("include_comments", False)), favor_precision=bool(options.get("favor_precision", False)), favor_recall=bool(options.get("favor_recall", False)))
+        result = module.extract(
+            raw_html,
+            output_format="markdown",
+            include_tables=bool(options.get("include_tables", True)),
+            include_comments=bool(options.get("include_comments", False)),
+            favor_precision=bool(options.get("favor_precision", False)),
+            favor_recall=bool(options.get("favor_recall", False)),
+        )
     except Exception:
         return NO_MATCH
     if isinstance(result, str) and result.strip():
@@ -453,7 +546,9 @@ def firecrawl_actions(actions: tuple[Any, ...] | list[Any]) -> list[dict[str, An
     return translated
 
 
-def firecrawl_payload(binding: ProviderBinding, request: FetchRequest) -> dict[str, Any]:
+def firecrawl_payload(
+    binding: ProviderBinding, request: FetchRequest
+) -> dict[str, Any]:
     """Build one Firecrawl v2 scrape request.
 
     The formats are deliberately selected from the request mode instead of
@@ -464,9 +559,7 @@ def firecrawl_payload(binding: ProviderBinding, request: FetchRequest) -> dict[s
     options = binding.options
     only_main_content = options.get("only_main_content", binding.only_main_content)
     wait_for = options.get("wait_for", binding.wait_for)
-    wait_for_selector = options.get(
-        "wait_for_selector", binding.wait_for_selector
-    )
+    wait_for_selector = options.get("wait_for_selector", binding.wait_for_selector)
     mobile = options.get("mobile", binding.mobile)
     actions = options.get("actions", binding.actions)
     formats = ["markdown", "rawHtml"] if request.mode == "article" else ["rawHtml"]
@@ -513,9 +606,7 @@ def _service_transport(runtime: object | None, binding: ProviderBinding) -> Any:
         # compatibility boundary for ``startup_http`` only; it may be a
         # post-capable client but cannot enforce the hosted service's pinned
         # streaming policy.
-        resolved = _transport_for(
-            runtime, binding, binding_specific_only=True
-        )
+        resolved = _transport_for(runtime, binding, binding_specific_only=True)
         if resolved is not None:
             candidates.append(resolved)
         candidates.append(runtime)
@@ -578,9 +669,7 @@ def _service_headers(
         # ``api_key`` is either resolved by WebRuntimeCatalog or an explicit
         # test value when an adapter is constructed directly.
         if auth_scheme == "basic":
-            encoded = base64.b64encode(f"{api_key}:".encode("utf-8")).decode(
-                "ascii"
-            )
+            encoded = base64.b64encode(f"{api_key}:".encode()).decode("ascii")
             headers["Authorization"] = f"Basic {encoded}"
         elif auth_scheme == "bearer":
             headers["Authorization"] = f"Bearer {api_key}"
@@ -616,10 +705,10 @@ def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
     try:
         parsed = parsedate_to_datetime(stripped)
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return max(
             0.0,
-            (parsed.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds(),
+            (parsed.astimezone(UTC) - datetime.now(UTC)).total_seconds(),
         )
     except (TypeError, ValueError, OverflowError):
         return None
@@ -638,7 +727,9 @@ def _service_failure(status: int, headers: Mapping[str, str]) -> WebSafetyError:
     return error
 
 
-def _json_from_response(response: Any) -> tuple[int, Mapping[str, str], Any, str | None]:
+def _json_from_response(
+    response: Any,
+) -> tuple[int, Mapping[str, str], Any, str | None]:
     """Detach and decode a service response without leaking vendor errors."""
 
     # A tiny fake boundary often returns the decoded object directly.  Mapping
@@ -665,7 +756,12 @@ def _json_from_response(response: Any) -> tuple[int, Mapping[str, str], Any, str
                 raw = raw.encode("utf-8")
             if isinstance(raw, (bytes, bytearray, memoryview)):
                 try:
-                    return status, headers, json.loads(bytes(raw).decode("utf-8")), final
+                    return (
+                        status,
+                        headers,
+                        json.loads(bytes(raw).decode("utf-8")),
+                        final,
+                    )
                 except (UnicodeError, ValueError, TypeError):
                     raise WebSafetyError("provider_error") from None
         if "data" in response or "results" in response or "success" in response:
@@ -695,17 +791,23 @@ def _json_from_response(response: Any) -> tuple[int, Mapping[str, str], Any, str
     if callable(json_method):
         try:
             value = json_method()
-            status = int(getattr(response, "status_code", getattr(response, "status", 200)) or 0)
+            status = int(
+                getattr(response, "status_code", getattr(response, "status", 200)) or 0
+            )
             headers = {
                 str(key): str(item)
                 for key, item in dict(getattr(response, "headers", {}) or {}).items()
             }
-            final = getattr(response, "url", None) or getattr(response, "final_url", None)
+            final = getattr(response, "url", None) or getattr(
+                response, "final_url", None
+            )
             return status, headers, value, None if final is None else str(final)
         except Exception:
             raise WebSafetyError("provider_error") from None
     if isinstance(json_method, (Mapping, list, tuple)):
-        status = int(getattr(response, "status_code", getattr(response, "status", 200)) or 0)
+        status = int(
+            getattr(response, "status_code", getattr(response, "status", 200)) or 0
+        )
         headers = {
             str(key): str(item)
             for key, item in dict(getattr(response, "headers", {}) or {}).items()
@@ -791,9 +893,7 @@ def _remote_final_url(
     metadata = data.get("metadata")
     metadata_map = metadata if isinstance(metadata, Mapping) else {}
 
-    def reported_url(
-        mapping: Mapping[str, Any], keys: tuple[str, ...]
-    ) -> str | None:
+    def reported_url(mapping: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
         selected: str | None = None
         for key in keys:
             if key not in mapping:
@@ -829,7 +929,11 @@ def _remote_final_url(
     reported = data_reported or metadata_reported
     candidate = reported or request.url
     try:
-        return str(normalize_target_url(candidate, TargetPolicy.from_value(binding.target_policy)))
+        return str(
+            normalize_target_url(
+                candidate, TargetPolicy.from_value(binding.target_policy)
+            )
+        )
     except WebSafetyError:
         raise
     except Exception:
@@ -890,7 +994,14 @@ def _remote_value(data: Mapping[str, Any], *keys: str) -> Any:
         value = data.get(key)
         if value is not None:
             if isinstance(value, Mapping):
-                nested = _first_string(value, "raw_markdown", "rawMarkdown", "fit_markdown", "fitMarkdown", "value")
+                nested = _first_string(
+                    value,
+                    "raw_markdown",
+                    "rawMarkdown",
+                    "fit_markdown",
+                    "fitMarkdown",
+                    "value",
+                )
                 if nested is not None:
                     return nested
             return value
@@ -1079,9 +1190,7 @@ class Crawl4AIProvider:
                 "params": {
                     "cache_mode": "bypass",
                     "stream": False,
-                    "wait_until": options.get(
-                        "wait_until", "domcontentloaded"
-                    ),
+                    "wait_until": options.get("wait_until", "domcontentloaded"),
                     "wait_for": options.get(
                         "wait_for_selector", self.binding.wait_for_selector
                     ),
@@ -1179,9 +1288,7 @@ class JinaReaderProvider:
             provider_instance=self.binding.name,
             provider_type=self.binding.type,
             capabilities=(
-                frozenset({"markdown"})
-                if markdown is not None
-                else frozenset()
+                frozenset({"markdown"}) if markdown is not None else frozenset()
             ),
         )
 
@@ -1238,9 +1345,7 @@ def zyte_actions(actions: tuple[Any, ...] | list[Any]) -> list[dict[str, Any]]:
             x = payload.get("x")
             y = payload.get("y")
             if any(
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value < 0
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
                 for value in (x, y)
             ):
                 raise DefinitionError("invalid Zyte scroll action")
@@ -1267,9 +1372,7 @@ def zyte_payload(binding: ProviderBinding, request: FetchRequest) -> dict[str, A
         payload["pageContent"] = True
         if mode in {"http", "browser"}:
             payload["pageContentOptions"] = {
-                "extractFrom": (
-                    "httpResponseBody" if mode == "http" else "browserHtml"
-                )
+                "extractFrom": ("httpResponseBody" if mode == "http" else "browserHtml")
             }
     geolocation = options.get("geolocation")
     if geolocation is not None:
@@ -1290,8 +1393,7 @@ def zyte_payload(binding: ProviderBinding, request: FetchRequest) -> dict[str, A
     if target_headers:
         if mode == "http":
             payload["customHttpRequestHeaders"] = [
-                {"name": name, "value": value}
-                for name, value in target_headers.items()
+                {"name": name, "value": value} for name, value in target_headers.items()
             ]
         else:
             referers = {
@@ -1302,9 +1404,7 @@ def zyte_payload(binding: ProviderBinding, request: FetchRequest) -> dict[str, A
             if len(referers) != len(target_headers):
                 raise WebSafetyError("bad_url")
             if referers:
-                payload["requestHeaders"] = {
-                    "referer": next(iter(referers.values()))
-                }
+                payload["requestHeaders"] = {"referer": next(iter(referers.values()))}
     if binding.cookies:
         host = urlsplit(request.url).hostname
         if not host:
@@ -1484,39 +1584,57 @@ class BrightDataProvider:
         )
 
 
-def build_httpx_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_httpx_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return HTTPXProvider(binding, runtime)
 
 
-def build_startup_http_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_startup_http_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return StartupHTTPProvider(binding, runtime)
 
 
-def build_curl_cffi_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_curl_cffi_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return CurlCffiProvider(binding, runtime)
 
 
-def build_trafilatura_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_trafilatura_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return TrafilaturaProvider(binding, runtime)
 
 
-def build_firecrawl_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_firecrawl_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return FirecrawlProvider(binding, runtime)
 
 
-def build_crawl4ai_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_crawl4ai_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return Crawl4AIProvider(binding, runtime)
 
 
-def build_jina_reader_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_jina_reader_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return JinaReaderProvider(binding, runtime)
 
 
-def build_zyte_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_zyte_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return ZyteProvider(binding, runtime)
 
 
-def build_bright_data_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_bright_data_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     return BrightDataProvider(binding, runtime)
 
 
@@ -1534,12 +1652,16 @@ CORE_PROVIDER_BUILDERS = {
 PROVIDER_BUILDERS = CORE_PROVIDER_BUILDERS
 
 
-def build_provider(binding: ProviderBinding, runtime: object | None = None) -> WebProvider:
+def build_provider(
+    binding: ProviderBinding, runtime: object | None = None
+) -> WebProvider:
     if not isinstance(binding, ProviderBinding):
         raise DefinitionError("provider binding must be a ProviderBinding")
     builder = CORE_PROVIDER_BUILDERS.get(binding.type)
     if builder is None:
-        raise DefinitionError(f"unsupported web provider type {binding.type!r} for {binding.name!r}")
+        raise DefinitionError(
+            f"unsupported web provider type {binding.type!r} for {binding.name!r}"
+        )
     if binding.proxy is not None:
         if binding.type not in {"httpx", "curl_cffi", "trafilatura"}:
             raise DefinitionError(
@@ -1555,7 +1677,9 @@ def build_provider(binding: ProviderBinding, runtime: object | None = None) -> W
         raise DefinitionError(f"invalid provider {binding.name!r}: {error}") from error
 
 
-def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] | None = None):
+def build_extractor(
+    binding: ExtractorBinding | str, options: Mapping[str, Any] | None = None
+):
     try:
         return _build_extractor(binding, options)
     except (ExecutionError, TypeError, ValueError) as error:
@@ -1574,11 +1698,11 @@ __all__ = [
     "JinaProvider",
     "JinaReaderProvider",
     "StartupHTTPProvider",
-    "StartupHttpProvider",
     "StartupHttp",
+    "StartupHttpProvider",
+    "Trafilatura",
     "TrafilaturaProvider",
     "TrafilaturaProviderProfile",
-    "Trafilatura",
     "WebProvider",
     "ZyteProvider",
     "build_bright_data_provider",

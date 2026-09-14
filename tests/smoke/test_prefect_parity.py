@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult
@@ -8,7 +8,7 @@ from sluice.reconcile import tick
 
 
 def instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 14, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 def acceptance_source(config, checkpoint):

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
 import re
 import unicodedata
+from dataclasses import dataclass, replace
 from typing import Any
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 from .contracts import DocumentArtifact, QualityPolicy
-
 
 _HIDDEN_TAGS = frozenset(
     {
@@ -29,10 +28,40 @@ _HIDDEN_TAGS = frozenset(
 )
 _BLOCK_TAGS = frozenset(
     {
-        "address", "article", "aside", "blockquote", "body", "dd", "div", "dl", "dt",
-        "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4",
-        "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section",
-        "table", "td", "th", "tr", "ul",
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "body",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
     }
 )
 _CHALLENGE_SELECTORS = (
@@ -70,7 +99,9 @@ def _visible_html(html: str) -> tuple[str, float, BeautifulSoup]:
     for node in list(soup.find_all(_HIDDEN_TAGS)):
         node.decompose()
 
-    def append_visible(node: Any, parts: list[str], anchors: list[str], in_anchor: bool = False) -> None:
+    def append_visible(
+        node: Any, parts: list[str], anchors: list[str], in_anchor: bool = False
+    ) -> None:
         if isinstance(node, Comment):
             return
         if isinstance(node, NavigableString):
@@ -103,8 +134,12 @@ def _visible_markdown(value: str) -> str:
     # Quality is intentionally conservative for provider Markdown.  Remove
     # fenced/raw HTML and formatting syntax, leaving visible labels/text.
     value = re.sub(r"```(?:[^\n]*)\n(.*?)```", r"\1", value, flags=re.DOTALL)
-    value = re.sub(r"<script\b[^>]*>.*?</script\s*>", "", value, flags=re.I | re.S)
-    value = re.sub(r"<style\b[^>]*>.*?</style\s*>", "", value, flags=re.I | re.S)
+    value = re.sub(
+        r"<script\b[^>]*>.*?</script\s*>", "", value, flags=re.IGNORECASE | re.DOTALL
+    )
+    value = re.sub(
+        r"<style\b[^>]*>.*?</style\s*>", "", value, flags=re.IGNORECASE | re.DOTALL
+    )
     value = re.sub(r"<[^>]+>", "", value)
     value = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", value)
     value = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", value)
@@ -161,7 +196,9 @@ def _challenge_reason(soup: BeautifulSoup, visible: str) -> str | None:
     password = soup.select_one('form input[type="password"]')
     if password is not None:
         article = soup.find(["article", "main"])
-        article_text = _normalise_text(article.get_text(" ", strip=True)) if article else ""
+        article_text = (
+            _normalise_text(article.get_text(" ", strip=True)) if article else ""
+        )
         if len(article_text) < 80:
             return "challenge"
     return None
@@ -170,12 +207,15 @@ def _challenge_reason(soup: BeautifulSoup, visible: str) -> str | None:
 def _empty_shell(soup: BeautifulSoup, visible: str) -> bool:
     if len(visible) >= 100:
         return False
-    app_root = soup.find(id=re.compile(r"^(app|root|__next|content)$", re.I))
+    app_root = soup.find(id=re.compile(r"^(app|root|__next|content)$", re.IGNORECASE))
     has_script = bool(soup.find("script", src=True))
     if app_root is not None and has_script:
         return True
     content_nodes = soup.find_all(["article", "main", "section", "p"])
-    return not any(len(_normalise_text(node.get_text(" ", strip=True))) >= 80 for node in content_nodes)
+    return not any(
+        len(_normalise_text(node.get_text(" ", strip=True))) >= 80
+        for node in content_nodes
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +270,9 @@ def evaluate_quality(
 
     policy = policy or QualityPolicy()
     if isinstance(artifact, str):
-        artifact = DocumentArtifact(text=artifact, content_type="text/plain", capabilities=frozenset({"text"}))
+        artifact = DocumentArtifact(
+            text=artifact, content_type="text/plain", capabilities=frozenset({"text"})
+        )
     if not isinstance(artifact, DocumentArtifact):
         metrics = QualityMetrics(reason="provider_error")
         return QualityEvaluation(metrics, None)
@@ -266,7 +308,9 @@ def evaluate_quality(
             raw_challenge = _challenge_reason(raw_soup, "")
             for node in list(raw_soup.find_all(_HIDDEN_TAGS)):
                 node.decompose()
-            for comment in list(raw_soup.find_all(string=lambda value: isinstance(value, Comment))):
+            for comment in list(
+                raw_soup.find_all(string=lambda value: isinstance(value, Comment))
+            ):
                 comment.extract()
             raw_visible = _normalise_text(raw_soup.get_text(" ", strip=True))
             raw_challenge = raw_challenge or _challenge_reason(raw_soup, raw_visible)
@@ -275,16 +319,26 @@ def evaluate_quality(
         except Exception:
             return QualityEvaluation(QualityMetrics(reason="provider_error"), artifact)
         if challenge is not None:
-            return QualityEvaluation(QualityMetrics(reason=challenge, visible_text=visible), artifact)
+            return QualityEvaluation(
+                QualityMetrics(reason=challenge, visible_text=visible), artifact
+            )
         if _empty_shell(soup, visible):
-            return QualityEvaluation(QualityMetrics(reason="empty_shell", visible_text=visible), artifact)
+            return QualityEvaluation(
+                QualityMetrics(reason="empty_shell", visible_text=visible), artifact
+            )
     else:
         source = artifact.text or artifact.markdown or artifact.raw_html or ""
-        visible = _visible_markdown(source) if artifact.markdown is not None else _normalise_text(source)
+        visible = (
+            _visible_markdown(source)
+            if artifact.markdown is not None
+            else _normalise_text(source)
+        )
         link_ratio = 0.0
         folded = _WHITESPACE.sub(" ", visible).casefold()
         if any(phrase in folded for phrase in _CHALLENGE_PHRASES):
-            return QualityEvaluation(QualityMetrics(reason="challenge", visible_text=visible), artifact)
+            return QualityEvaluation(
+                QualityMetrics(reason="challenge", visible_text=visible), artifact
+            )
 
     chars = len(visible)
     words = len(_WORD.findall(visible))

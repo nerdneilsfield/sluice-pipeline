@@ -7,23 +7,24 @@ adapter, while production calls use an HTTPX client with redirects disabled.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import ipaddress
 import json
-from types import MappingProxyType
 import threading
 import time
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx
 import httpcore
+import httpx
 
 from ..errors import WebSafetyError
 from .contracts import (
+    STABLE_FAILURE_REASONS,
     FetchRequest,
     ProviderBinding,
-    STABLE_FAILURE_REASONS,
     WebAttemptCancelled,
     WebStageDeadlineExpired,
     current_web_execution_probe,
@@ -38,7 +39,6 @@ from .url import (
     normalize_target_url,
     validate_target_headers,
 )
-
 
 MAX_BODY_BYTES = 10_485_760
 _SENSITIVE_HEADER_NAMES = frozenset(
@@ -61,7 +61,13 @@ _SENSITIVE_HEADER_PARTS = (
     "signature",
 )
 _INTERNAL_SAFETY_REASONS = frozenset(STABLE_FAILURE_REASONS) | frozenset(
-    {"peer_mismatch", "forbidden_header", "service_redirect", "too_many_redirects", "service_https_required"}
+    {
+        "peer_mismatch",
+        "forbidden_header",
+        "service_redirect",
+        "too_many_redirects",
+        "service_https_required",
+    }
 )
 
 
@@ -244,9 +250,7 @@ class _PooledPinnedHTTPXClient:
             if self._closed:
                 raise OSError("pinned HTTPX client is closed")
             client = self._client
-        outgoing_headers = _validate_transport_headers(
-            request.target_headers, binding
-        )
+        outgoing_headers = _validate_transport_headers(request.target_headers, binding)
         local_proxy = self._proxy and not self._remote_dns_proxy
         if local_proxy and not addresses:
             raise _error("ssrf_blocked")
@@ -262,13 +266,11 @@ class _PooledPinnedHTTPXClient:
                 extensions["sluice.addresses"] = tuple(addresses)
             elif address is not None:
                 address_host = f"[{address}]" if ":" in address else address
-                default_port = (
-                    target.scheme == "http" and target.port == 80
-                ) or (target.scheme == "https" and target.port == 443)
+                default_port = (target.scheme == "http" and target.port == 80) or (
+                    target.scheme == "https" and target.port == 443
+                )
                 netloc = (
-                    address_host
-                    if default_port
-                    else f"{address_host}:{target.port}"
+                    address_host if default_port else f"{address_host}:{target.port}"
                 )
                 request_url = urlunsplit(
                     (target.scheme, netloc, target.path or "/", target.query, "")
@@ -312,7 +314,11 @@ class _PooledPinnedHTTPXClient:
             try:
                 detached = read_decompressed_limited(
                     response,
-                    min(binding.max_body_bytes, request.quality.max_body_bytes, MAX_BODY_BYTES),
+                    min(
+                        binding.max_body_bytes,
+                        request.quality.max_body_bytes,
+                        MAX_BODY_BYTES,
+                    ),
                     deadline=request.stage_deadline,
                 )
                 if self._proxy:
@@ -345,7 +351,7 @@ class _PooledPinnedHTTPXClient:
 def _error(reason: str) -> WebSafetyError:
     exc = WebSafetyError(reason)
     try:
-        setattr(exc, "reason", reason)
+        exc.reason = reason
     except Exception:
         pass
     return exc
@@ -383,11 +389,21 @@ class DirectResponse:
 
     def __post_init__(self) -> None:
         if self.content is not None and self.body == b"":
-            self.body = self.content.encode("utf-8") if isinstance(self.content, str) else bytes(self.content)
+            self.body = (
+                self.content.encode("utf-8")
+                if isinstance(self.content, str)
+                else bytes(self.content)
+            )
         elif not isinstance(self.body, bytes):
-            self.body = self.body.encode("utf-8") if isinstance(self.body, str) else bytes(self.body)
+            self.body = (
+                self.body.encode("utf-8")
+                if isinstance(self.body, str)
+                else bytes(self.body)
+            )
         self.content = self.body
-        self.headers = MappingProxyType({str(k).lower(): str(v) for k, v in dict(self.headers).items()})
+        self.headers = MappingProxyType(
+            {str(k).lower(): str(v) for k, v in dict(self.headers).items()}
+        )
         if self.final_url is None:
             self.final_url = self.url
 
@@ -423,7 +439,7 @@ class DirectResponse:
         for item in content_type.split(";")[1:]:
             key, _, value = item.partition("=")
             if key.strip().lower() == "charset" and value.strip():
-                encoding = value.strip().strip('"\'')
+                encoding = value.strip().strip("\"'")
                 break
         try:
             return self.body.decode(encoding, errors="replace")
@@ -444,7 +460,9 @@ def _peer_from_response(response: Any) -> str | None:
     if peer is not None:
         return str(peer[0] if isinstance(peer, tuple) else peer)
     extensions = getattr(response, "extensions", None)
-    stream = extensions.get("network_stream") if isinstance(extensions, Mapping) else None
+    stream = (
+        extensions.get("network_stream") if isinstance(extensions, Mapping) else None
+    )
     if stream is not None:
         try:
             value = stream.get_extra_info("server_addr")
@@ -592,7 +610,9 @@ def read_decompressed_limited(
         return response
     if isinstance(response, Mapping):
         response = DirectResponse(
-            status_code=int(response.get("status_code", response.get("status", 0)) or 0),
+            status_code=int(
+                response.get("status_code", response.get("status", 0)) or 0
+            ),
             headers=response.get("headers", {}),
             body=response.get("body", response.get("content", b"")),
             peer=response.get("peer"),
@@ -624,7 +644,13 @@ def read_decompressed_limited(
     )
 
 
-def _invoke_callable(callable_obj: Callable[..., Any], target: NormalizedURL, addresses: tuple[str, ...], request: FetchRequest, binding: ProviderBinding) -> Any:
+def _invoke_callable(
+    callable_obj: Callable[..., Any],
+    target: NormalizedURL,
+    addresses: tuple[str, ...],
+    request: FetchRequest,
+    binding: ProviderBinding,
+) -> Any:
     """Invoke injected transports with a small amount of signature tolerance."""
 
     attempts = (
@@ -653,7 +679,9 @@ def _sensitive_header(name: str) -> bool:
     )
 
 
-def _merge_target_headers(request: FetchRequest, binding: ProviderBinding) -> dict[str, str]:
+def _merge_target_headers(
+    request: FetchRequest, binding: ProviderBinding
+) -> dict[str, str]:
     """Validate and merge provider/request target headers for one hop."""
 
     try:
@@ -687,8 +715,10 @@ def _cookie_header(binding: ProviderBinding) -> str | None:
         return None
     cookie_parts: list[str] = []
     for name, value in binding.cookies.items():
-        if not isinstance(name, str) or not name.strip() or any(
-            ord(char) < 0x21 or char in ";=\r\n" for char in name
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or any(ord(char) < 0x21 or char in ";=\r\n" for char in name)
         ):
             raise _error("forbidden_header")
         if not isinstance(value, str) or any(
@@ -733,7 +763,9 @@ def _strip_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def _request_with_headers(request: FetchRequest, headers: Mapping[str, str]) -> FetchRequest:
+def _request_with_headers(
+    request: FetchRequest, headers: Mapping[str, str]
+) -> FetchRequest:
     return FetchRequest(
         url=request.url,
         mode=request.mode,
@@ -819,14 +851,20 @@ def _send_injected(
     getter = getattr(transport, "get", None)
     if callable(getter):
         try:
-            return getter(str(target), headers=dict(request.target_headers), follow_redirects=False)
+            return getter(
+                str(target),
+                headers=dict(request.target_headers),
+                follow_redirects=False,
+            )
         except TypeError:
             # Never retry without the explicit redirect guard: clients that
             # reject this keyword may otherwise auto-follow cross-host hops.
             raise _error("provider_error") from None
     sender = getattr(transport, "send", None)
     if callable(sender):
-        http_request = httpx.Request("GET", str(target), headers=dict(request.target_headers))
+        http_request = httpx.Request(
+            "GET", str(target), headers=dict(request.target_headers)
+        )
         return sender(http_request, follow_redirects=False)
     raise _error("network")
 
@@ -912,7 +950,10 @@ def _send_injected_post(
     sender = getattr(transport, "send", None)
     if callable(sender):
         http_request = httpx.Request(
-            "POST", str(target), headers=dict(request.target_headers), json=dict(payload)
+            "POST",
+            str(target),
+            headers=dict(request.target_headers),
+            json=dict(payload),
         )
         return sender(http_request, follow_redirects=False)
     if callable(transport):
@@ -952,7 +993,9 @@ def send_pinned_httpx_request(
             request_for_transport = request
             if headers is not None:
                 request_for_transport = _request_with_headers(request, outgoing_headers)
-            result = _send_injected(transport, target, addresses, request_for_transport, binding)
+            result = _send_injected(
+                transport, target, addresses, request_for_transport, binding
+            )
             detached = read_decompressed_limited(
                 result,
                 min(binding.max_body_bytes, MAX_BODY_BYTES),
@@ -979,13 +1022,14 @@ def send_pinned_httpx_request(
             follow_redirects=False,
             timeout=timeout,
             trust_env=False,
-        ) as client:
-            with client.stream("GET", str(target), headers=outgoing_headers) as response:
-                return read_decompressed_limited(
-                    response,
-                    min(binding.max_body_bytes, MAX_BODY_BYTES),
-                    deadline=request.stage_deadline,
-                )
+        ) as client, client.stream(
+            "GET", str(target), headers=outgoing_headers
+        ) as response:
+            return read_decompressed_limited(
+                response,
+                min(binding.max_body_bytes, MAX_BODY_BYTES),
+                deadline=request.stage_deadline,
+            )
     except (WebAttemptCancelled, WebStageDeadlineExpired):
         raise
     except WebSafetyError as error:
@@ -1038,23 +1082,25 @@ def send_pinned_httpx_post(
     timeout = _httpx_timeout(request, binding)
     try:
         pinned_transport = _PinnedHTTPTransport(addresses)
-        with httpx.Client(
-            transport=pinned_transport,
-            follow_redirects=False,
-            timeout=timeout,
-            trust_env=False,
-        ) as client:
-            with client.stream(
+        with (
+            httpx.Client(
+                transport=pinned_transport,
+                follow_redirects=False,
+                timeout=timeout,
+                trust_env=False,
+            ) as client,
+            client.stream(
                 "POST",
                 str(target),
                 headers=outgoing_headers,
                 json=dict(payload),
-            ) as response:
-                return read_decompressed_limited(
-                    response,
-                    limit,
-                    deadline=request.stage_deadline,
-                )
+            ) as response,
+        ):
+            return read_decompressed_limited(
+                response,
+                limit,
+                deadline=request.stage_deadline,
+            )
     except (WebAttemptCancelled, WebStageDeadlineExpired):
         raise
     except WebSafetyError as error:
@@ -1083,7 +1129,9 @@ def bounded_manual_get(
 ) -> DirectResponse:
     """GET a target with guarded DNS, peers, redirects, headers, and body size."""
 
-    if not isinstance(request, FetchRequest) or not isinstance(binding, ProviderBinding):
+    if not isinstance(request, FetchRequest) or not isinstance(
+        binding, ProviderBinding
+    ):
         raise _error("provider_error")
     target_policy = TargetPolicy.from_value(binding.target_policy)
     headers = _merge_target_headers(request, binding)
@@ -1109,7 +1157,9 @@ def bounded_manual_get(
         _check_execution_probe()
         try:
             if injected is None:
-                response = send_pinned_httpx_request(current, addresses, request, binding)
+                response = send_pinned_httpx_request(
+                    current, addresses, request, binding
+                )
             else:
                 response = send_pinned_httpx_request(
                     current,
@@ -1171,7 +1221,10 @@ def bounded_manual_get(
             raise _error("http_status")
         try:
             redirect_policy = target_policy
-            if service_target is not None and service_target.host not in target_policy.allow_hosts:
+            if (
+                service_target is not None
+                and service_target.host not in target_policy.allow_hosts
+            ):
                 # Permit normalization of the configured service host solely
                 # so it can be rejected as ``service_redirect`` below.  No
                 # other private host is added to the target policy.
@@ -1366,8 +1419,8 @@ def bounded_service_post(
 
 
 __all__ = [
-    "DirectResponse",
     "MAX_BODY_BYTES",
+    "DirectResponse",
     "bounded_manual_get",
     "bounded_service_get",
     "bounded_service_post",

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
 
@@ -18,7 +18,9 @@ from sluice.web.contracts import ExtractorBinding, ProviderBinding, WebBinding
 
 
 def _empty_definition(path: Path) -> Path:
-    path.write_text("version: 1\nsources: {}\nstages: {}\npipelines: {}\n", encoding="utf-8")
+    path.write_text(
+        "version: 1\nsources: {}\nstages: {}\npipelines: {}\n", encoding="utf-8"
+    )
     return path
 
 
@@ -40,7 +42,11 @@ def _retention_sink(config, payload, delivery_key):
 
 def test_app_close_waits_for_admitted_drain_and_is_idempotent(tmp_path: Path) -> None:
     spy = _CloseSpy()
-    app = open_app(_empty_definition(tmp_path / "definition.yml"), tmp_path / "state.db", web_content_client=spy)
+    app = open_app(
+        _empty_definition(tmp_path / "definition.yml"),
+        tmp_path / "state.db",
+        web_content_client=spy,
+    )
     entered = Event()
     release = Event()
 
@@ -66,7 +72,9 @@ def test_app_close_waits_for_admitted_drain_and_is_idempotent(tmp_path: Path) ->
     assert spy.close_calls == 1
 
 
-def _retained_stage(*, tmp_path: Path, binding: WebBinding | None, state: str = "succeeded") -> tuple[Path, int]:
+def _retained_stage(
+    *, tmp_path: Path, binding: WebBinding | None, state: str = "succeeded"
+) -> tuple[Path, int]:
     definition_path = _empty_definition(tmp_path / "definition.yml")
     first = open_app(definition_path, tmp_path / "state.db")
     payload = {"url": "https://example.test/article", "content": "source"}
@@ -80,20 +88,38 @@ def _retained_stage(*, tmp_path: Path, binding: WebBinding | None, state: str = 
         observed_at="2026-01-01T00:00:00Z",
         produced_by=1,
     )
-    first.conn.execute("INSERT INTO executions (kind,state,binding_digest,config_json,policy_json) VALUES ('source','succeeded','source-binding','{}','{}')")
+    first.conn.execute(
+        "INSERT INTO executions (kind,state,binding_digest,config_json,policy_json) VALUES ('source','succeeded','source-binding','{}','{}')"
+    )
     producer = int(first.conn.execute("SELECT last_insert_rowid()").fetchone()[0])
     first.conn.execute(
         "INSERT INTO items (id,producer_kind,producer_name,logical_id,payload_json,metadata_json,content_hash,observed_at,produced_by) VALUES (?,?,?,?,?,?,?,?,?)",
-        (item.id, "source", "feed", item.logical_id, canonical_json(item.payload), canonical_json(item.metadata), item.content_hash, item.observed_at, producer),
+        (
+            item.id,
+            "source",
+            "feed",
+            item.logical_id,
+            canonical_json(item.payload),
+            canonical_json(item.metadata),
+            item.content_hash,
+            item.observed_at,
+            producer,
+        ),
     )
-    task = TaskDef(use="sluice.tasks.fetch_webpage", with_config={"url_field": "url"}, web_binding=binding)
+    task = TaskDef(
+        use="sluice.tasks.fetch_webpage",
+        with_config={"url_field": "url"},
+        web_binding=binding,
+    )
     stage = StageDef(
         name="article",
         input_mode="each",
         tasks=(task,),
         output_schema=None,
         cache_version=1,
-        canonical_config_json=canonical_stage_config("article", "each", (task,), None, 1, tmp_path),
+        canonical_config_json=canonical_stage_config(
+            "article", "each", (task,), None, 1, tmp_path
+        ),
     )
     if binding is None:
         legacy_snapshot = __import__("json").loads(stage.canonical_config_json)
@@ -109,18 +135,39 @@ def _retained_stage(*, tmp_path: Path, binding: WebBinding | None, state: str = 
     lookup = stage_lookup_key(stage, (item,), ())
     execution = first.conn.execute(
         "INSERT INTO executions (kind,stage_name,state,binding_digest,config_json,lookup_key,policy_json) VALUES ('stage','article',?,'stage-binding',?,?,?)",
-        (state, stage.canonical_config_json, lookup, canonical_json({"timeout_seconds": None, "retries": 0, "concurrency": 1})),
+        (
+            state,
+            stage.canonical_config_json,
+            lookup,
+            canonical_json({"timeout_seconds": None, "retries": 0, "concurrency": 1}),
+        ),
     )
     execution_id = int(execution.lastrowid)
-    first.conn.execute("INSERT INTO execution_inputs (execution_id,slot,ordinal,item_id) VALUES (?,?,?,?)", (execution_id, "items", 0, item.id))
+    first.conn.execute(
+        "INSERT INTO execution_inputs (execution_id,slot,ordinal,item_id) VALUES (?,?,?,?)",
+        (execution_id, "items", 0, item.id),
+    )
     first.close()
     return definition_path, execution_id
 
 
-def test_terminal_missing_secret_does_not_block_startup_but_rebuild_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_terminal_missing_secret_does_not_block_startup_but_rebuild_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("RETIRED_KEY", raising=False)
     binding = WebBinding(
-        fetch_chain=(ProviderBinding(name="compat", type="startup_http", options={"trusted": True}, target_headers={"X-Token": "env:RETIRED_KEY"}, capabilities=frozenset({"text"}), timeout=timedelta(seconds=30), connect_timeout=timedelta(seconds=10), timeout_seconds=30),),
+        fetch_chain=(
+            ProviderBinding(
+                name="compat",
+                type="startup_http",
+                options={"trusted": True},
+                target_headers={"X-Token": "env:RETIRED_KEY"},
+                capabilities=frozenset({"text"}),
+                timeout=timedelta(seconds=30),
+                connect_timeout=timedelta(seconds=10),
+                timeout_seconds=30,
+            ),
+        ),
         fetch_chain_name="retired",
         extract_chain=(ExtractorBinding(name="identity", type="identity"),),
         extract_chain_name="article",
@@ -131,7 +178,7 @@ def test_terminal_missing_secret_does_not_block_startup_but_rebuild_fails(tmp_pa
     with pytest.raises(DefinitionError, match="RETIRED_KEY"):
         from sluice.stage_runtime import rebuild_stage
 
-        rebuild_stage(app, execution_id, datetime.now(timezone.utc))
+        rebuild_stage(app, execution_id, datetime.now(UTC))
     app.close()
 
 
@@ -154,9 +201,7 @@ def test_terminal_optional_provider_is_structural_until_explicit_rebuild(
         extract_chain_name="article",
         output="artifact",
     )
-    definition_path, execution_id = _retained_stage(
-        tmp_path=tmp_path, binding=binding
-    )
+    definition_path, execution_id = _retained_stage(tmp_path=tmp_path, binding=binding)
     original_import = __import__("importlib").import_module
 
     def missing(name: str, *args: object, **kwargs: object):
@@ -172,7 +217,7 @@ def test_terminal_optional_provider_is_structural_until_explicit_rebuild(
         with pytest.raises(DefinitionError, match="retired-article"):
             from sluice.stage_runtime import rebuild_stage
 
-            rebuild_stage(app, execution_id, datetime.now(timezone.utc))
+            rebuild_stage(app, execution_id, datetime.now(UTC))
     finally:
         app.close()
 
@@ -216,27 +261,44 @@ def test_terminal_supported_proxy_is_structural_without_secret_resolution_or_cli
         app.close()
 
 
-def test_queued_missing_secret_blocks_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_queued_missing_secret_blocks_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.delenv("QUEUED_KEY", raising=False)
     binding = WebBinding(
-        fetch_chain=(ProviderBinding(name="compat", type="startup_http", options={"trusted": True}, target_headers={"X-Token": "env:QUEUED_KEY"}, capabilities=frozenset({"text"}), timeout=timedelta(seconds=30), connect_timeout=timedelta(seconds=10), timeout_seconds=30),),
+        fetch_chain=(
+            ProviderBinding(
+                name="compat",
+                type="startup_http",
+                options={"trusted": True},
+                target_headers={"X-Token": "env:QUEUED_KEY"},
+                capabilities=frozenset({"text"}),
+                timeout=timedelta(seconds=30),
+                connect_timeout=timedelta(seconds=10),
+                timeout_seconds=30,
+            ),
+        ),
         fetch_chain_name="queued",
         extract_chain=(ExtractorBinding(name="identity", type="identity"),),
         extract_chain_name="article",
         output="artifact",
     )
-    definition_path, _ = _retained_stage(tmp_path=tmp_path, binding=binding, state="queued")
+    definition_path, _ = _retained_stage(
+        tmp_path=tmp_path, binding=binding, state="queued"
+    )
     with pytest.raises(DefinitionError, match="QUEUED_KEY"):
         open_app(definition_path, tmp_path / "state.db")
 
 
-def test_terminal_legacy_web_snapshot_is_readable_but_never_rebuildable(tmp_path: Path) -> None:
+def test_terminal_legacy_web_snapshot_is_readable_but_never_rebuildable(
+    tmp_path: Path,
+) -> None:
     definition_path, execution_id = _retained_stage(tmp_path=tmp_path, binding=None)
     app = open_app(definition_path, tmp_path / "state.db")
     with pytest.raises(DefinitionError, match="legacy web snapshot"):
         from sluice.stage_runtime import rebuild_stage
 
-        rebuild_stage(app, execution_id, datetime.now(timezone.utc))
+        rebuild_stage(app, execution_id, datetime.now(UTC))
     app.close()
 
 
@@ -266,7 +328,7 @@ pipelines:
     first = open_app(definition_path, database)
     from sluice.reconcile import reconcile_node
 
-    at = datetime(2026, 8, 14, tzinfo=timezone.utc)
+    at = datetime(2026, 8, 14, tzinfo=UTC)
     reconcile_node(first, "p", "article", at)
 
     source_execution = first.conn.execute(
@@ -280,7 +342,9 @@ pipelines:
         logical_id="one",
         payload={"url": "https://example.test/article", "content": "source"},
         metadata={},
-        content_hash=content_hash({"url": "https://example.test/article", "content": "source"}),
+        content_hash=content_hash(
+            {"url": "https://example.test/article", "content": "source"}
+        ),
         observed_at="2026-01-01T00:00:00Z",
         produced_by=producer_id,
     )
@@ -399,18 +463,27 @@ pipelines:
     assert tuple(owner) == ("failed", "superseded legacy web snapshot")
     assert promoted is not None
     assert promoted[1] == "queued"
-    assert app.conn.execute(
-        "SELECT owner_execution_id FROM materialization_claims "
-        "WHERE stage_name='article' AND lookup_key=?",
-        (lookup_key,),
-    ).fetchone()[0] == promoted[0]
-    assert app.conn.execute(
-        "SELECT state FROM node_members WHERE pipeline_name='p' AND node_name='article' "
-        "AND item_id=?",
-        (item.id,),
-    ).fetchone()[0] == "terminal"
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM materialization_waiters WHERE stage_name='article' AND lookup_key=?",
-        (lookup_key,),
-    ).fetchone()[0] == 0
+    assert (
+        app.conn.execute(
+            "SELECT owner_execution_id FROM materialization_claims "
+            "WHERE stage_name='article' AND lookup_key=?",
+            (lookup_key,),
+        ).fetchone()[0]
+        == promoted[0]
+    )
+    assert (
+        app.conn.execute(
+            "SELECT state FROM node_members WHERE pipeline_name='p' AND node_name='article' "
+            "AND item_id=?",
+            (item.id,),
+        ).fetchone()[0]
+        == "terminal"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM materialization_waiters WHERE stage_name='article' AND lookup_key=?",
+            (lookup_key,),
+        ).fetchone()[0]
+        == 0
+    )
     app.close()

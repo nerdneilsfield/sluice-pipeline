@@ -7,28 +7,28 @@ into SQLite membership and freezes immutable envelopes for the later runner.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
-from datetime import timezone
 import json
 import logging
 import sqlite3
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from typing import Any
 
 from .app import App
 from .canonical import canonical_json, digest, node_binding_digest, utc_datetime
-from .contracts import BatchPolicy, Item, NodeDef, StageEnvelope
+from .contracts import BatchPolicy, NodeDef, StageEnvelope
 from .db import write_transaction
 from .errors import ExecutionError
 from .logging import log_event
 from .source_runtime import (
     _binding_digest as source_binding_digest,
+)
+from .source_runtime import (
     _execute_queued_source,
     _recover_source_execution,
     collect_source,
 )
-
 
 _LOGGER = logging.getLogger("sluice.reconcile")
 
@@ -172,16 +172,12 @@ def _producer_for_ref_tx(
             source = app.definition.sources[source_name]
         except KeyError as error:
             raise ExecutionError(f"unknown Source reference {ref!r}") from error
-        binding = _ensure_source_binding_tx(
-            app, source_name, source, at_text
-        )
+        binding = _ensure_source_binding_tx(app, source_name, source, at_text)
         return source_name, binding, "source"
 
     # An upstream node's current pointer is authoritative.  Ensure that an
     # un-reconciled upstream node has its immutable empty snapshot first.
-    upstream_binding = _ensure_node_binding_tx(
-        app, pipeline_name, ref, at_text, set()
-    )
+    upstream_binding = _ensure_node_binding_tx(app, pipeline_name, ref, at_text, set())
     current = app.conn.execute(
         "SELECT binding_digest FROM node_current_bindings "
         "WHERE pipeline_name=? AND node_name=?",
@@ -190,7 +186,9 @@ def _producer_for_ref_tx(
     if current is None:
         # The initializer above always inserts this pointer; retaining a
         # defensive failure avoids silently admitting an edge to no producer.
-        raise ExecutionError(f"upstream node binding is unavailable: {pipeline_name}.{ref}")
+        raise ExecutionError(
+            f"upstream node binding is unavailable: {pipeline_name}.{ref}"
+        )
     return f"{pipeline_name}.{ref}", str(current[0]), "node"
 
 
@@ -271,7 +269,9 @@ def _ensure_node_binding_tx(
 ) -> str:
     marker = (pipeline_name, node_name)
     if marker in active:
-        raise ExecutionError(f"cycle detected while initializing {pipeline_name}.{node_name}")
+        raise ExecutionError(
+            f"cycle detected while initializing {pipeline_name}.{node_name}"
+        )
     active.add(marker)
     try:
         node = _node(app, pipeline_name, node_name)
@@ -371,9 +371,7 @@ def _ensure_node_binding(
 
     at_text = _timestamp(at)
     with write_transaction(app.conn):
-        return _ensure_node_binding_tx(
-            app, pipeline_name, node_name, at_text, set()
-        )
+        return _ensure_node_binding_tx(app, pipeline_name, node_name, at_text, set())
 
 
 def _sync_source_edge_tx(
@@ -627,7 +625,11 @@ def _desired_union_tx(
 
 
 def _identity(row: Mapping[str, Any]) -> tuple[str, str, str]:
-    return (str(row["producer_kind"]), str(row["producer_name"]), str(row["logical_id"]))
+    return (
+        str(row["producer_kind"]),
+        str(row["producer_name"]),
+        str(row["logical_id"]),
+    )
 
 
 def _rebuild_members_tx(
@@ -641,9 +643,7 @@ def _rebuild_members_tx(
     # Terminal Delivery nodes and each Stages accept distinct Item generations.
     # Only batch Stages gate newer generations behind include_updates.
     include_updates = bool(
-        node.stage is None
-        or node.batch is None
-        or node.batch.include_updates
+        node.stage is None or node.batch is None or node.batch.include_updates
     )
     rows = app.conn.execute(
         "SELECT * FROM node_members WHERE pipeline_name=? AND node_name=? AND binding_digest=?",
@@ -659,7 +659,11 @@ def _rebuild_members_tx(
         ).fetchone()
         if item is None:
             raise ExecutionError(f"admission Item is missing: {item_id}")
-        ident = (str(item["producer_kind"]), str(item["producer_name"]), str(item["logical_id"]))
+        ident = (
+            str(item["producer_kind"]),
+            str(item["producer_name"]),
+            str(item["logical_id"]),
+        )
         current = by_id.get(item_id)
         if current is not None:
             if current["state"] == "stale":
@@ -738,7 +742,11 @@ def _rebuild_members_tx(
         )
         if consumed and not include_updates:
             continue
-        generation = 1 if latest is None else max(int(row["generation"]) for row in candidates) + 1
+        generation = (
+            1
+            if latest is None
+            else max(int(row["generation"]) for row in candidates) + 1
+        )
         app.conn.execute(
             "INSERT INTO node_members "
             "(pipeline_name,node_name,binding_digest,item_id,producer_kind,producer_name,logical_id,"
@@ -886,18 +894,30 @@ def _advance_schedule_and_freeze_tx(
         first = None
         if state["current_frozen_batch_id"] is None:
             next_due = None
-    if pending_count and node.schedule is not None and next_due is None and first is not None:
+    if (
+        pending_count
+        and node.schedule is not None
+        and next_due is None
+        and first is not None
+    ):
         next_due = first + node.schedule
 
-    updated_state = app.conn.execute(
-        "SELECT state FROM batches WHERE id=?",
-        (state["current_frozen_batch_id"],),
-    ).fetchone() if state["current_frozen_batch_id"] is not None else None
+    updated_state = (
+        app.conn.execute(
+            "SELECT state FROM batches WHERE id=?",
+            (state["current_frozen_batch_id"],),
+        ).fetchone()
+        if state["current_frozen_batch_id"] is not None
+        else None
+    )
     # A failed batch remains the durable current envelope until a later
     # recovery/rebuild explicitly resolves it; admitting a second batch here
     # would violate immutable batch ownership just as surely as replacing a
     # still-frozen one.
-    frozen_active = updated_state is not None and updated_state[0] in {"frozen", "failed"}
+    frozen_active = updated_state is not None and updated_state[0] in {
+        "frozen",
+        "failed",
+    }
     if state["current_frozen_batch_id"] is not None and not frozen_active:
         app.conn.execute(
             "UPDATE node_state SET current_frozen_batch_id=NULL WHERE pipeline_name=? "
@@ -929,7 +949,9 @@ def _advance_schedule_and_freeze_tx(
     _freeze_tx(app, pipeline_name, node_name, binding, at, at_text, state)
 
 
-def _stage_requests_for_node(app: App, pipeline_name: str, node_name: str, at: datetime):
+def _stage_requests_for_node(
+    app: App, pipeline_name: str, node_name: str, at: datetime
+):
     """Yield immutable Stage requests for currently admitted node work."""
 
     node = _node(app, pipeline_name, node_name)
@@ -954,10 +976,13 @@ def _stage_requests_for_node(app: App, pipeline_name: str, node_name: str, at: d
     if node.batch is not None:
         batch_id = state["current_frozen_batch_id"]
         if batch_id is not None:
-            batch_state = app.conn.execute("SELECT state FROM batches WHERE id=?", (batch_id,)).fetchone()
+            batch_state = app.conn.execute(
+                "SELECT state FROM batches WHERE id=?", (batch_id,)
+            ).fetchone()
             if batch_state is not None and batch_state[0] == "frozen":
                 rows = app.conn.execute(
-                    "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal", (batch_id,)
+                    "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
+                    (batch_id,),
                 ).fetchall()
                 item_ids = tuple(str(row[0]) for row in rows)
                 if item_ids:
@@ -1074,7 +1099,9 @@ def _stage_requests_for_node(app: App, pipeline_name: str, node_name: str, at: d
     return requests
 
 
-def _request_node_work(app: App, pipeline_name: str, node_name: str, at: datetime) -> list[int]:
+def _request_node_work(
+    app: App, pipeline_name: str, node_name: str, at: datetime
+) -> list[int]:
     from .stage_runtime import _request_materialization
 
     execution_ids: list[int] = []
@@ -1098,7 +1125,9 @@ def _source_due_names(app: App, at: datetime) -> list[str]:
             continue
         active = state["active_execution_id"]
         if active is not None:
-            row = app.conn.execute("SELECT state FROM executions WHERE id=?", (active,)).fetchone()
+            row = app.conn.execute(
+                "SELECT state FROM executions WHERE id=?", (active,)
+            ).fetchone()
             if row is not None and row[0] in {"queued", "running"}:
                 continue
         next_due = _decode_timestamp(state["next_due_at"])
@@ -1155,7 +1184,9 @@ def _timeout_executions(
         if policy.timeout is None or utc_datetime(at) < started + policy.timeout:
             continue
         if row["kind"] == "stage":
-            _fail_execution(app, int(row["id"]), ExecutionError("execution timeout"), at)
+            _fail_execution(
+                app, int(row["id"]), ExecutionError("execution timeout"), at
+            )
         else:
             _recover_source_execution(app, int(row["id"]), at)
         changed = True
@@ -1167,7 +1198,7 @@ def _start_queued_stage_owners(
     at: datetime,
     allowed_nodes: set[tuple[str, str]] | None = None,
 ) -> bool:
-    from .stage_runtime import _execute_claimed_stage, _decode_policy
+    from .stage_runtime import _decode_policy, _execute_claimed_stage
 
     rows = app.conn.execute(
         "SELECT e.* FROM executions e JOIN materialization_claims mc ON mc.owner_execution_id=e.id "
@@ -1197,7 +1228,9 @@ def _start_queued_stage_owners(
             except ExecutionError:
                 limit = 1
             for row in candidates[: max(0, limit - running)]:
-                futures.append(pool.submit(_execute_claimed_stage, app, int(row["id"]), at))
+                futures.append(
+                    pool.submit(_execute_claimed_stage, app, int(row["id"]), at)
+                )
         for future in futures:
             future.result()
     return bool(futures)
@@ -1310,7 +1343,10 @@ def tick(app: App, at: datetime) -> None:
 
 def reconcile(app: App, pipeline_name: str, node_name: str, at: datetime) -> None:
     with app.admit():
-        targets = tuple((pipeline_name, name) for name in _dependency_closure(app, pipeline_name, node_name))
+        targets = tuple(
+            (pipeline_name, name)
+            for name in _dependency_closure(app, pipeline_name, node_name)
+        )
         _drain(app, at, targets, scan_roots=((pipeline_name, node_name),))
 
 
@@ -1318,8 +1354,8 @@ def recover_startup(app: App, at: datetime) -> None:
     """Recover interrupted Source/Stage attempts exactly once per startup."""
 
     from .config import decode_stage_snapshot
-    from .stage_runtime import _fail_execution
     from .delivery import _recover_deliveries
+    from .stage_runtime import _fail_execution
 
     # Remove legacy waiters before releasing any superseded owner claim.  This
     # prevents normal claim promotion from turning a retained legacy waiter
@@ -1384,7 +1420,11 @@ def recover_startup(app: App, at: datetime) -> None:
                 legacy = False
         elif kind == "source":
             source_name = row["source_name"]
-            configured = app.definition.sources.get(str(source_name)) if source_name is not None else None
+            configured = (
+                app.definition.sources.get(str(source_name))
+                if source_name is not None
+                else None
+            )
             # A retained Source is executable only when the same named
             # definition still exists and its expanded binding digest is
             # unchanged.  Removal is therefore a supersession as well as an
@@ -1392,8 +1432,13 @@ def recover_startup(app: App, at: datetime) -> None:
             if configured is None:
                 binding_changed = True
             else:
-                binding_changed = str(row["binding_digest"] or "") != source_binding_digest(str(source_name), configured)
-                legacy = configured.use in {"sluice.sources.rss", "sluice.sources.webpage"} and configured.web_binding is None
+                binding_changed = str(
+                    row["binding_digest"] or ""
+                ) != source_binding_digest(str(source_name), configured)
+                legacy = (
+                    configured.use in {"sluice.sources.rss", "sluice.sources.webpage"}
+                    and configured.web_binding is None
+                )
         if kind == "stage" and legacy:
             _fail_execution(
                 app,
@@ -1408,7 +1453,13 @@ def recover_startup(app: App, at: datetime) -> None:
                 app.conn.execute(
                     "UPDATE executions SET state='failed',error=?,finished_at=? "
                     "WHERE id=? AND state IN ('queued','running')",
-                    ("superseded legacy web snapshot" if legacy else "superseded binding", _timestamp(at), execution_id),
+                    (
+                        "superseded legacy web snapshot"
+                        if legacy
+                        else "superseded binding",
+                        _timestamp(at),
+                        execution_id,
+                    ),
                 )
                 app.conn.execute(
                     "UPDATE materialization_claims SET owner_execution_id=NULL WHERE owner_execution_id=?",
@@ -1428,9 +1479,7 @@ def recover_startup(app: App, at: datetime) -> None:
     _recover_deliveries(app, at)
 
 
-def reconcile_node(
-    app: App, pipeline_name: str, node_name: str, at: datetime
-) -> None:
+def reconcile_node(app: App, pipeline_name: str, node_name: str, at: datetime) -> None:
     """Apply one idempotent publication-cursor and admission transaction."""
 
     if not isinstance(app, App):
@@ -1440,14 +1489,10 @@ def reconcile_node(
     from .stage_runtime import _publish_node_snapshot_tx
 
     with write_transaction(app.conn):
-        binding = _ensure_node_binding_tx(
-            app, pipeline_name, node_name, at_text, set()
-        )
+        binding = _ensure_node_binding_tx(app, pipeline_name, node_name, at_text, set())
         _sync_edges_tx(app, pipeline_name, node_name, binding, at_text)
         desired = _desired_union_tx(app, pipeline_name, node_name, binding)
-        _rebuild_members_tx(
-            app, pipeline_name, node_name, binding, desired
-        )
+        _rebuild_members_tx(app, pipeline_name, node_name, binding, desired)
         _publish_node_snapshot_tx(app, pipeline_name, node_name, binding, at_text)
         _advance_schedule_and_freeze_tx(
             app, pipeline_name, node_name, binding, at_dt, at_text
@@ -1471,8 +1516,8 @@ def reconcile_node(
 
 __all__ = [
     "freeze_eligible",
-    "reconcile_node",
     "reconcile",
-    "tick",
+    "reconcile_node",
     "recover_startup",
+    "tick",
 ]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -20,7 +20,6 @@ from sluice.web.contracts import (
     ExtractorBinding,
     FetchChainExhausted,
     FetchRequest,
-    NO_MATCH,
     ProviderBinding,
     QualityPolicy,
     WebAttemptCancelled,
@@ -42,10 +41,11 @@ def _pipeline_source(config, checkpoint):
 
 def _pipeline_sink(config, payload, delivery_key):
     del config, payload, delivery_key
-    return None
 
 
-def test_fetch_extract_project_chain_materializes_json_not_artifact(tmp_path: Path) -> None:
+def test_fetch_extract_project_chain_materializes_json_not_artifact(
+    tmp_path: Path,
+) -> None:
     definition = tmp_path / "definition.yml"
     definition.write_text(
         """version: 1
@@ -101,8 +101,8 @@ pipelines:
         web_content_client=Client(),
     )
     try:
-        collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=timezone.utc))
-        tick(app, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        collect_source(app, "feed", datetime(2026, 1, 1, tzinfo=UTC))
+        tick(app, datetime(2026, 1, 1, tzinfo=UTC))
         payload, metadata = app.conn.execute(
             "SELECT payload_json,metadata_json FROM items WHERE producer_kind='stage'"
         ).fetchone()
@@ -370,9 +370,7 @@ def test_raw_source_rejects_non_generic_binary_mime_and_falls_back() -> None:
 
 
 def test_firecrawl_raw_source_is_conditional_on_feed_validation(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     binding = ProviderBinding(
         name="fire",
         type="firecrawl",
@@ -401,9 +399,7 @@ def test_firecrawl_raw_source_is_conditional_on_feed_validation(monkeypatch) -> 
 def test_firecrawl_raw_source_rejects_article_html_and_exhausts_chain(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "sluice.web.url.resolve_host", lambda host: ["93.184.216.34"]
-    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
     binding = ProviderBinding(
         name="fire",
         type="firecrawl",
@@ -449,9 +445,7 @@ def test_raw_source_parses_supported_advisory_mime(
         }
     )
 
-    result = WebContentClient(catalog).resolve(
-        _raw_source_request(), (binding,), None
-    )
+    result = WebContentClient(catalog).resolve(_raw_source_request(), (binding,), None)
 
     assert result.provider_instance == "feed"
 
@@ -812,9 +806,7 @@ def test_provider_deadline_expiry_advances_to_next_source_provider(
     monkeypatch,
 ) -> None:
     clock = [100.0]
-    monkeypatch.setattr(
-        "sluice.web.client.time.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("sluice.web.client.time.monotonic", lambda: clock[0])
     first = ProviderBinding(
         name="first",
         type="startup_http",
@@ -866,9 +858,7 @@ def test_provider_deadline_expiry_advances_to_next_source_provider(
 
 def test_stage_deadline_expiry_never_starts_another_provider(monkeypatch) -> None:
     clock = [100.0]
-    monkeypatch.setattr(
-        "sluice.web.client.time.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("sluice.web.client.time.monotonic", lambda: clock[0])
     first = ProviderBinding(
         name="first",
         type="startup_http",
@@ -928,9 +918,7 @@ def test_stage_deadline_expiry_never_starts_another_provider(monkeypatch) -> Non
 
 def test_stage_deadline_dominates_a_final_provider_timeout(monkeypatch) -> None:
     clock = [100.0]
-    monkeypatch.setattr(
-        "sluice.web.client.time.monotonic", lambda: clock[0]
-    )
+    monkeypatch.setattr("sluice.web.client.time.monotonic", lambda: clock[0])
     binding = ProviderBinding(
         name="only",
         type="startup_http",
@@ -1211,9 +1199,7 @@ def test_article_rejects_representation_with_incompatible_mime(
     with pytest.raises(FetchChainExhausted) as raised:
         WebContentClient(catalog).resolve(_article_request(), (binding,), chain)
 
-    assert [attempt.reason for attempt in raised.value.attempts] == [
-        "bad_content_type"
-    ]
+    assert [attempt.reason for attempt in raised.value.attempts] == ["bad_content_type"]
 
 
 def test_article_rejects_unadvertised_raw_html_without_running_extractors() -> None:
@@ -1352,9 +1338,7 @@ def test_extract_binding_digest_is_canonical_for_equivalent_options() -> None:
             (binding,),
             (
                 ExtractorBinding(name="identity", type="identity"),
-                ExtractorBinding(
-                    name="plain", type="beautifulsoup", options=options
-                ),
+                ExtractorBinding(name="plain", type="beautifulsoup", options=options),
             ),
         )
         return result.extract_binding_digest
@@ -1403,16 +1387,12 @@ def test_raw_source_winner_retains_only_the_validated_raw_representation() -> No
                 text="rewritten",
                 markdown="rewritten",
                 selected_format="markdown",
-                capabilities=frozenset(
-                    {"raw_source", "raw_html", "text", "markdown"}
-                ),
+                capabilities=frozenset({"raw_source", "raw_html", "text", "markdown"}),
             )
         }
     )
 
-    result = WebContentClient(catalog).resolve(
-        _raw_source_request(), (binding,), None
-    )
+    result = WebContentClient(catalog).resolve(_raw_source_request(), (binding,), None)
 
     assert result.raw_source == b'<feed xmlns="http://www.w3.org/2005/Atom" />'
     assert result.raw_html is None
@@ -1425,14 +1405,20 @@ def test_raw_source_winner_retains_only_the_validated_raw_representation() -> No
 def test_raw_feed_validator_rejects_dtd_entities_and_xinclude() -> None:
     from sluice.web.feed import validate_raw_feed
 
-    assert validate_raw_feed(
-        b'<!DOCTYPE feed [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
-        b'<feed xmlns="http://www.w3.org/2005/Atom"><title>&xxe;</title></feed>'
-    ) is None
-    assert validate_raw_feed(
-        b'<feed xmlns="http://www.w3.org/2005/Atom" '
-        b'xmlns:x="http://www.w3.org/2001/XInclude"><x:include href="file:///etc/passwd"/></feed>'
-    ) is None
+    assert (
+        validate_raw_feed(
+            b'<!DOCTYPE feed [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            b'<feed xmlns="http://www.w3.org/2005/Atom"><title>&xxe;</title></feed>'
+        )
+        is None
+    )
+    assert (
+        validate_raw_feed(
+            b'<feed xmlns="http://www.w3.org/2005/Atom" '
+            b'xmlns:x="http://www.w3.org/2001/XInclude"><x:include href="file:///etc/passwd"/></feed>'
+        )
+        is None
+    )
 
 
 def test_raw_feed_validator_rejects_utf16_dtd_entity_expansion() -> None:
@@ -1451,7 +1437,7 @@ def test_raw_feed_validator_does_not_treat_plain_include_text_as_xinclude() -> N
 
     root = validate_raw_feed(
         b'<feed xmlns="http://www.w3.org/2005/Atom">'
-        b'<title>release:include notes</title><include>local metadata</include></feed>'
+        b"<title>release:include notes</title><include>local metadata</include></feed>"
     )
 
     assert root is not None

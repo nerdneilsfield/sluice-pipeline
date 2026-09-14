@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cmp_to_key
-import math
 from typing import Any
 
 from ..canonical import canonical_json, digest, utc_datetime
-from ..contracts import BatchInput, DROP, FORWARD, NEW, Item
+from ..contracts import DROP, FORWARD, BatchInput, Item
 from ..errors import ExecutionError
-
 
 _MISSING = object()
 
@@ -77,7 +76,9 @@ def _batch_values(input: object) -> tuple[tuple[Item, ...], tuple[Item, ...]]:
         values = tuple(input)
         history = ()
     else:
-        raise ExecutionError("batch collection Task input must be BatchInput or sequence")
+        raise ExecutionError(
+            "batch collection Task input must be BatchInput or sequence"
+        )
     if any(not isinstance(item, Item) for item in values):
         raise ExecutionError("collection Tasks require Item values")
     if any(not isinstance(item, Item) for item in history):
@@ -170,11 +171,17 @@ def _change_rate(candidate: Item, prior: Item, config: Mapping[str, Any]) -> flo
     if not isinstance(candidate_value, str) or not isinstance(prior_value, str):
         raise ExecutionError("dedup change field values must be strings")
     denominator = max(len(candidate_value), len(prior_value))
-    rate = 0.0 if denominator == 0 else _levenshtein(candidate_value, prior_value) / denominator
+    rate = (
+        0.0
+        if denominator == 0
+        else _levenshtein(candidate_value, prior_value) / denominator
+    )
     return rate
 
 
-def _prior_decision(candidate: Item, prior: Item | None, config: Mapping[str, Any]) -> bool:
+def _prior_decision(
+    candidate: Item, prior: Item | None, config: Mapping[str, Any]
+) -> bool:
     if prior is None:
         rule = config.get("change")
         if rule is not None:
@@ -220,7 +227,9 @@ def dedup(config: Mapping[str, Any], input: object) -> tuple[object, ...]:
 
     current_groups: dict[str, list[tuple[int, Item]]] = {}
     for index, candidate in enumerate(candidates):
-        current_groups.setdefault(_identity(candidate, keys), []).append((index, candidate))
+        current_groups.setdefault(_identity(candidate, keys), []).append(
+            (index, candidate)
+        )
     history_groups: dict[str, list[Item]] = {}
     for prior in history:
         history_groups.setdefault(_identity(prior, keys), []).append(prior)
@@ -240,7 +249,9 @@ def dedup(config: Mapping[str, Any], input: object) -> tuple[object, ...]:
         if index != winner_index:
             output.append(DROP)
             continue
-        output.append(FORWARD(candidate) if _prior_decision(candidate, prior, config) else DROP)
+        output.append(
+            FORWARD(candidate) if _prior_decision(candidate, prior, config) else DROP
+        )
     return tuple(output)
 
 
@@ -268,7 +279,12 @@ def select_dedup_history(
         identity = (
             _identity(candidate, normalized_keys)
             if normalized_keys is not None
-            else digest({"producer_scope": candidate.producer_scope, "logical_id": candidate.logical_id})
+            else digest(
+                {
+                    "producer_scope": candidate.producer_scope,
+                    "logical_id": candidate.logical_id,
+                }
+            )
         )
         if identity not in candidate_winners:
             candidate_order.append(identity)
@@ -316,14 +332,18 @@ def select_dedup_history(
         identity = (
             _identity(item, normalized_keys)
             if normalized_keys is not None
-            else digest({"producer_scope": item.producer_scope, "logical_id": item.logical_id})
+            else digest(
+                {"producer_scope": item.producer_scope, "logical_id": item.logical_id}
+            )
         )
         candidate = candidate_winners.get(identity)
         if candidate is None or _order(item) >= _order(candidate):
             continue
         if identity not in selected or _order(item) > _order(selected[identity]):
             selected[identity] = item
-    return tuple(selected[identity] for identity in candidate_order if identity in selected)
+    return tuple(
+        selected[identity] for identity in candidate_order if identity in selected
+    )
 
 
 def _kind(value: object) -> str:

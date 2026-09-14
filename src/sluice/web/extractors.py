@@ -8,21 +8,19 @@ In particular, no extractor fetches a URL; newspaper4k's compatibility
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
-from datetime import datetime, timezone
 import importlib
-import json
 import re
 import unicodedata
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from bs4 import BeautifulSoup, Comment, Tag
 
 from ..errors import DefinitionError, ExecutionError, WebSafetyError
-from .contracts import DocumentArtifact, ExtractorBinding, NO_MATCH
+from .contracts import NO_MATCH, DocumentArtifact, ExtractorBinding
 from .sanitize import sanitize_markdown
-
 
 EXTRACTOR_FORMATS: dict[str, str] = {
     "trafilatura": "markdown",
@@ -173,7 +171,9 @@ def _provider_original(artifact: DocumentArtifact) -> bool:
     }
 
 
-def _identity_representation_allowed(artifact: DocumentArtifact, candidate: str) -> bool:
+def _identity_representation_allowed(
+    artifact: DocumentArtifact, candidate: str
+) -> bool:
     """Check provenance before identity reuses a representation.
 
     Provider artifacts must explicitly advertise every representation they
@@ -210,9 +210,15 @@ def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
     for candidate in candidates:
         if not _identity_representation_allowed(artifact, candidate):
             continue
-        if candidate == "markdown" and isinstance(artifact.markdown, str) and artifact.markdown.strip():
+        if (
+            candidate == "markdown"
+            and isinstance(artifact.markdown, str)
+            and artifact.markdown.strip()
+        ):
             try:
-                value = sanitize_markdown(artifact.markdown, artifact.final_url or artifact.source_url)
+                value = sanitize_markdown(
+                    artifact.markdown, artifact.final_url or artifact.source_url
+                )
             except Exception:
                 raise _failure() from None
             if not value.strip():
@@ -223,7 +229,11 @@ def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
                 extraction="identity",
                 value=value,
             )
-        if candidate == "text" and isinstance(artifact.text, str) and artifact.text.strip():
+        if (
+            candidate == "text"
+            and isinstance(artifact.text, str)
+            and artifact.text.strip()
+        ):
             return _with_result(
                 artifact,
                 selected_format="text",
@@ -272,7 +282,9 @@ def _node_text(node: Tag) -> str:
     return _normalise_text(node.get_text("\n", strip=True))
 
 
-def _article_root(soup: BeautifulSoup, selector: str | None) -> Tag | BeautifulSoup | None:
+def _article_root(
+    soup: BeautifulSoup, selector: str | None
+) -> Tag | BeautifulSoup | None:
     if selector:
         try:
             selected = soup.select_one(selector)
@@ -329,7 +341,11 @@ def _beautifulsoup_text(
         raise _failure() from None
     _remove_selectors(title_soup, remove_selectors)
     title_node = title_soup.find("title")
-    title = _normalise_text(title_node.get_text(" ", strip=True)) if isinstance(title_node, Tag) else None
+    title = (
+        _normalise_text(title_node.get_text(" ", strip=True))
+        if isinstance(title_node, Tag)
+        else None
+    )
 
     soup = _soup_for_html(html)
     _remove_selectors(soup, remove_selectors)
@@ -341,11 +357,17 @@ def _beautifulsoup_text(
     if root is None:
         text = ""
     else:
-        text = _node_text(root) if isinstance(root, Tag) else _normalise_text(root.get_text("\n", strip=True))
+        text = (
+            _node_text(root)
+            if isinstance(root, Tag)
+            else _normalise_text(root.get_text("\n", strip=True))
+        )
     return text, title
 
 
-def _extract_beautifulsoup(artifact: DocumentArtifact, options: Mapping[str, Any]) -> DocumentArtifact | object:
+def _extract_beautifulsoup(
+    artifact: DocumentArtifact, options: Mapping[str, Any]
+) -> DocumentArtifact | object:
     if not isinstance(artifact.raw_html, str) or not artifact.raw_html.strip():
         return NO_MATCH
     mode = options.get("mode", "article")
@@ -353,7 +375,9 @@ def _extract_beautifulsoup(artifact: DocumentArtifact, options: Mapping[str, Any
         raise ExecutionError("beautifulsoup.mode must be article or plain")
     selector = options.get("content_selector")
     if selector is not None and (not isinstance(selector, str) or not selector.strip()):
-        raise ExecutionError("beautifulsoup.content_selector must be a non-empty string")
+        raise ExecutionError(
+            "beautifulsoup.content_selector must be a non-empty string"
+        )
     raw_remove = options.get("remove_selectors", ())
     if not isinstance(raw_remove, (list, tuple)) or any(
         not isinstance(item, str) or not item.strip() for item in raw_remove
@@ -367,7 +391,13 @@ def _extract_beautifulsoup(artifact: DocumentArtifact, options: Mapping[str, Any
     )
     if not text:
         return NO_MATCH
-    return _with_result(artifact, selected_format="text", extraction="beautifulsoup", value=text, title=title)
+    return _with_result(
+        artifact,
+        selected_format="text",
+        extraction="beautifulsoup",
+        value=text,
+        title=title,
+    )
 
 
 def _load_optional(module_name: str) -> Any | None:
@@ -384,7 +414,9 @@ newspaper = _load_optional("newspaper")
 resiliparse = _load_optional("resiliparse")
 
 
-def _extract_trafilatura(artifact: DocumentArtifact, options: Mapping[str, Any]) -> DocumentArtifact | object:
+def _extract_trafilatura(
+    artifact: DocumentArtifact, options: Mapping[str, Any]
+) -> DocumentArtifact | object:
     if not isinstance(artifact.raw_html, str) or not artifact.raw_html.strip():
         return NO_MATCH
     module = trafilatura
@@ -410,7 +442,9 @@ def _extract_trafilatura(artifact: DocumentArtifact, options: Mapping[str, Any])
         return NO_MATCH
     if not value.strip():
         return NO_MATCH
-    return _with_result(artifact, selected_format="markdown", extraction="trafilatura", value=value)
+    return _with_result(
+        artifact, selected_format="markdown", extraction="trafilatura", value=value
+    )
 
 
 def _newspaper_article(module: Any, language: str | None) -> Any | None:
@@ -432,7 +466,11 @@ def _newspaper_article(module: Any, language: str | None) -> Any | None:
             # Older releases may reject follow_meta_refresh while still
             # accepting the image flag.  Keep that compatibility path before
             # falling back to the minimal constructor.
-            fallback_kwargs = {key: value for key, value in kwargs.items() if key != "follow_meta_refresh"}
+            fallback_kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if key != "follow_meta_refresh"
+            }
             article = article_cls("", **fallback_kwargs)
         except Exception:
             try:
@@ -468,14 +506,14 @@ def _disable_newspaper_image_fetch(article: Any) -> None:
     config = getattr(article, "config", None)
     if config is not None:
         try:
-            setattr(config, "fetch_images", False)
+            config.fetch_images = False
         except Exception:
             pass
 
     # Keep compatibility shims and test doubles from following a configured
     # read-more selector when they implement ``download`` themselves.
     try:
-        setattr(article, "read_more_link", "")
+        article.read_more_link = ""
     except Exception:
         pass
 
@@ -494,14 +532,18 @@ def _date_value(value: Any) -> str | None:
     if isinstance(value, datetime):
         parsed = value
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            parsed = parsed.replace(tzinfo=UTC)
+        return (
+            parsed.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        )
     if isinstance(value, str):
         return value.strip() or None
     return None
 
 
-def _extract_newspaper(artifact: DocumentArtifact, options: Mapping[str, Any]) -> DocumentArtifact | object:
+def _extract_newspaper(
+    artifact: DocumentArtifact, options: Mapping[str, Any]
+) -> DocumentArtifact | object:
     if not isinstance(artifact.raw_html, str) or not artifact.raw_html.strip():
         return NO_MATCH
     module = newspaper
@@ -578,7 +620,9 @@ def _resiliparse_extract_function(module: Any) -> Any | None:
     return fn if callable(fn) else None
 
 
-def _extract_resiliparse(artifact: DocumentArtifact, options: Mapping[str, Any]) -> DocumentArtifact | object:
+def _extract_resiliparse(
+    artifact: DocumentArtifact, options: Mapping[str, Any]
+) -> DocumentArtifact | object:
     if not isinstance(artifact.raw_html, str) or not artifact.raw_html.strip():
         return NO_MATCH
     module = resiliparse
@@ -602,7 +646,9 @@ def _extract_resiliparse(artifact: DocumentArtifact, options: Mapping[str, Any])
     value = _normalise_text(value)
     if not value:
         return NO_MATCH
-    return _with_result(artifact, selected_format="text", extraction="resiliparse", value=value)
+    return _with_result(
+        artifact, selected_format="text", extraction="resiliparse", value=value
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -628,7 +674,9 @@ class _ConfiguredExtractor:
         return self.extract(artifact)
 
 
-def _configured(name: str, extractor_type: str, options: Mapping[str, Any] | None = None) -> _ConfiguredExtractor:
+def _configured(
+    name: str, extractor_type: str, options: Mapping[str, Any] | None = None
+) -> _ConfiguredExtractor:
     # Reuse the contract freezer so runtime instances cannot mutate even the
     # top-level options mapping (and direct helpers receive the same recursive
     # tuple/mapping treatment as catalog-built extractors).
@@ -661,8 +709,7 @@ def validate_extractor_runtime(binding: ExtractorBinding) -> None:
         )
     if not available:
         raise DefinitionError(
-            f"{binding.type} dependency is unavailable for extractor "
-            f"{binding.name!r}"
+            f"{binding.type} dependency is unavailable for extractor {binding.name!r}"
         )
 
 
@@ -687,23 +734,33 @@ def extract_identity(artifact: DocumentArtifact) -> DocumentArtifact | object:
     return identity.extract(artifact)
 
 
-def extract_trafilatura(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+def extract_trafilatura(
+    artifact: DocumentArtifact, options: Mapping[str, Any] | None = None
+) -> DocumentArtifact | object:
     return _configured("trafilatura", "trafilatura", options).extract(artifact)
 
 
-def extract_newspaper4k(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+def extract_newspaper4k(
+    artifact: DocumentArtifact, options: Mapping[str, Any] | None = None
+) -> DocumentArtifact | object:
     return _configured("newspaper4k", "newspaper4k", options).extract(artifact)
 
 
-def extract_resiliparse(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+def extract_resiliparse(
+    artifact: DocumentArtifact, options: Mapping[str, Any] | None = None
+) -> DocumentArtifact | object:
     return _configured("resiliparse", "resiliparse", options).extract(artifact)
 
 
-def extract_beautifulsoup(artifact: DocumentArtifact, options: Mapping[str, Any] | None = None) -> DocumentArtifact | object:
+def extract_beautifulsoup(
+    artifact: DocumentArtifact, options: Mapping[str, Any] | None = None
+) -> DocumentArtifact | object:
     return _configured("beautifulsoup", "beautifulsoup", options).extract(artifact)
 
 
-def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] | None = None) -> WebExtractor:
+def build_extractor(
+    binding: ExtractorBinding | str, options: Mapping[str, Any] | None = None
+) -> WebExtractor:
     """Build one fixed extractor from an expanded binding or type name."""
 
     if isinstance(binding, ExtractorBinding):
@@ -716,23 +773,23 @@ def build_extractor(binding: ExtractorBinding | str, options: Mapping[str, Any] 
 
 
 __all__ = [
-    "EXTRACTOR_FORMATS",
     "EXTRACTORS",
-    "WebExtractor",
+    "EXTRACTOR_FORMATS",
     "NO_MATCH",
-    "identity",
-    "trafilatura_extractor",
-    "newspaper4k",
-    "resiliparse_extractor",
+    "WebExtractor",
     "beautifulsoup",
     "build_extractor",
+    "extract_beautifulsoup",
     "extract_identity",
-    "extract_trafilatura",
     "extract_newspaper4k",
     "extract_resiliparse",
-    "extract_beautifulsoup",
-    "validate_extractor_runtime",
-    "trafilatura",
+    "extract_trafilatura",
+    "identity",
     "newspaper",
+    "newspaper4k",
     "resiliparse",
+    "resiliparse_extractor",
+    "trafilatura",
+    "trafilatura_extractor",
+    "validate_extractor_runtime",
 ]

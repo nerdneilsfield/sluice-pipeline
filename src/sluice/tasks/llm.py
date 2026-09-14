@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from ..contracts import BatchInput, JSONValue, LLMClient, NEW, Item
+from ..contracts import NEW, BatchInput, Item, JSONValue, LLMClient
 from ..errors import ExecutionError, InvalidStructuredOutput
 
 
@@ -117,7 +117,9 @@ def _validate_shape(value: object, shape: object, path: str) -> None:
             raise _invalid(f"structured output {path} must be an object")
         for key, child_shape in shape.items():
             if not isinstance(key, str):
-                raise _invalid(f"structured output schema key at {path} must be a string")
+                raise _invalid(
+                    f"structured output schema key at {path} must be a string"
+                )
             if key not in value:
                 raise _invalid(f"structured output is missing {path}.{key}")
             _validate_shape(value[key], child_shape, f"{path}.{key}")
@@ -134,7 +136,9 @@ def validate_structured(value: JSONValue, schema: Mapping[str, JSONValue]) -> JS
         raise InvalidStructuredOutput("structured output must be an object")
     for key, shape in schema.items():
         if not isinstance(key, str):
-            raise InvalidStructuredOutput("structured output schema keys must be strings")
+            raise InvalidStructuredOutput(
+                "structured output schema keys must be strings"
+            )
         if key not in value:
             raise InvalidStructuredOutput(f"structured output is missing {key}")
         _validate_shape(value[key], shape, key)

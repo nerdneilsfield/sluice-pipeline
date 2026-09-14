@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from datetime import datetime, timezone
 import json
 import re
 import warnings
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from itertools import islice
 from typing import Any
 from urllib.parse import urljoin, urlsplit
@@ -17,7 +17,6 @@ from markdown_it import MarkdownIt
 from ..errors import WebSafetyError
 from .contracts import FetchChainExhausted, WebAttemptFailure
 from .url import normalize_target_url
-
 
 MAX_METADATA_BYTES = 65_536
 MAX_FIELD_STRING = 8_192
@@ -33,25 +32,34 @@ _SAFE_WARNINGS = frozenset(
         "publication_date_invalid",
     }
 )
-_RE_HTML = re.compile(r"<!--.*?-->|<[^>]*>", re.S)
-_RE_SCRIPT = re.compile(r"<(script|style|template|noscript|svg|canvas)\b[^>]*>.*?</\1\s*>", re.I | re.S)
+_RE_HTML = re.compile(r"<!--.*?-->|<[^>]*>", re.DOTALL)
+_RE_SCRIPT = re.compile(
+    r"<(script|style|template|noscript|svg|canvas)\b[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
 _RE_RAW_BLOCK = re.compile(
     r"<(?P<tag>address|article|aside|blockquote|body|canvas|div|embed|fieldset|footer|form|h[1-6]|head|header|hr|iframe|main|nav|object|ol|p|pre|section|table|title|ul)\b[^>]*>.*?</(?P=tag)\s*>",
-    re.I | re.S,
+    re.IGNORECASE | re.DOTALL,
 )
-_RE_EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+_RE_EMAIL = re.compile(
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+"
+)
 _RE_AUTOLINK = re.compile(
     r"<((?:[A-Za-z][A-Za-z0-9+.-]*:)[^>\s]+|"
     r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
     r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)>",
-    re.I,
+    re.IGNORECASE,
 )
-_RE_REFERENCE = re.compile(r"^(\s*\[[^\]]+\]:\s*)(\S+)(.*)$", re.M)
-_RE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[Tt ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:[Zz]|[+-][0-9]{2}:?[0-9]{2})?)?$")
+_RE_REFERENCE = re.compile(r"^(\s*\[[^\]]+\]:\s*)(\S+)(.*)$", re.MULTILINE)
+_RE_DATE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}(?:[Tt ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?(?:[Zz]|[+-][0-9]{2}:?[0-9]{2})?)?$"
+)
 _RE_RFC3339 = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|z|[+-]\d{2}:?\d{2})$"
 )
-_RE_FENCED_CODE = re.compile(r"(?P<fence>`{3,}|~{3,})[^\n]*\n.*?(?P=fence)\s*", re.S)
+_RE_FENCED_CODE = re.compile(
+    r"(?P<fence>`{3,}|~{3,})[^\n]*\n.*?(?P=fence)\s*", re.DOTALL
+)
 _RE_INLINE_CODE = re.compile(r"(?<!`)`+[^`\n]+`+(?!`)")
 _RE_IMAGE_START = re.compile(r"!\[([^\]\n]*)\]\(")
 _RE_LINK_START = re.compile(r"(?<!!)\[([^\]\n]+)\]\(")
@@ -80,7 +88,9 @@ def _visible_text(value: Any) -> str:
             ]
         ):
             node.decompose()
-        for comment in list(soup.find_all(string=lambda item: isinstance(item, Comment))):
+        for comment in list(
+            soup.find_all(string=lambda item: isinstance(item, Comment))
+        ):
             comment.extract()
         return " ".join(soup.get_text(" ", strip=True).replace("\u00a0", " ").split())
     except Exception:
@@ -267,7 +277,9 @@ def _rewrite_markdown_destinations(
         safe = _normalise_destination(destination, base_url, image=image)
         if safe is None:
             if warnings is not None:
-                warning = "sanitizer_rejected_image" if image else "sanitizer_rejected_link"
+                warning = (
+                    "sanitizer_rejected_image" if image else "sanitizer_rejected_link"
+                )
                 if warning not in warnings:
                     warnings.append(warning)
             replacement = match.group(1)
@@ -377,7 +389,9 @@ def _safe_url(
     lowered = destination.lower()
     if lowered.startswith(("http://", "https://")):
         return destination
-    if allow_mailto_fragment and (lowered.startswith("mailto:") or destination.startswith("#")):
+    if allow_mailto_fragment and (
+        lowered.startswith("mailto:") or destination.startswith("#")
+    ):
         return destination
     if warning in _SAFE_WARNINGS and warning not in warnings:
         warnings.append(warning)
@@ -391,7 +405,9 @@ def _first(mapping: Mapping[str, Any], *keys: str) -> Any:
     return None
 
 
-def _sanitize_open_graph(raw: Any, base_url: str | None, warnings: list[str]) -> dict[str, Any]:
+def _sanitize_open_graph(
+    raw: Any, base_url: str | None, warnings: list[str]
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         return {}
     aliases = {
@@ -412,13 +428,27 @@ def _sanitize_open_graph(raw: Any, base_url: str | None, warnings: list[str]) ->
             if isinstance(value, (list, tuple)):
                 values = []
                 for item in value[:MAX_FIELD_LIST]:
-                    safe = _safe_url(item, base_url, warnings, "sanitizer_rejected_image" if output_key == "image" else "sanitizer_rejected_link")
+                    safe = _safe_url(
+                        item,
+                        base_url,
+                        warnings,
+                        "sanitizer_rejected_image"
+                        if output_key == "image"
+                        else "sanitizer_rejected_link",
+                    )
                     if safe is not None and safe not in values:
                         values.append(safe)
                 if values:
                     result[output_key] = values if output_key == "image" else values[0]
             else:
-                safe = _safe_url(value, base_url, warnings, "sanitizer_rejected_image" if output_key == "image" else "sanitizer_rejected_link")
+                safe = _safe_url(
+                    value,
+                    base_url,
+                    warnings,
+                    "sanitizer_rejected_image"
+                    if output_key == "image"
+                    else "sanitizer_rejected_link",
+                )
                 if safe is not None:
                     result[output_key] = safe
         else:
@@ -428,7 +458,9 @@ def _sanitize_open_graph(raw: Any, base_url: str | None, warnings: list[str]) ->
     return result
 
 
-def _sanitize_twitter(raw: Any, base_url: str | None, warnings: list[str]) -> dict[str, Any]:
+def _sanitize_twitter(
+    raw: Any, base_url: str | None, warnings: list[str]
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         return {}
     aliases = {
@@ -462,12 +494,14 @@ def _normalise_rfc3339(value: Any) -> str | None:
     if _RE_RFC3339.fullmatch(text) is None:
         return None
     try:
-        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text[-1] in "Zz" else text)
+        parsed = datetime.fromisoformat(
+            text[:-1] + "+00:00" if text[-1] in "Zz" else text
+        )
     except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
         return None
-    utc = parsed.astimezone(timezone.utc)
+    utc = parsed.astimezone(UTC)
     if utc.microsecond:
         value = utc.isoformat(timespec="microseconds").replace("+00:00", "Z")
         head, fraction = value[:-1].split(".", 1)
@@ -482,11 +516,14 @@ def _contains_html_marker(value: Any, budget: list[int], depth: int = 0) -> bool
         return False
     budget[0] -= 1
     if isinstance(value, str):
-        return re.search(
-            r"<\s*(?:script|style|template|noscript|svg|[A-Za-z][^>]{0,80})",
-            value[:MAX_FIELD_STRING],
-            re.I,
-        ) is not None
+        return (
+            re.search(
+                r"<\s*(?:script|style|template|noscript|svg|[A-Za-z][^>]{0,80})",
+                value[:MAX_FIELD_STRING],
+                re.IGNORECASE,
+            )
+            is not None
+        )
     if isinstance(value, Mapping):
         return any(
             _contains_html_marker(item, budget, depth + 1)
@@ -500,8 +537,20 @@ def _contains_html_marker(value: Any, budget: list[int], depth: int = 0) -> bool
     return False
 
 
-def _sanitize_json_ld_object(raw: Mapping[str, Any], base_url: str | None, warnings: list[str]) -> dict[str, Any]:
-    allowed = {"@type", "headline", "name", "description", "author", "datePublished", "dateModified", "url", "image"}
+def _sanitize_json_ld_object(
+    raw: Mapping[str, Any], base_url: str | None, warnings: list[str]
+) -> dict[str, Any]:
+    allowed = {
+        "@type",
+        "headline",
+        "name",
+        "description",
+        "author",
+        "datePublished",
+        "dateModified",
+        "url",
+        "image",
+    }
     result: dict[str, Any] = {}
     for key, value in islice(raw.items(), MAX_FIELD_LIST):
         if key not in allowed:
@@ -511,17 +560,38 @@ def _sanitize_json_ld_object(raw: Mapping[str, Any], base_url: str | None, warni
                 urls: list[str] = []
                 for item in value[:MAX_FIELD_LIST]:
                     item_value = item.get("url") if isinstance(item, Mapping) else item
-                    safe = _safe_url(item_value, base_url, warnings, "sanitizer_rejected_image" if key == "image" else "sanitizer_rejected_link")
+                    safe = _safe_url(
+                        item_value,
+                        base_url,
+                        warnings,
+                        "sanitizer_rejected_image"
+                        if key == "image"
+                        else "sanitizer_rejected_link",
+                    )
                     if safe is not None and safe not in urls:
                         urls.append(safe)
                 if urls:
                     result[key] = urls
             elif isinstance(value, Mapping):
-                safe = _safe_url(value.get("url"), base_url, warnings, "sanitizer_rejected_image" if key == "image" else "sanitizer_rejected_link")
+                safe = _safe_url(
+                    value.get("url"),
+                    base_url,
+                    warnings,
+                    "sanitizer_rejected_image"
+                    if key == "image"
+                    else "sanitizer_rejected_link",
+                )
                 if safe is not None:
                     result[key] = safe
             else:
-                safe = _safe_url(value, base_url, warnings, "sanitizer_rejected_image" if key == "image" else "sanitizer_rejected_link")
+                safe = _safe_url(
+                    value,
+                    base_url,
+                    warnings,
+                    "sanitizer_rejected_image"
+                    if key == "image"
+                    else "sanitizer_rejected_link",
+                )
                 if safe is not None:
                     result[key] = safe
         elif key == "author":
@@ -547,7 +617,11 @@ def _sanitize_json_ld_object(raw: Mapping[str, Any], base_url: str | None, warni
             if isinstance(value, str):
                 result[key] = _bounded_string(value)
             elif isinstance(value, (list, tuple)):
-                result[key] = [_bounded_string(item) for item in value[:MAX_FIELD_LIST] if _bounded_string(item)]
+                result[key] = [
+                    _bounded_string(item)
+                    for item in value[:MAX_FIELD_LIST]
+                    if _bounded_string(item)
+                ]
         else:
             text = _bounded_string(value)
             if text:
@@ -555,7 +629,9 @@ def _sanitize_json_ld_object(raw: Mapping[str, Any], base_url: str | None, warni
     return result
 
 
-def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> list[dict[str, Any]]:
+def _sanitize_json_ld(
+    raw: Any, base_url: str | None, warnings: list[str]
+) -> list[dict[str, Any]]:
     """Return ordered, bounded JSON-LD objects without unknown fields."""
 
     values = raw if isinstance(raw, (list, tuple)) else (raw,)
@@ -569,7 +645,9 @@ def _sanitize_json_ld(raw: Any, base_url: str | None, warnings: list[str]) -> li
     return result
 
 
-def _sanitize_links(raw: Any, base_url: str | None, warnings: list[str]) -> list[dict[str, str]]:
+def _sanitize_links(
+    raw: Any, base_url: str | None, warnings: list[str]
+) -> list[dict[str, str]]:
     if not isinstance(raw, (list, tuple)):
         return []
     result: list[dict[str, str]] = []
@@ -610,38 +688,76 @@ def _truncate_fields(value: Any) -> Any:
 
 
 def _encoded_size(value: Mapping[str, Any]) -> int:
-    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    return len(
+        json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+    )
 
 
-def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None = None) -> dict[str, Any]:
+def sanitize_metadata(
+    metadata: Mapping[str, Any] | None, base_url: str | None = None
+) -> dict[str, Any]:
     """Structurally allowlist and deterministically bound web metadata."""
 
     if not isinstance(metadata, Mapping):
         return {}
-    source: Mapping[str, Any] = metadata.get("web", metadata) if isinstance(metadata.get("web", metadata), Mapping) else {}
+    source: Mapping[str, Any] = (
+        metadata.get("web", metadata)
+        if isinstance(metadata.get("web", metadata), Mapping)
+        else {}
+    )
     warnings: list[str] = []
     raw_warnings = source.get("warnings", ())
     if isinstance(raw_warnings, (list, tuple)):
         for warning in raw_warnings[:MAX_WARNINGS]:
-            if isinstance(warning, str) and warning in _SAFE_WARNINGS and warning not in warnings:
+            if (
+                isinstance(warning, str)
+                and warning in _SAFE_WARNINGS
+                and warning not in warnings
+            ):
                 warnings.append(warning)
 
     known_top_level = {
-        "source_url", "final_url", "title", "provider_instance", "provider_type", "extractor",
-        "output_format", "quality_chars", "quality_words", "published_at", "open_graph",
-        "twitter_card", "json_ld", "links", "authors", "warnings",
+        "source_url",
+        "final_url",
+        "title",
+        "provider_instance",
+        "provider_type",
+        "extractor",
+        "output_format",
+        "quality_chars",
+        "quality_words",
+        "published_at",
+        "open_graph",
+        "twitter_card",
+        "json_ld",
+        "links",
+        "authors",
+        "warnings",
     }
     if (
         any(key not in known_top_level for key in islice(source, MAX_FIELD_LIST))
         and "provider_metadata_ignored" not in warnings
     ):
         warnings.append("provider_metadata_ignored")
-    if _contains_html_marker(source, [MAX_FIELD_LIST * 4]) and "sanitizer_removed_html" not in warnings:
+    if (
+        _contains_html_marker(source, [MAX_FIELD_LIST * 4])
+        and "sanitizer_removed_html" not in warnings
+    ):
         warnings.append("sanitizer_removed_html")
 
     scalar_fields = (
-        "source_url", "final_url", "title", "provider_instance", "provider_type", "extractor",
-        "output_format", "quality_chars", "quality_words", "published_at",
+        "source_url",
+        "final_url",
+        "title",
+        "provider_instance",
+        "provider_type",
+        "extractor",
+        "output_format",
+        "quality_chars",
+        "quality_words",
+        "published_at",
     )
     result: dict[str, Any] = {key: None for key in scalar_fields}
     for key in scalar_fields:
@@ -667,12 +783,20 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
             ):
                 warnings.append("publication_date_invalid")
         elif key == "output_format":
-            result[key] = value if isinstance(value, str) and value in {"text", "markdown"} else None
+            result[key] = (
+                value
+                if isinstance(value, str) and value in {"text", "markdown"}
+                else None
+            )
         else:
             result[key] = _bounded_string(value) if isinstance(value, str) else None
 
-    result["open_graph"] = _sanitize_open_graph(source.get("open_graph", {}), base_url, warnings)
-    result["twitter_card"] = _sanitize_twitter(source.get("twitter_card", {}), base_url, warnings)
+    result["open_graph"] = _sanitize_open_graph(
+        source.get("open_graph", {}), base_url, warnings
+    )
+    result["twitter_card"] = _sanitize_twitter(
+        source.get("twitter_card", {}), base_url, warnings
+    )
     result["json_ld"] = _sanitize_json_ld(source.get("json_ld", {}), base_url, warnings)
     result["links"] = _sanitize_links(source.get("links", ()), base_url, warnings)
 
@@ -691,16 +815,28 @@ def sanitize_metadata(metadata: Mapping[str, Any] | None, base_url: str | None =
     for field_name in ("json_ld", "open_graph", "twitter_card", "links", "authors"):
         if _encoded_size(result) <= MAX_METADATA_BYTES:
             break
-        if field_name in result and result[field_name]:
+        if result.get(field_name):
             result[field_name] = {} if isinstance(result[field_name], Mapping) else []
             omitted = True
     if omitted and "metadata_truncated" not in result["warnings"]:
-        result["warnings"] = (result["warnings"] + ["metadata_truncated"])[:MAX_WARNINGS]
+        result["warnings"] = (result["warnings"] + ["metadata_truncated"])[
+            :MAX_WARNINGS
+        ]
     # Required scalar provenance fields may not be omitted.  As a final guard,
     # trim optional strings until the bounded JSON representation fits.
     if _encoded_size(result) > MAX_METADATA_BYTES:
         for key in sorted(result):
-            if key in {"source_url", "final_url", "provider_instance", "provider_type", "extractor", "output_format", "quality_chars", "quality_words", "warnings"}:
+            if key in {
+                "source_url",
+                "final_url",
+                "provider_instance",
+                "provider_type",
+                "extractor",
+                "output_format",
+                "quality_chars",
+                "quality_words",
+                "warnings",
+            }:
                 continue
             if isinstance(result[key], str):
                 result[key] = result[key][:256]
@@ -732,27 +868,57 @@ def sanitize_web_error(error: BaseException) -> str:
     """Map arbitrary provider exceptions to a stable safe reason/summary."""
 
     stable = {
-        "bad_url", "ssrf_blocked", "timeout", "network", "rate_limited", "provider_busy",
-        "http_status", "bad_content_type", "body_too_large", "unsafe_xml", "challenge",
-        "empty_shell", "empty", "too_short", "extract_failed", "missing_capability", "provider_error",
+        "bad_url",
+        "ssrf_blocked",
+        "timeout",
+        "network",
+        "rate_limited",
+        "provider_busy",
+        "http_status",
+        "bad_content_type",
+        "body_too_large",
+        "unsafe_xml",
+        "challenge",
+        "empty_shell",
+        "empty",
+        "too_short",
+        "extract_failed",
+        "missing_capability",
+        "provider_error",
     }
-    aliases = {"peer_mismatch": "ssrf_blocked", "forbidden_header": "bad_url", "service_redirect": "provider_error", "too_many_redirects": "ssrf_blocked"}
+    aliases = {
+        "peer_mismatch": "ssrf_blocked",
+        "forbidden_header": "bad_url",
+        "service_redirect": "provider_error",
+        "too_many_redirects": "ssrf_blocked",
+    }
     if isinstance(error, WebSafetyError):
         reason = getattr(error, "reason", None)
         if reason is None and error.args and isinstance(error.args[0], str):
-            reason = error.args[0] if error.args[0] in stable or error.args[0] in aliases else None
+            reason = (
+                error.args[0]
+                if error.args[0] in stable or error.args[0] in aliases
+                else None
+            )
         return aliases.get(reason, reason if reason in stable else "provider_error")
     if isinstance(error, FetchChainExhausted):
         attempts: list[dict[str, Any]] = []
         for attempt in error.attempts[:100]:
             if isinstance(attempt, WebAttemptFailure):
-                item: dict[str, Any] = {"provider": attempt.provider_instance, "reason": attempt.reason}
+                item: dict[str, Any] = {
+                    "provider": attempt.provider_instance,
+                    "reason": attempt.reason,
+                }
                 if attempt.status_code is not None:
                     item["status"] = attempt.status_code
                 attempts.append(item)
         # Canonical JSON contains only bounded identifiers/reasons supplied by
         # the frozen contract, never exception text or response bodies.
-        return json.dumps({"reason": "provider_error", "attempts": attempts}, separators=(",", ":"), sort_keys=True)
+        return json.dumps(
+            {"reason": "provider_error", "attempts": attempts},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
     try:
         import httpx
 

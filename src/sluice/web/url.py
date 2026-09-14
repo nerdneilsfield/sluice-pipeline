@@ -7,11 +7,12 @@ can share the same checks before opening a socket or following a redirect.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import ipaddress
 import re
 import socket
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
 from urllib.parse import (
     parse_qsl,
     quote,
@@ -21,7 +22,6 @@ from urllib.parse import (
 )
 
 from ..errors import WebSafetyError
-
 
 MAX_REDIRECTS = 10
 _PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
@@ -53,7 +53,7 @@ def _error(reason: str) -> WebSafetyError:
     # ``WebSafetyError`` intentionally remains a tiny core exception.  The
     # attribute is useful to adapters while ``str(exc)`` remains safe.
     try:
-        setattr(exc, "reason", reason)
+        exc.reason = reason
     except Exception:
         pass
     return exc
@@ -179,7 +179,7 @@ class TargetPolicy:
         return self.allow_cidrs
 
     @classmethod
-    def from_value(cls, value: Any = None) -> "TargetPolicy":
+    def from_value(cls, value: Any = None) -> TargetPolicy:
         if value is None:
             return DEFAULT_TARGET_POLICY
         if isinstance(value, cls):
@@ -203,7 +203,11 @@ class TargetPolicy:
         allow_remote = value.get("allow_remote_dns_proxy", False)
         if not isinstance(allow_remote, bool):
             raise _error("bad_url")
-        return cls(tuple(str(item) for item in hosts), tuple(str(item) for item in cidrs), allow_remote)
+        return cls(
+            tuple(str(item) for item in hosts),
+            tuple(str(item) for item in cidrs),
+            allow_remote,
+        )
 
 
 DEFAULT_TARGET_POLICY = TargetPolicy()
@@ -280,7 +284,12 @@ def normalize_target_url(
 ) -> NormalizedURL:
     """Parse and canonicalize an HTTP(S) target, rejecting unsafe syntax."""
 
-    if not isinstance(url, str) or not url or _CONTROL.search(url) or _PERCENT_ESCAPE.search(url):
+    if (
+        not isinstance(url, str)
+        or not url
+        or _CONTROL.search(url)
+        or _PERCENT_ESCAPE.search(url)
+    ):
         raise _error("bad_url")
     try:
         parsed = urlsplit(url)
@@ -289,7 +298,11 @@ def normalize_target_url(
             raise _error("bad_url")
         # urlsplit exposes decoded userinfo separately.  Also check the raw
         # netloc because malformed percent escapes must never be accepted.
-        if parsed.username is not None or parsed.password is not None or "@" in parsed.netloc:
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or "@" in parsed.netloc
+        ):
             raise _error("bad_url")
         host = parsed.hostname
         if not host:
@@ -329,7 +342,9 @@ def normalize_target_url(
     return result
 
 
-def normalize_target_url_string(url: str, target_policy: TargetPolicy | Mapping[str, Any] | None = None) -> str:
+def normalize_target_url_string(
+    url: str, target_policy: TargetPolicy | Mapping[str, Any] | None = None
+) -> str:
     """String-returning compatibility alias for callers that need a URL key."""
 
     return str(normalize_target_url(url, target_policy))
@@ -358,7 +373,9 @@ def resolve_host(host: str) -> list[str]:
     return result
 
 
-def _address_allowed(host: str, address: ipaddress._BaseAddress, policy: TargetPolicy) -> bool:
+def _address_allowed(
+    host: str, address: ipaddress._BaseAddress, policy: TargetPolicy
+) -> bool:
     normalized_host = host.lower().rstrip(".")
     # Host allowlists name DNS identities.  A literal non-public address must
     # be authorized by an explicit CIDR so the network scope is visible in
@@ -471,14 +488,16 @@ def redact_url(url: str) -> str:
         netloc = f"[{host}]"
     else:
         netloc = host
-    if port is not None and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+    if port is not None and not (
+        (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+    ):
         netloc += f":{port}"
     query_parts: list[str] = []
     if parsed.query:
         # Retain keys for useful correlation but never retain any decoded
         # value, including blank values.
         for key, _value in parse_qsl(parsed.query, keep_blank_values=True):
-            query_parts.append(f"{quote(key, safe='[]!$&\'()*+,;:@/?') }=<redacted>")
+            query_parts.append(f"{quote(key, safe="[]!$&'()*+,;:@/?")}=<redacted>")
         if not query_parts:
             for raw_key in parsed.query.split("&"):
                 key = raw_key.split("=", 1)[0]
@@ -486,7 +505,11 @@ def redact_url(url: str) -> str:
     return urlunsplit((scheme, netloc, parsed.path or "/", "&".join(query_parts), ""))
 
 
-def join_target_url(base: str | NormalizedURL, location: str, target_policy: TargetPolicy | Mapping[str, Any] | None = None) -> NormalizedURL:
+def join_target_url(
+    base: str | NormalizedURL,
+    location: str,
+    target_policy: TargetPolicy | Mapping[str, Any] | None = None,
+) -> NormalizedURL:
     """Resolve a redirect/link location against a normalized HTTP(S) base."""
 
     if isinstance(base, NormalizedURL):
@@ -508,8 +531,8 @@ __all__ = [
     "NormalizedURL",
     "TargetPolicy",
     "guard_resolved_addresses",
-    "join_target_url",
     "is_non_public_address",
+    "join_target_url",
     "normalize_target_url",
     "normalize_target_url_string",
     "redact_url",

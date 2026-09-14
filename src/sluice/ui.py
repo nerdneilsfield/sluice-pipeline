@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .errors import ExecutionError
 from .read_model import (
@@ -114,23 +114,27 @@ def create_ui(app):
         if target is None:
             abort(404)
         try:
-            result = rebuild_action(app, target, datetime.now(timezone.utc))
+            result = rebuild_action(app, target, datetime.now(UTC))
         except ExecutionError:
             abort(404)
-        return _action_page(f"Rebuild requested for execution {target}: {result.status}")
+        return _action_page(
+            f"Rebuild requested for execution {target}: {result.status}"
+        )
 
     @web.post("/executions/<int:execution_id>/rebuild")
     def rebuild_execution(execution_id: int):
         try:
-            result = rebuild_action(app, execution_id, datetime.now(timezone.utc))
+            result = rebuild_action(app, execution_id, datetime.now(UTC))
         except ExecutionError:
             abort(404)
-        return _action_page(f"Rebuild requested for execution {execution_id}: {result.status}")
+        return _action_page(
+            f"Rebuild requested for execution {execution_id}: {result.status}"
+        )
 
     @web.post("/deliveries/<path:delivery_key>/retry")
     def retry_delivery(delivery_key: str):
         try:
-            key = retry_delivery_action(app, delivery_key, datetime.now(timezone.utc))
+            key = retry_delivery_action(app, delivery_key, datetime.now(UTC))
         except ExecutionError:
             abort(404)
         return _action_page(f"Delivery retry requested: {key}")

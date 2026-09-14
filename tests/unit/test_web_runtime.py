@@ -455,7 +455,9 @@ def test_default_web_client_does_not_fall_back_to_legacy_http_source() -> None:
     assert legacy.calls == 0
 
 
-def test_private_web_task_receives_expanded_binding_while_custom_task_gets_mapping() -> None:
+def test_private_web_task_receives_expanded_binding_while_custom_task_gets_mapping() -> (
+    None
+):
     binding = WebBinding(output="artifact")
     item = Item(
         id="item",

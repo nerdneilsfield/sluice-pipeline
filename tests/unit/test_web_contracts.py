@@ -1,17 +1,15 @@
-import pytest
 import math
 from datetime import timedelta
 
-from sluice.canonical import canonical_json
+import pytest
 
+from sluice.canonical import canonical_json
 from sluice.web.contracts import (
+    NO_MATCH,
     DocumentArtifact,
     FetchChainExhausted,
-    ExtractorBinding,
     FetchRequest,
-    NO_MATCH,
     ProviderBinding,
-    QualityPolicy,
     WebAttemptFailure,
     WebBinding,
 )
@@ -155,8 +153,16 @@ def test_web_binding_rejects_malformed_chain_members():
     [
         (lambda value: WebBinding(version=value), "version"),
         (lambda value: ProviderBinding("p", "httpx", concurrency=value), "concurrency"),
-        (lambda value: WebAttemptFailure("p", "httpx", value, "network"), "attempt_ordinal"),
-        (lambda value: WebAttemptFailure("p", "httpx", 1, "network", elapsed_ms=value), "elapsed_ms"),
+        (
+            lambda value: WebAttemptFailure("p", "httpx", value, "network"),
+            "attempt_ordinal",
+        ),
+        (
+            lambda value: WebAttemptFailure(
+                "p", "httpx", 1, "network", elapsed_ms=value
+            ),
+            "elapsed_ms",
+        ),
     ],
 )
 def test_contract_numeric_fields_reject_float_values(factory, field):
@@ -168,7 +174,9 @@ def test_attempt_identifiers_and_detail_codes_are_bounded_safe_strings():
     with pytest.raises(ValueError):
         WebAttemptFailure("provider\nraw exception", "httpx", 1, "network")
     with pytest.raises(ValueError):
-        WebAttemptFailure("provider", "httpx", 1, "network", detail_code="raw exception")
+        WebAttemptFailure(
+            "provider", "httpx", 1, "network", detail_code="raw exception"
+        )
     with pytest.raises(ValueError):
         WebAttemptFailure("provider", "httpx", 1, "network", detail_code="x" * 129)
 
@@ -225,9 +233,7 @@ def test_binding_projection_redacts_sensitive_header_name_fragments():
         "X-Set-Cookie": "set-cookie-secret",
     }
     binding = WebBinding(
-        fetch_chain=(
-            ProviderBinding("p", "httpx", target_headers=secrets),
-        )
+        fetch_chain=(ProviderBinding("p", "httpx", target_headers=secrets),)
     )
 
     projection = canonical_json(binding.semantic_projection())

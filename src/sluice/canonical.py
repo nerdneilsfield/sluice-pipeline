@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .contracts import BatchPolicy, DeliveryDef, Item, StageDef
@@ -47,8 +47,8 @@ def utc_datetime(value: datetime | str) -> datetime:
     if not isinstance(value, datetime):
         raise ExecutionError(f"invalid timestamp: {value!r}")
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _normalize(value: Any) -> Any:
@@ -232,7 +232,9 @@ def make_item_id(
         or not isinstance(producer_scope[1], str)
         or not producer_scope[1]
     ):
-        raise ExecutionError("producer_scope must be ('source'|'stage', non-empty name)")
+        raise ExecutionError(
+            "producer_scope must be ('source'|'stage', non-empty name)"
+        )
     return digest(
         {
             "producer_scope": producer_scope,
@@ -277,7 +279,9 @@ def stage_lookup_key(
         raise ExecutionError("stage_lookup_key requires a StageDef")
     if not isinstance(items, Sequence) or isinstance(items, (str, bytes, bytearray)):
         raise ExecutionError("Stage items must be an ordered sequence")
-    if not isinstance(history, Sequence) or isinstance(history, (str, bytes, bytearray)):
+    if not isinstance(history, Sequence) or isinstance(
+        history, (str, bytes, bytearray)
+    ):
         raise ExecutionError("Stage history must be an ordered sequence")
     return digest(
         {

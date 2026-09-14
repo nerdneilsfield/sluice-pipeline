@@ -1,20 +1,20 @@
-from datetime import datetime, timedelta, timezone
-from dataclasses import replace
 import json
 import logging
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 from types import MappingProxyType
 
 import pytest
 
+from sluice import source_runtime
 from sluice.app import open_app
 from sluice.canonical import content_hash
 from sluice.config import freeze_json
 from sluice.contracts import KEEP_CHECKPOINT, SourceRecord, SourceResult
 from sluice.errors import ExecutionError
-from sluice.web.contracts import DocumentArtifact
-import sluice.source_runtime as source_runtime
 from sluice.source_runtime import collect_source
+from sluice.web.contracts import DocumentArtifact
 
 
 def source_collect(config, checkpoint):
@@ -25,7 +25,9 @@ def source_collect(config, checkpoint):
 
 
 def malformed_collect(config, checkpoint):
-    return SourceResult(records=(SourceRecord("", {"bad": True}),), next_checkpoint=None)
+    return SourceResult(
+        records=(SourceRecord("", {"bad": True}),), next_checkpoint=None
+    )
 
 
 def checkpoint_collect(config, checkpoint):
@@ -72,26 +74,32 @@ sources:
         encoding="utf-8",
     )
     app = open_app(definition, tmp_path / "state.db")
-    execution_id = collect_source(
-        app, "feed", datetime(2026, 8, 14, tzinfo=timezone.utc)
-    )
+    execution_id = collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=UTC))
     row = app.conn.execute(
         "SELECT state FROM executions WHERE id=?", (execution_id,)
     ).fetchone()
     assert row[0] == "succeeded"
-    assert app.conn.execute("SELECT checkpoint_json FROM source_state").fetchone()[0] == '"cursor-2"'
+    assert (
+        app.conn.execute("SELECT checkpoint_json FROM source_state").fetchone()[0]
+        == '"cursor-2"'
+    )
     assert app.conn.execute("SELECT kind FROM publications").fetchone()[0] == "delta"
 
 
 @pytest.mark.parametrize(("mode", "stored"), [("keep", None), ("null", "null")])
-def test_checkpoint_sentinel_and_explicit_json_null_are_distinct(tmp_path, mode, stored):
+def test_checkpoint_sentinel_and_explicit_json_null_are_distinct(
+    tmp_path, mode, stored
+):
     app = source_only_app(
         tmp_path,
         "tests.integration.test_source_lifecycle.checkpoint_collect",
         f"{{mode: {mode}}}",
     )
-    collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=timezone.utc))
-    assert app.conn.execute("SELECT checkpoint_json FROM source_state").fetchone()[0] == stored
+    collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=UTC))
+    assert (
+        app.conn.execute("SELECT checkpoint_json FROM source_state").fetchone()[0]
+        == stored
+    )
 
 
 def test_raised_source_error_rolls_back_outputs_and_records_failed_attempt(tmp_path):
@@ -99,7 +107,7 @@ def test_raised_source_error_rolls_back_outputs_and_records_failed_attempt(tmp_p
         tmp_path, "tests.integration.test_source_lifecycle.raising_collect"
     )
     with pytest.raises(ExecutionError):
-        collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=timezone.utc))
+        collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=UTC))
     assert app.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
     assert app.conn.execute("SELECT COUNT(*) FROM publications").fetchone()[0] == 0
     assert (
@@ -114,12 +122,12 @@ def test_identical_source_replay_reuses_item_identity(tmp_path):
     app = source_only_app(
         tmp_path, "tests.integration.test_source_lifecycle.source_collect"
     )
-    collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=timezone.utc))
-    collect_source(
-        app, "feed", datetime(2026, 8, 14, 0, 1, tzinfo=timezone.utc)
-    )
+    collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=UTC))
+    collect_source(app, "feed", datetime(2026, 8, 14, 0, 1, tzinfo=UTC))
     assert app.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
-    assert app.conn.execute("SELECT COUNT(*) FROM publication_members").fetchone()[0] == 1
+    assert (
+        app.conn.execute("SELECT COUNT(*) FROM publication_members").fetchone()[0] == 1
+    )
     assert (
         app.conn.execute(
             "SELECT COUNT(*) FROM executions WHERE state='succeeded'"
@@ -145,17 +153,25 @@ class SourceWebClient:
         body = self.responses[request.url]
         if request.mode == "raw_source":
             return DocumentArtifact(
-                source_url=request.url, final_url=request.url,
-                content_type="application/rss+xml", raw_source=body.encode(),
+                source_url=request.url,
+                final_url=request.url,
+                content_type="application/rss+xml",
+                raw_source=body.encode(),
                 capabilities=frozenset({"raw_source"}),
-                provider_instance="__rss_direct__", provider_type="startup_http",
+                provider_instance="__rss_direct__",
+                provider_type="startup_http",
             )
         return DocumentArtifact(
-            source_url=request.url, final_url=request.url,
-            content_type="text/html", raw_html=body,
+            source_url=request.url,
+            final_url=request.url,
+            content_type="text/html",
+            raw_html=body,
             text="A Body with enough visible content for quality.",
-            selected_format="text", capabilities=frozenset({"raw_html", "text"}),
-            provider_instance="trusted", provider_type="startup_http", extraction="identity",
+            selected_format="text",
+            capabilities=frozenset({"raw_html", "text"}),
+            provider_instance="trusted",
+            provider_type="startup_http",
+            extraction="identity",
         )
 
 
@@ -166,8 +182,16 @@ HTML_PAGE = "<html><body><article><h1>A</h1><p>Body</p></article></body></html>"
 @pytest.mark.parametrize(
     ("source_use", "url", "with_config"),
     [
-        ("sluice.sources.rss", "https://example.test/feed", "{url: https://example.test/feed}"),
-        ("sluice.sources.webpage", "https://example.test/page", "{url: https://example.test/page, fetch_chain: trusted, extract_chain: identity, output: text, min_chars: 1}"),
+        (
+            "sluice.sources.rss",
+            "https://example.test/feed",
+            "{url: https://example.test/feed}",
+        ),
+        (
+            "sluice.sources.webpage",
+            "https://example.test/page",
+            "{url: https://example.test/page, fetch_chain: trusted, extract_chain: identity, output: text, min_chars: 1}",
+        ),
     ],
 )
 def test_builtin_sources_finalize_ordered_records_through_the_runtime(
@@ -191,15 +215,19 @@ sources:
         definition,
         tmp_path / "state.db",
         http_client=FakeHttp(
-            {"https://example.test/feed": RSS_XML, "https://example.test/page": HTML_PAGE}
+            {
+                "https://example.test/feed": RSS_XML,
+                "https://example.test/page": HTML_PAGE,
+            }
         ),
         web_content_client=SourceWebClient(
-            {"https://example.test/feed": RSS_XML, "https://example.test/page": HTML_PAGE}
+            {
+                "https://example.test/feed": RSS_XML,
+                "https://example.test/page": HTML_PAGE,
+            }
         ),
     )
-    execution_id = collect_source(
-        app, "feed", datetime(2026, 8, 14, tzinfo=timezone.utc)
-    )
+    execution_id = collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=UTC))
     assert (
         app.conn.execute(
             "SELECT state FROM executions WHERE id=?", (execution_id,)
@@ -228,10 +256,13 @@ sources:
     )
     app = open_app(definition, tmp_path / "state.db")
     with pytest.raises(ExecutionError):
-        collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=timezone.utc))
+        collect_source(app, "feed", datetime(2026, 8, 14, tzinfo=UTC))
     assert app.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
     assert app.conn.execute("SELECT COUNT(*) FROM publications").fetchone()[0] == 0
-    assert app.conn.execute("SELECT checkpoint_json FROM source_state").fetchone()[0] is None
+    assert (
+        app.conn.execute("SELECT checkpoint_json FROM source_state").fetchone()[0]
+        is None
+    )
 
 
 def test_source_item_persists_canonical_content_hash_and_utc_observed_at(tmp_path):
@@ -243,7 +274,7 @@ def test_source_item_persists_canonical_content_hash_and_utc_observed_at(tmp_pat
     collect_source(
         app,
         "feed",
-        datetime(2026, 8, 14, 12, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 14, 12, 30, tzinfo=UTC),
     )
     row = app.conn.execute(
         "SELECT payload_json,content_hash,observed_at FROM items"
@@ -279,7 +310,7 @@ def test_source_supersession_log_uses_superseded_binding_digest(tmp_path, caplog
     object.__setattr__(app, "definition", new_definition)
 
     caplog.set_level(logging.INFO, logger="sluice.source_runtime")
-    collect_source(app, "feed", datetime(2026, 8, 14, 12, 1, tzinfo=timezone.utc))
+    collect_source(app, "feed", datetime(2026, 8, 14, 12, 1, tzinfo=UTC))
 
     events = [
         json.loads(record.message)
@@ -292,7 +323,7 @@ def test_source_supersession_log_uses_superseded_binding_digest(tmp_path, caplog
 
 
 def source_recovery_instant(seconds: int) -> datetime:
-    return datetime(2026, 8, 14, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    return datetime(2026, 8, 14, tzinfo=UTC) + timedelta(seconds=seconds)
 
 
 class BlockingSource:
@@ -321,25 +352,39 @@ sources: {feed: {use: test_source_lifecycle.blocking_source, retries: 1, with: {
         encoding="utf-8",
     )
     app = open_app(definition, tmp_path / "state.db")
-    worker = Thread(target=collect_source, args=(app, "feed", source_recovery_instant(0)))
+    worker = Thread(
+        target=collect_source, args=(app, "feed", source_recovery_instant(0))
+    )
     worker.start()
     assert blocking_source.started.wait(timeout=5)
     old_id = app.conn.execute(
         "SELECT id FROM executions WHERE kind='source' AND state='running'"
     ).fetchone()[0]
     from sluice.reconcile import recover_startup
+
     recover_startup(app, source_recovery_instant(1))
     blocking_source.release.set()
     worker.join(timeout=5)
     assert not worker.is_alive()
-    assert app.conn.execute("SELECT state FROM executions WHERE id=?", (old_id,)).fetchone()[0] == "failed"
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (old_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
     assert app.conn.execute("SELECT COUNT(*) FROM publications").fetchone()[0] == 0
-    assert app.conn.execute(
-        "SELECT COUNT(*) FROM executions WHERE retry_parent_id=? AND state='queued'", (old_id,)
-    ).fetchone()[0] == 1
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE retry_parent_id=? AND state='queued'",
+            (old_id,),
+        ).fetchone()[0]
+        == 1
+    )
 
 
-def test_queued_retry_from_old_source_binding_is_superseded_before_new_callable(tmp_path):
+def test_queued_retry_from_old_source_binding_is_superseded_before_new_callable(
+    tmp_path,
+):
     definition = tmp_path / "source-switch.yml"
     database = tmp_path / "state.db"
     definition.write_text(
@@ -370,7 +415,10 @@ sources:
     )
     changed = open_app(definition, database)
     source_runtime._execute_queued_source(changed, retry_id, source_recovery_instant(1))
-    assert changed.conn.execute(
-        "SELECT state FROM executions WHERE id=?", (retry_id,)
-    ).fetchone()[0] == "failed"
+    assert (
+        changed.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (retry_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
     assert changed.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0

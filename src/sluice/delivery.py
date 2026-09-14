@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
 import json
 import logging
 import sqlite3
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from .canonical import (
@@ -21,7 +21,6 @@ from .canonical import (
 from .db import write_transaction
 from .errors import ExecutionError
 from .logging import log_event
-
 
 _LOGGER = logging.getLogger("sluice.delivery")
 
@@ -48,7 +47,9 @@ def _node(app: Any, pipeline_name: str, node_name: str):
 def _delivery(app: Any, pipeline_name: str, node_name: str):
     node = _node(app, pipeline_name, node_name)
     if node.deliver is None:
-        raise ExecutionError(f"Pipeline node {pipeline_name}.{node_name} is not a Delivery")
+        raise ExecutionError(
+            f"Pipeline node {pipeline_name}.{node_name} is not a Delivery"
+        )
     return node
 
 
@@ -137,7 +138,9 @@ def _log_attempt(
     )
 
 
-def _ensure_delivery_rows(app: Any, pipeline_name: str, node_name: str, at: datetime) -> tuple[str, ...]:
+def _ensure_delivery_rows(
+    app: Any, pipeline_name: str, node_name: str, at: datetime
+) -> tuple[str, ...]:
     """Materialize one queued row for each currently active terminal member."""
 
     node = _delivery(app, pipeline_name, node_name)
@@ -158,9 +161,12 @@ def _ensure_delivery_rows(app: Any, pipeline_name: str, node_name: str, at: date
             rendered_item_id = str(member["item_id"])
             # Foreign-key validation is intentionally explicit: a corrupted
             # manifest must not create an un-sendable durable row.
-            if app.conn.execute(
-                "SELECT 1 FROM items WHERE id=?", (rendered_item_id,)
-            ).fetchone() is None:
+            if (
+                app.conn.execute(
+                    "SELECT 1 FROM items WHERE id=?", (rendered_item_id,)
+                ).fetchone()
+                is None
+            ):
                 raise ExecutionError(f"rendered Item is missing: {rendered_item_id}")
             key = _delivery_key(pipeline_name, node_name, rendered_item_id, binding)
             keys.append(key)
@@ -363,7 +369,11 @@ def _fail_delivery_attempt(
     error: BaseException | str,
     at: datetime,
 ) -> bool:
-    message = str(error) or error.__class__.__name__ if isinstance(error, BaseException) else str(error)
+    message = (
+        str(error) or error.__class__.__name__
+        if isinstance(error, BaseException)
+        else str(error)
+    )
     at_text = _timestamp(at)
     with write_transaction(app.conn):
         row = app.conn.execute(
@@ -503,10 +513,14 @@ def _timeout_deliveries(
         "SELECT * FROM deliveries WHERE state='running' ORDER BY delivery_key"
     ).fetchall()
     for row in rows:
-        if allowed_nodes is not None and (
-            str(row["pipeline_name"]),
-            str(row["node_name"]),
-        ) not in allowed_nodes:
+        if (
+            allowed_nodes is not None
+            and (
+                str(row["pipeline_name"]),
+                str(row["node_name"]),
+            )
+            not in allowed_nodes
+        ):
             continue
         try:
             policy = _decode_policy(str(row["policy_json"]))
@@ -518,12 +532,15 @@ def _timeout_deliveries(
         token = row["attempt_token"]
         if token is None:
             continue
-        changed = _fail_delivery_attempt(
-            app,
-            _DeliveryAttempt(str(row["delivery_key"]), int(token)),
-            ExecutionError("delivery timeout"),
-            at,
-        ) or changed
+        changed = (
+            _fail_delivery_attempt(
+                app,
+                _DeliveryAttempt(str(row["delivery_key"]), int(token)),
+                ExecutionError("delivery timeout"),
+                at,
+            )
+            or changed
+        )
     return changed
 
 
@@ -535,12 +552,15 @@ def _recover_deliveries(app: Any, at: datetime) -> bool:
     for row in rows:
         if row["attempt_token"] is None:
             continue
-        changed = _fail_delivery_attempt(
-            app,
-            _DeliveryAttempt(str(row["delivery_key"]), int(row["attempt_token"])),
-            ExecutionError("startup recovery"),
-            at,
-        ) or changed
+        changed = (
+            _fail_delivery_attempt(
+                app,
+                _DeliveryAttempt(str(row["delivery_key"]), int(row["attempt_token"])),
+                ExecutionError("startup recovery"),
+                at,
+            )
+            or changed
+        )
     return changed
 
 
@@ -554,7 +574,11 @@ def _delivery_rows_for_dispatch(
     node = _delivery(app, pipeline_name, node_name)
     binding = _binding(app, pipeline_name, node_name)
     node_binding = _node_binding(app, pipeline_name, node_name)
-    state_filter = "(d.state='queued' OR d.state='failed')" if include_failed else "d.state='queued'"
+    state_filter = (
+        "(d.state='queued' OR d.state='failed')"
+        if include_failed
+        else "d.state='queued'"
+    )
     if include_failed:
         rows = app.conn.execute(
             "SELECT d.delivery_key FROM deliveries d JOIN node_members nm ON "
@@ -590,7 +614,10 @@ def _dispatch_deliveries(
         for node_name, node in pipeline.nodes.items():
             if node.deliver is None:
                 continue
-            if allowed_nodes is not None and (pipeline_name, node_name) not in allowed_nodes:
+            if (
+                allowed_nodes is not None
+                and (pipeline_name, node_name) not in allowed_nodes
+            ):
                 continue
             _ensure_delivery_rows(app, pipeline_name, node_name, at)
             running = int(
@@ -624,7 +651,8 @@ def _dispatch_deliveries(
                 if available <= 0:
                     break
                 before = app.conn.execute(
-                    "SELECT state,retry_count FROM deliveries WHERE delivery_key=?", (key,)
+                    "SELECT state,retry_count FROM deliveries WHERE delivery_key=?",
+                    (key,),
                 ).fetchone()
                 if before is None:
                     continue
@@ -675,14 +703,14 @@ def _dispatch_deliveries(
 
 
 __all__ = [
-    "deliver",
-    "retry_delivery",
     "_DeliveryAttempt",
     "_claim_delivery",
     "_complete_delivery",
-    "_fail_delivery_attempt",
-    "_ensure_delivery_rows",
     "_dispatch_deliveries",
-    "_timeout_deliveries",
+    "_ensure_delivery_rows",
+    "_fail_delivery_attempt",
     "_recover_deliveries",
+    "_timeout_deliveries",
+    "deliver",
+    "retry_delivery",
 ]

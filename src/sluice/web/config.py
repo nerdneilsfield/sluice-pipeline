@@ -8,18 +8,17 @@ validated but never resolved into any retained value.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import timedelta
 import ipaddress
 import math
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import timedelta
 from types import MappingProxyType
-from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 from ..errors import DefinitionError
 from .contracts import ExtractorBinding, ProviderBinding, QualityPolicy, WebBinding
-
 
 _ENV_REFERENCE = re.compile(r"^env:[A-Z_][A-Z0-9_]*$")
 _DURATION = re.compile(r"^(0|[1-9][0-9]*)(s|m|h)$")
@@ -110,12 +109,8 @@ _CAPABILITIES: dict[str, frozenset[str]] = {
     "httpx": frozenset({"raw_html", "raw_source", "text"}),
     "curl_cffi": frozenset({"raw_html", "raw_source", "text"}),
     "trafilatura": frozenset({"raw_html", "text", "markdown"}),
-    "crawl4ai": frozenset(
-        {"raw_html", "raw_source", "markdown", "rendered_js"}
-    ),
-    "firecrawl": frozenset(
-        {"raw_html", "raw_source", "markdown", "rendered_js"}
-    ),
+    "crawl4ai": frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
+    "firecrawl": frozenset({"raw_html", "raw_source", "markdown", "rendered_js"}),
     "jina_reader": frozenset({"markdown"}),
     "zyte": frozenset({"raw_html", "markdown", "text"}),
     "bright_data": frozenset({"raw_html", "markdown", "text"}),
@@ -143,7 +138,9 @@ def _mapping(value: object, label: str) -> dict[str, object]:
     return dict(value)
 
 
-def _check_keys(spec: Mapping[str, object], allowed: set[str] | frozenset[str], label: str) -> None:
+def _check_keys(
+    spec: Mapping[str, object], allowed: set[str] | frozenset[str], label: str
+) -> None:
     unknown = set(spec) - set(allowed)
     if unknown:
         raise DefinitionError(f"unknown keys in {label}: {sorted(unknown)}")
@@ -151,7 +148,9 @@ def _check_keys(spec: Mapping[str, object], allowed: set[str] | frozenset[str], 
 
 def _name(value: object, label: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER.fullmatch(value):
-        raise DefinitionError(f"{label} must be an ASCII identifier of at most 128 characters")
+        raise DefinitionError(
+            f"{label} must be an ASCII identifier of at most 128 characters"
+        )
     return value
 
 
@@ -187,7 +186,9 @@ def _selector(value: object, label: str) -> str:
         elif character in ")]":
             expected = "(" if character == ")" else "["
             if not stack or stack.pop() != expected:
-                raise DefinitionError(f"{label} must be a structurally valid CSS selector")
+                raise DefinitionError(
+                    f"{label} must be a structurally valid CSS selector"
+                )
         elif character in "{};" or ord(character) < 0x20:
             raise DefinitionError(f"{label} must be a structurally valid CSS selector")
     if quote is not None or stack or escaped:
@@ -235,7 +236,9 @@ def _env_reference(value: object, label: str, *, require_present: bool = False) 
     return value
 
 
-def _string_list(value: object, label: str, *, non_empty: bool = False, unique: bool = False) -> tuple[str, ...]:
+def _string_list(
+    value: object, label: str, *, non_empty: bool = False, unique: bool = False
+) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         raise DefinitionError(f"{label} must be a list of strings")
     result: list[str] = []
@@ -296,14 +299,28 @@ class WebRegistryConfig:
         fetch_chains = dict(self.fetch_chains)
         extractors = dict(self.extractors)
         extract_chains = dict(self.extract_chains)
-        if any(not isinstance(k, str) or not isinstance(v, ProviderBinding) for k, v in providers.items()):
+        if any(
+            not isinstance(k, str) or not isinstance(v, ProviderBinding)
+            for k, v in providers.items()
+        ):
             raise TypeError("providers must contain ProviderBinding values")
-        if any(not isinstance(k, str) or not isinstance(v, ExtractorBinding) for k, v in extractors.items()):
+        if any(
+            not isinstance(k, str) or not isinstance(v, ExtractorBinding)
+            for k, v in extractors.items()
+        ):
             raise TypeError("extractors must contain ExtractorBinding values")
         object.__setattr__(self, "providers", MappingProxyType(providers))
-        object.__setattr__(self, "fetch_chains", MappingProxyType({k: tuple(v) for k, v in fetch_chains.items()}))
+        object.__setattr__(
+            self,
+            "fetch_chains",
+            MappingProxyType({k: tuple(v) for k, v in fetch_chains.items()}),
+        )
         object.__setattr__(self, "extractors", MappingProxyType(extractors))
-        object.__setattr__(self, "extract_chains", MappingProxyType({k: tuple(v) for k, v in extract_chains.items()}))
+        object.__setattr__(
+            self,
+            "extract_chains",
+            MappingProxyType({k: tuple(v) for k, v in extract_chains.items()}),
+        )
 
 
 def _provider_base_url(spec: Mapping[str, object], typ: str, label: str) -> str | None:
@@ -336,11 +353,15 @@ def _provider_base_url(spec: Mapping[str, object], typ: str, label: str) -> str 
         or parsed.query
         or parsed.fragment
     ):
-        raise DefinitionError(f"{label}.base_url must be an absolute HTTP(S) URL without credentials")
+        raise DefinitionError(
+            f"{label}.base_url must be an absolute HTTP(S) URL without credentials"
+        )
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
-def _headers(value: object, label: str, *, cookies: bool = False) -> Mapping[str, object]:
+def _headers(
+    value: object, label: str, *, cookies: bool = False
+) -> Mapping[str, object]:
     spec = _mapping(value, label)
     result: dict[str, object] = {}
     seen_names: set[str] = set()
@@ -349,9 +370,23 @@ def _headers(value: object, label: str, *, cookies: bool = False) -> Mapping[str
             raise DefinitionError(f"{label} names must be non-empty strings")
         normalized_name = key.casefold()
         if normalized_name in seen_names:
-            raise DefinitionError(f"{label} contains duplicate case-insensitive header names")
+            raise DefinitionError(
+                f"{label} contains duplicate case-insensitive header names"
+            )
         seen_names.add(normalized_name)
-        sensitive = cookies or any(token in key.casefold() for token in ("authorization", "proxy-authorization", "cookie", "set-cookie", "api-key", "token", "secret", "signature"))
+        sensitive = cookies or any(
+            token in key.casefold()
+            for token in (
+                "authorization",
+                "proxy-authorization",
+                "cookie",
+                "set-cookie",
+                "api-key",
+                "token",
+                "secret",
+                "signature",
+            )
+        )
         if sensitive:
             result[key] = _env_reference(item, f"{label}.{key}")
         elif not isinstance(item, str):
@@ -372,7 +407,9 @@ def _actions(value: object, typ: str, label: str) -> tuple[Mapping[str, object],
     for index, raw in enumerate(value):
         action = _mapping(raw, f"{label}[{index}]")
         if len(action) != 1:
-            raise DefinitionError(f"{label}[{index}] must contain exactly one action kind")
+            raise DefinitionError(
+                f"{label}[{index}] must contain exactly one action kind"
+            )
         kind, payload = next(iter(action.items()))
         if kind not in allowed:
             raise DefinitionError(f"unsupported {typ} action {kind!r}")
@@ -387,11 +424,23 @@ def _actions(value: object, typ: str, label: str) -> tuple[Mapping[str, object],
             }
             _check_keys(body, fields[kind], f"{label}[{index}].{kind}")
             if kind == "wait":
-                _integer(body.get("milliseconds"), f"{label}[{index}].wait.milliseconds")
+                _integer(
+                    body.get("milliseconds"), f"{label}[{index}].wait.milliseconds"
+                )
             elif kind in {"click", "press", "write"}:
-                _required_string(body, "selector" if kind == "click" else "key" if kind == "press" else "text", f"{label}[{index}].{kind}")
+                _required_string(
+                    body,
+                    "selector"
+                    if kind == "click"
+                    else "key"
+                    if kind == "press"
+                    else "text",
+                    f"{label}[{index}].{kind}",
+                )
             elif body.get("direction") not in {"up", "down"}:
-                raise DefinitionError(f"{label}[{index}].scroll.direction must be up or down")
+                raise DefinitionError(
+                    f"{label}[{index}].scroll.direction must be up or down"
+                )
         else:
             fields = {
                 "wait": {"milliseconds"},
@@ -402,7 +451,9 @@ def _actions(value: object, typ: str, label: str) -> tuple[Mapping[str, object],
             }
             _check_keys(body, fields[kind], f"{label}[{index}].{kind}")
             if kind == "wait":
-                _integer(body.get("milliseconds"), f"{label}[{index}].wait.milliseconds")
+                _integer(
+                    body.get("milliseconds"), f"{label}[{index}].wait.milliseconds"
+                )
             elif kind == "scroll":
                 _integer(body.get("x"), f"{label}[{index}].scroll.x")
                 _integer(body.get("y"), f"{label}[{index}].scroll.y")
@@ -427,19 +478,31 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
 
     timeout_default, connect_default, retries_default = _DEFAULTS[typ]
     timeout = _duration(spec.get("timeout", timeout_default), f"{label}.timeout")
-    connect_timeout = _duration(spec.get("connect_timeout", connect_default), f"{label}.connect_timeout")
+    connect_timeout = _duration(
+        spec.get("connect_timeout", connect_default), f"{label}.connect_timeout"
+    )
     if connect_timeout > timeout:
         raise DefinitionError(f"{label}.connect_timeout cannot exceed timeout")
-    max_body_bytes = _integer(spec.get("max_body_bytes", 10_485_760), f"{label}.max_body_bytes", 1)
+    max_body_bytes = _integer(
+        spec.get("max_body_bytes", 10_485_760), f"{label}.max_body_bytes", 1
+    )
     if max_body_bytes > 10_485_760:
         raise DefinitionError(f"{label}.max_body_bytes cannot exceed 10485760")
     concurrency_default = 1 if typ == "startup_http" else 8
-    concurrency = _integer(spec.get("concurrency", concurrency_default), f"{label}.concurrency", 1)
-    cooldown = _duration(spec.get("cooldown", "60s"), f"{label}.cooldown", allow_zero=True)
-    retries = _integer(spec.get("transport_retries", retries_default), f"{label}.transport_retries")
+    concurrency = _integer(
+        spec.get("concurrency", concurrency_default), f"{label}.concurrency", 1
+    )
+    cooldown = _duration(
+        spec.get("cooldown", "60s"), f"{label}.cooldown", allow_zero=True
+    )
+    retries = _integer(
+        spec.get("transport_retries", retries_default), f"{label}.transport_retries"
+    )
     service_headers = _headers(spec.get("service_headers"), f"{label}.service_headers")
     target_headers = _headers(spec.get("target_headers"), f"{label}.target_headers")
-    cookies = _headers(spec.get("target_cookies"), f"{label}.target_cookies", cookies=True)
+    cookies = _headers(
+        spec.get("target_cookies"), f"{label}.target_cookies", cookies=True
+    )
     proxy = spec.get("proxy")
     if proxy is not None:
         if isinstance(proxy, str) and _ENV_REFERENCE.fullmatch(proxy):
@@ -462,17 +525,33 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
                 or parsed_proxy.scheme not in {"http", "https", "socks5", "socks5h"}
                 or not parsed_proxy.netloc
             ):
-                raise DefinitionError(f"{label}.proxy must be credential-free or an env reference")
+                raise DefinitionError(
+                    f"{label}.proxy must be credential-free or an env reference"
+                )
         else:
             raise DefinitionError(f"{label}.proxy must be a URL or env reference")
-    allow_remote_dns_proxy = _boolean(spec.get("allow_remote_dns_proxy", False), f"{label}.allow_remote_dns_proxy")
-    allow_hosts = _string_list(spec.get("target_allow_hosts", ()), f"{label}.target_allow_hosts", non_empty=True, unique=True)
-    allow_cidrs = _string_list(spec.get("target_allow_cidrs", ()), f"{label}.target_allow_cidrs", non_empty=True, unique=True)
+    allow_remote_dns_proxy = _boolean(
+        spec.get("allow_remote_dns_proxy", False), f"{label}.allow_remote_dns_proxy"
+    )
+    allow_hosts = _string_list(
+        spec.get("target_allow_hosts", ()),
+        f"{label}.target_allow_hosts",
+        non_empty=True,
+        unique=True,
+    )
+    allow_cidrs = _string_list(
+        spec.get("target_allow_cidrs", ()),
+        f"{label}.target_allow_cidrs",
+        non_empty=True,
+        unique=True,
+    )
     for cidr in allow_cidrs:
         try:
             ipaddress.ip_network(cidr, strict=False)
         except ValueError as error:
-            raise DefinitionError(f"{label}.target_allow_cidrs contains an invalid CIDR") from error
+            raise DefinitionError(
+                f"{label}.target_allow_cidrs contains an invalid CIDR"
+            ) from error
     base_url = _provider_base_url(spec, typ, label)
 
     options: dict[str, object] = {
@@ -508,9 +587,15 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
             raise DefinitionError(f"{label}.http_version must be auto, 2, or 3")
         options.update({"impersonate": impersonate, "http_version": http_version})
     elif typ == "trafilatura":
-        include_tables = _boolean(spec.get("include_tables", True), f"{label}.include_tables")
-        include_comments = _boolean(spec.get("include_comments", False), f"{label}.include_comments")
-        options.update({"include_tables": include_tables, "include_comments": include_comments})
+        include_tables = _boolean(
+            spec.get("include_tables", True), f"{label}.include_tables"
+        )
+        include_comments = _boolean(
+            spec.get("include_comments", False), f"{label}.include_comments"
+        )
+        options.update(
+            {"include_tables": include_tables, "include_comments": include_comments}
+        )
     elif typ == "crawl4ai":
         if "api_key" in spec:
             options["api_key"] = _env_reference(spec["api_key"], f"{label}.api_key")
@@ -523,22 +608,47 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
             raise DefinitionError(f"{label}.wait_until is unsupported")
         if "wait_for_selector" in spec:
             wait_for_selector = _required_string(spec, "wait_for_selector", label)
-        delay = _duration(spec.get("delay_before_return_html", "0s"), f"{label}.delay_before_return_html", allow_zero=True)
-        options.update({"browser_type": browser_type, "headless": headless, "wait_until": wait_until, "wait_for_selector": wait_for_selector, "delay_before_return_html": _duration_seconds(delay)})
+        delay = _duration(
+            spec.get("delay_before_return_html", "0s"),
+            f"{label}.delay_before_return_html",
+            allow_zero=True,
+        )
+        options.update(
+            {
+                "browser_type": browser_type,
+                "headless": headless,
+                "wait_until": wait_until,
+                "wait_for_selector": wait_for_selector,
+                "delay_before_return_html": _duration_seconds(delay),
+            }
+        )
     elif typ == "firecrawl":
         if "api_key" in spec:
             options["api_key"] = _env_reference(spec["api_key"], f"{label}.api_key")
         api_version = spec.get("api_version", "v2")
         if api_version != "v2":
             raise DefinitionError(f"{label}.api_version must be v2")
-        only_main_content = _boolean(spec.get("only_main_content", False), f"{label}.only_main_content")
+        only_main_content = _boolean(
+            spec.get("only_main_content", False), f"{label}.only_main_content"
+        )
         if "wait_for_selector" in spec:
             wait_for_selector = _required_string(spec, "wait_for_selector", label)
-        wait_for_duration = _duration(spec.get("wait_for", "0s"), f"{label}.wait_for", allow_zero=True)
+        wait_for_duration = _duration(
+            spec.get("wait_for", "0s"), f"{label}.wait_for", allow_zero=True
+        )
         wait_for = _duration_seconds(wait_for_duration)
         mobile = _boolean(spec.get("mobile", False), f"{label}.mobile")
         actions = _actions(spec.get("actions", ()), typ, f"{label}.actions")
-        options.update({"api_version": api_version, "only_main_content": only_main_content, "wait_for_selector": wait_for_selector, "wait_for": wait_for, "mobile": mobile, "actions": actions})
+        options.update(
+            {
+                "api_version": api_version,
+                "only_main_content": only_main_content,
+                "wait_for_selector": wait_for_selector,
+                "wait_for": wait_for,
+                "mobile": mobile,
+                "actions": actions,
+            }
+        )
     elif typ == "jina_reader":
         if "api_key" not in spec:
             raise DefinitionError(f"{label}.api_key is required")
@@ -546,9 +656,22 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
         target_selector = spec.get("target_selector")
         if target_selector is not None:
             target_selector = _required_string(spec, "target_selector", label)
-        with_generated_alt = _boolean(spec.get("with_generated_alt", False), f"{label}.with_generated_alt")
-        remove_selectors = _string_list(spec.get("remove_selectors", ()), f"{label}.remove_selectors", non_empty=True, unique=True)
-        options.update({"target_selector": target_selector, "with_generated_alt": with_generated_alt, "remove_selectors": remove_selectors})
+        with_generated_alt = _boolean(
+            spec.get("with_generated_alt", False), f"{label}.with_generated_alt"
+        )
+        remove_selectors = _string_list(
+            spec.get("remove_selectors", ()),
+            f"{label}.remove_selectors",
+            non_empty=True,
+            unique=True,
+        )
+        options.update(
+            {
+                "target_selector": target_selector,
+                "with_generated_alt": with_generated_alt,
+                "remove_selectors": remove_selectors,
+            }
+        )
     elif typ == "zyte":
         if "api_key" not in spec:
             raise DefinitionError(f"{label}.api_key is required")
@@ -559,11 +682,26 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
         geolocation = spec.get("geolocation")
         if geolocation is not None:
             geolocation = _required_string(spec, "geolocation", label)
-            if len(geolocation) != 2 or not geolocation.isalpha() or not geolocation.isupper():
-                raise DefinitionError(f"{label}.geolocation must be an ISO country code")
-        automatic_content = _boolean(spec.get("automatic_content", True), f"{label}.automatic_content")
+            if (
+                len(geolocation) != 2
+                or not geolocation.isalpha()
+                or not geolocation.isupper()
+            ):
+                raise DefinitionError(
+                    f"{label}.geolocation must be an ISO country code"
+                )
+        automatic_content = _boolean(
+            spec.get("automatic_content", True), f"{label}.automatic_content"
+        )
         actions = _actions(spec.get("actions", ()), typ, f"{label}.actions")
-        options.update({"mode": mode, "geolocation": geolocation, "automatic_content": automatic_content, "actions": actions})
+        options.update(
+            {
+                "mode": mode,
+                "geolocation": geolocation,
+                "automatic_content": automatic_content,
+                "actions": actions,
+            }
+        )
     elif typ == "bright_data":
         if "api_key" not in spec:
             raise DefinitionError(f"{label}.api_key is required")
@@ -585,7 +723,9 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
                 raise DefinitionError(f"{label}.country must be an ISO country code")
         if "async" in spec and spec["async"] is not False:
             raise DefinitionError(f"{label}.async must be false when present")
-        options.update({"zone": zone, "output": output, "country": country, "async": False})
+        options.update(
+            {"zone": zone, "output": output, "country": country, "async": False}
+        )
         capabilities = (
             frozenset({"raw_html", "text"})
             if output == "html"
@@ -647,7 +787,12 @@ def _decode_extractor(name: str, raw: object) -> ExtractorBinding:
         raise DefinitionError(f"{label}.type is unsupported: {typ!r}")
     fields = {
         "identity": set(),
-        "trafilatura": {"include_tables", "include_comments", "favor_precision", "favor_recall"},
+        "trafilatura": {
+            "include_tables",
+            "include_comments",
+            "favor_precision",
+            "favor_recall",
+        },
         "newspaper4k": {"language"},
         "resiliparse": {"main_content", "preserve_formatting"},
         "beautifulsoup": {"mode", "content_selector", "remove_selectors"},
@@ -655,7 +800,17 @@ def _decode_extractor(name: str, raw: object) -> ExtractorBinding:
     _check_keys(spec, fields | {"type"}, label)
     options: dict[str, object] = {}
     if typ == "trafilatura":
-        options.update({key: _boolean(spec.get(key, default), f"{label}.{key}") for key, default in (("include_tables", True), ("include_comments", False), ("favor_precision", False), ("favor_recall", False))})
+        options.update(
+            {
+                key: _boolean(spec.get(key, default), f"{label}.{key}")
+                for key, default in (
+                    ("include_tables", True),
+                    ("include_comments", False),
+                    ("favor_precision", False),
+                    ("favor_recall", False),
+                )
+            }
+        )
     elif typ == "newspaper4k":
         language = spec.get("language")
         if language is not None:
@@ -664,7 +819,17 @@ def _decode_extractor(name: str, raw: object) -> ExtractorBinding:
                 raise DefinitionError(f"{label}.language must be a BCP-47 language tag")
         options["language"] = language
     elif typ == "resiliparse":
-        options.update({"main_content": _boolean(spec.get("main_content", True), f"{label}.main_content"), "preserve_formatting": _boolean(spec.get("preserve_formatting", False), f"{label}.preserve_formatting")})
+        options.update(
+            {
+                "main_content": _boolean(
+                    spec.get("main_content", True), f"{label}.main_content"
+                ),
+                "preserve_formatting": _boolean(
+                    spec.get("preserve_formatting", False),
+                    f"{label}.preserve_formatting",
+                ),
+            }
+        )
     elif typ == "beautifulsoup":
         mode = spec.get("mode", "article")
         if mode not in {"article", "plain"}:
@@ -672,8 +837,19 @@ def _decode_extractor(name: str, raw: object) -> ExtractorBinding:
         selector = spec.get("content_selector")
         if selector is not None:
             selector = _required_string(spec, "content_selector", label)
-        remove_selectors = _string_list(spec.get("remove_selectors", ()), f"{label}.remove_selectors", non_empty=True, unique=True)
-        options.update({"mode": mode, "content_selector": selector, "remove_selectors": remove_selectors})
+        remove_selectors = _string_list(
+            spec.get("remove_selectors", ()),
+            f"{label}.remove_selectors",
+            non_empty=True,
+            unique=True,
+        )
+        options.update(
+            {
+                "mode": mode,
+                "content_selector": selector,
+                "remove_selectors": remove_selectors,
+            }
+        )
     try:
         return ExtractorBinding(name=name, type=typ, options=options)
     except (TypeError, ValueError) as error:
@@ -684,23 +860,44 @@ def decode_web_config(raw: object, base_dir: object | None = None) -> WebRegistr
     """Decode and freeze the top-level ``web`` authoring registry."""
 
     spec = _mapping(raw, "web")
-    _check_keys(spec, {"providers", "fetch_chains", "extractors", "extract_chains"}, "web")
+    _check_keys(
+        spec, {"providers", "fetch_chains", "extractors", "extract_chains"}, "web"
+    )
     raw_providers = _mapping(spec.get("providers"), "web.providers")
     raw_extractors = _mapping(spec.get("extractors"), "web.extractors")
-    providers = { _name(name, "web provider name"): _decode_provider(_name(name, "web provider name"), value) for name, value in raw_providers.items() }
-    extractors = { _name(name, "web extractor name"): _decode_extractor(_name(name, "web extractor name"), value) for name, value in raw_extractors.items() }
+    providers = {
+        _name(name, "web provider name"): _decode_provider(
+            _name(name, "web provider name"), value
+        )
+        for name, value in raw_providers.items()
+    }
+    extractors = {
+        _name(name, "web extractor name"): _decode_extractor(
+            _name(name, "web extractor name"), value
+        )
+        for name, value in raw_extractors.items()
+    }
     raw_fetch = _mapping(spec.get("fetch_chains"), "web.fetch_chains")
     fetch_chains: dict[str, tuple[str, ...]] = {}
     for name, raw_chain in raw_fetch.items():
         chain_name = _name(name, "web fetch chain name")
         chain_spec = _mapping(raw_chain, f"web.fetch_chains.{chain_name}")
         _check_keys(chain_spec, {"providers"}, f"web.fetch_chains.{chain_name}")
-        members = _string_list(chain_spec.get("providers"), f"web.fetch_chains.{chain_name}.providers", non_empty=True, unique=True)
+        members = _string_list(
+            chain_spec.get("providers"),
+            f"web.fetch_chains.{chain_name}.providers",
+            non_empty=True,
+            unique=True,
+        )
         if not members:
-            raise DefinitionError(f"web.fetch_chains.{chain_name}.providers must not be empty")
+            raise DefinitionError(
+                f"web.fetch_chains.{chain_name}.providers must not be empty"
+            )
         for member in members:
             if member not in providers:
-                raise DefinitionError(f"web.fetch_chains.{chain_name} references unknown provider {member!r}")
+                raise DefinitionError(
+                    f"web.fetch_chains.{chain_name} references unknown provider {member!r}"
+                )
         fetch_chains[chain_name] = members
     raw_extract = _mapping(spec.get("extract_chains"), "web.extract_chains")
     extract_chains: dict[str, tuple[str, ...]] = {}
@@ -708,17 +905,30 @@ def decode_web_config(raw: object, base_dir: object | None = None) -> WebRegistr
         chain_name = _name(name, "web extract chain name")
         chain_spec = _mapping(raw_chain, f"web.extract_chains.{chain_name}")
         _check_keys(chain_spec, {"extractors"}, f"web.extract_chains.{chain_name}")
-        members = _string_list(chain_spec.get("extractors"), f"web.extract_chains.{chain_name}.extractors", non_empty=True, unique=True)
+        members = _string_list(
+            chain_spec.get("extractors"),
+            f"web.extract_chains.{chain_name}.extractors",
+            non_empty=True,
+            unique=True,
+        )
         if not members:
-            raise DefinitionError(f"web.extract_chains.{chain_name}.extractors must not be empty")
+            raise DefinitionError(
+                f"web.extract_chains.{chain_name}.extractors must not be empty"
+            )
         for member in members:
             if member not in extractors:
-                raise DefinitionError(f"web.extract_chains.{chain_name} references unknown extractor {member!r}")
+                raise DefinitionError(
+                    f"web.extract_chains.{chain_name} references unknown extractor {member!r}"
+                )
         member_types = [extractors[member].type for member in members]
         if member_types[0] != "identity" or member_types.count("identity") != 1:
-            raise DefinitionError(f"web.extract_chains.{chain_name} must start with identity exactly once")
+            raise DefinitionError(
+                f"web.extract_chains.{chain_name} must start with identity exactly once"
+            )
         if len(member_types) != len(set(member_types)):
-            raise DefinitionError(f"web.extract_chains.{chain_name} may contain each extractor type at most once")
+            raise DefinitionError(
+                f"web.extract_chains.{chain_name} may contain each extractor type at most once"
+            )
         extract_chains[chain_name] = members
     return WebRegistryConfig(
         providers=providers,
@@ -731,10 +941,18 @@ def decode_web_config(raw: object, base_dir: object | None = None) -> WebRegistr
 def _quality(config: Mapping[str, object], label: str) -> QualityPolicy:
     min_chars = _integer(config.get("min_chars", 500), f"{label}.min_chars", 0)
     min_words_value = config.get("min_words")
-    min_words = None if min_words_value is None else _integer(min_words_value, f"{label}.min_words", 1)
+    min_words = (
+        None
+        if min_words_value is None
+        else _integer(min_words_value, f"{label}.min_words", 1)
+    )
     ratio_value = config.get("max_link_ratio")
     if ratio_value is not None:
-        if isinstance(ratio_value, bool) or not isinstance(ratio_value, (int, float)) or not 0 <= ratio_value <= 1:
+        if (
+            isinstance(ratio_value, bool)
+            or not isinstance(ratio_value, (int, float))
+            or not 0 <= ratio_value <= 1
+        ):
             raise DefinitionError(f"{label}.max_link_ratio must be between 0 and 1")
         ratio = float(ratio_value)
     else:
@@ -743,28 +961,38 @@ def _quality(config: Mapping[str, object], label: str) -> QualityPolicy:
     if reject is not True:
         raise DefinitionError(f"{label}.reject_challenges cannot be disabled")
     try:
-        return QualityPolicy(min_chars=min_chars, min_words=min_words, max_link_ratio=ratio)
+        return QualityPolicy(
+            min_chars=min_chars, min_words=min_words, max_link_ratio=ratio
+        )
     except ValueError as error:
         raise DefinitionError(f"invalid {label} quality policy: {error}") from error
 
 
-def _fetch_chain(registry: WebRegistryConfig, name: str, label: str) -> tuple[ProviderBinding, ...]:
+def _fetch_chain(
+    registry: WebRegistryConfig, name: str, label: str
+) -> tuple[ProviderBinding, ...]:
     if not isinstance(name, str) or not name:
         raise DefinitionError(f"{label} must be a non-empty chain name")
     try:
         members = registry.fetch_chains[name]
     except KeyError as error:
-        raise DefinitionError(f"{label} references unknown fetch chain {name!r}") from error
+        raise DefinitionError(
+            f"{label} references unknown fetch chain {name!r}"
+        ) from error
     return tuple(registry.providers[member] for member in members)
 
 
-def _extract_chain(registry: WebRegistryConfig, name: str, label: str) -> tuple[ExtractorBinding, ...]:
+def _extract_chain(
+    registry: WebRegistryConfig, name: str, label: str
+) -> tuple[ExtractorBinding, ...]:
     if not isinstance(name, str) or not name:
         raise DefinitionError(f"{label} must be a non-empty chain name")
     try:
         members = registry.extract_chains[name]
     except KeyError as error:
-        raise DefinitionError(f"{label} references unknown extract chain {name!r}") from error
+        raise DefinitionError(
+            f"{label} references unknown extract chain {name!r}"
+        ) from error
     return tuple(registry.extractors[member] for member in members)
 
 
@@ -812,7 +1040,9 @@ def _synthetic_rss_provider() -> ProviderBinding:
         raise DefinitionError(f"invalid synthetic RSS provider: {error}") from error
 
 
-def expand_web_binding(use: str, with_config: Mapping[str, object], registry: WebRegistryConfig) -> WebBinding | None:
+def expand_web_binding(
+    use: str, with_config: Mapping[str, object], registry: WebRegistryConfig
+) -> WebBinding | None:
     """Expand one built-in web Task/Source into an immutable WebBinding."""
 
     if use not in _WEB_TASKS and use not in _WEB_SOURCES:
@@ -823,7 +1053,21 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
         raise DefinitionError("web binding configuration must be a mapping")
     config = dict(with_config)
     if use == "sluice.tasks.fetch_webpage":
-        _check_keys(config, {"fetch_chain", "extract_chain", "url", "url_field", "fallback_url_field", "min_chars", "min_words", "max_link_ratio", "reject_challenges"}, use)
+        _check_keys(
+            config,
+            {
+                "fetch_chain",
+                "extract_chain",
+                "url",
+                "url_field",
+                "fallback_url_field",
+                "min_chars",
+                "min_words",
+                "max_link_ratio",
+                "reject_challenges",
+            },
+            use,
+        )
         fetch_name = config.get("fetch_chain")
         extract_name = config.get("extract_chain")
         if not isinstance(fetch_name, str) or not fetch_name:
@@ -839,17 +1083,32 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
         if not isinstance(url_field, str) or not url_field:
             raise DefinitionError("fetch_webpage.url_field must be a non-empty string")
         if not isinstance(fallback, str) or not fallback:
-            raise DefinitionError("fetch_webpage.fallback_url_field must be a non-empty string")
+            raise DefinitionError(
+                "fetch_webpage.fallback_url_field must be a non-empty string"
+            )
         return WebBinding(
             fetch_chain=_fetch_chain(registry, fetch_name, "fetch_webpage.fetch_chain"),
-            extract_chain=_extract_chain(registry, extract_name, "fetch_webpage.extract_chain"),
+            extract_chain=_extract_chain(
+                registry, extract_name, "fetch_webpage.extract_chain"
+            ),
             fetch_chain_name=fetch_name,
             extract_chain_name=extract_name,
             quality=quality,
             output="artifact",
         )
     if use == "sluice.tasks.extract_content":
-        _check_keys(config, {"extract_chain", "input_format", "min_chars", "min_words", "max_link_ratio", "reject_challenges"}, use)
+        _check_keys(
+            config,
+            {
+                "extract_chain",
+                "input_format",
+                "min_chars",
+                "min_words",
+                "max_link_ratio",
+                "reject_challenges",
+            },
+            use,
+        )
         extract_name = config.get("extract_chain")
         if not isinstance(extract_name, str) or not extract_name:
             raise DefinitionError("extract_content.extract_chain is required")
@@ -857,7 +1116,9 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
         if input_format not in {"auto", "html", "text", "markdown"}:
             raise DefinitionError("extract_content.input_format is unsupported")
         return WebBinding(
-            extract_chain=_extract_chain(registry, extract_name, "extract_content.extract_chain"),
+            extract_chain=_extract_chain(
+                registry, extract_name, "extract_content.extract_chain"
+            ),
             extract_chain_name=extract_name,
             quality=_quality(config, use),
             output="artifact",
@@ -869,7 +1130,23 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
             raise DefinitionError(f"{use}.input_format is unsupported")
         return WebBinding(output="markdown" if use.endswith("to_markdown") else "text")
     if use == "sluice.sources.webpage":
-        _check_keys(config, {"url", "list_selector", "fetch_chain", "extract_chain", "output", "min_chars", "min_words", "max_link_ratio", "reject_challenges", "next_checkpoint", "web_cache_version"}, use)
+        _check_keys(
+            config,
+            {
+                "url",
+                "list_selector",
+                "fetch_chain",
+                "extract_chain",
+                "output",
+                "min_chars",
+                "min_words",
+                "max_link_ratio",
+                "reject_challenges",
+                "next_checkpoint",
+                "web_cache_version",
+            },
+            use,
+        )
         url = config.get("url")
         if not isinstance(url, str) or not url.strip():
             raise DefinitionError("webpage.url must be a non-empty string")
@@ -878,14 +1155,25 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
             raise DefinitionError("webpage.fetch_chain is required")
         if "next_checkpoint" in config:
             _freeze(config["next_checkpoint"])
-        cache_version = _integer(config.get("web_cache_version", 1), "webpage.web_cache_version", 1)
+        cache_version = _integer(
+            config.get("web_cache_version", 1), "webpage.web_cache_version", 1
+        )
         selector = config.get("list_selector")
         if selector is not None:
             selector = _selector(selector, "webpage.list_selector")
-            forbidden = {"extract_chain", "output", "min_chars", "min_words", "max_link_ratio", "reject_challenges"}
+            forbidden = {
+                "extract_chain",
+                "output",
+                "min_chars",
+                "min_words",
+                "max_link_ratio",
+                "reject_challenges",
+            }
             present = forbidden & set(config)
             if present:
-                raise DefinitionError("webpage list_selector cannot be combined with output/extract/quality fields")
+                raise DefinitionError(
+                    "webpage list_selector cannot be combined with output/extract/quality fields"
+                )
             return WebBinding(
                 fetch_chain=_fetch_chain(registry, fetch_name, "webpage.fetch_chain"),
                 fetch_chain_name=fetch_name,
@@ -901,7 +1189,9 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
             raise DefinitionError("webpage.output must be markdown or text")
         return WebBinding(
             fetch_chain=_fetch_chain(registry, fetch_name, "webpage.fetch_chain"),
-            extract_chain=_extract_chain(registry, extract_name, "webpage.extract_chain"),
+            extract_chain=_extract_chain(
+                registry, extract_name, "webpage.extract_chain"
+            ),
             fetch_chain_name=fetch_name,
             extract_chain_name=extract_name,
             quality=_quality(config, use),
@@ -909,7 +1199,19 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
             web_cache_version=cache_version,
         )
     # RSS Source
-    _check_keys(config, {"url", "raw_fallback_chain", "entry_output", "cursor_param", "checkpoint_param", "next_checkpoint", "web_cache_version"}, use)
+    _check_keys(
+        config,
+        {
+            "url",
+            "raw_fallback_chain",
+            "entry_output",
+            "cursor_param",
+            "checkpoint_param",
+            "next_checkpoint",
+            "web_cache_version",
+        },
+        use,
+    )
     url = config.get("url")
     if not isinstance(url, str) or not url.strip():
         raise DefinitionError("rss.url must be a non-empty string")
@@ -921,7 +1223,9 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
         raise DefinitionError("rss cannot set both cursor_param and checkpoint_param")
     if cursor is not None and (not isinstance(cursor, str) or not cursor.strip()):
         raise DefinitionError("rss.cursor_param must be a non-empty string")
-    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint.strip()):
+    if checkpoint is not None and (
+        not isinstance(checkpoint, str) or not checkpoint.strip()
+    ):
         raise DefinitionError("rss.checkpoint_param must be a non-empty string")
     if cursor is not None and checkpoint is not None and cursor != checkpoint:
         raise DefinitionError("rss checkpoint_param alias must match cursor_param")
@@ -931,10 +1235,16 @@ def expand_web_binding(use: str, with_config: Mapping[str, object], registry: We
     entry_output = config.get("entry_output", "text")
     if entry_output not in {"text", "markdown"}:
         raise DefinitionError("rss.entry_output must be text or markdown")
-    cache_version = _integer(config.get("web_cache_version", 1), "rss.web_cache_version", 1)
+    cache_version = _integer(
+        config.get("web_cache_version", 1), "rss.web_cache_version", 1
+    )
     return WebBinding(
         direct_provider=_synthetic_rss_provider(),
-        fetch_chain=(None if fallback is None else _fetch_chain(registry, fallback, "rss.raw_fallback_chain")),
+        fetch_chain=(
+            None
+            if fallback is None
+            else _fetch_chain(registry, fallback, "rss.raw_fallback_chain")
+        ),
         fetch_chain_name=fallback,
         output="raw_source",
         web_cache_version=cache_version,

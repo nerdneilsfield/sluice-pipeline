@@ -10,24 +10,22 @@ late to make both import directions safe.
 
 from __future__ import annotations
 
+import math
+import re
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from datetime import timedelta
-import math
-import re
 from types import MappingProxyType
 from typing import (
     Any,
-    Callable,
     Final,
     Literal,
-    Mapping,
     TypeAlias,
 )
 from urllib.parse import urlsplit
 
 from ..errors import ExecutionError
-
 
 JSONValue: TypeAlias = (
     None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
@@ -49,15 +47,11 @@ ARTIFACT_CAPABILITIES: Final[frozenset[str]] = frozenset(
 REQUEST_CAPABILITIES: Final[frozenset[str]] = frozenset(
     {"raw_html", "raw_source", "text", "markdown"}
 )
-SELECTED_FORMATS: Final[frozenset[str]] = frozenset(
-    {"raw_html", "text", "markdown"}
-)
+SELECTED_FORMATS: Final[frozenset[str]] = frozenset({"raw_html", "text", "markdown"})
 WEB_OUTPUTS: Final[frozenset[str]] = frozenset(
     {"artifact", "markdown", "text", "raw_html", "raw_source"}
 )
-WEB_MODES: Final[frozenset[str]] = frozenset(
-    {"article", "list_html", "raw_source"}
-)
+WEB_MODES: Final[frozenset[str]] = frozenset({"article", "list_html", "raw_source"})
 STABLE_FAILURE_REASONS: Final[frozenset[str]] = frozenset(
     {
         "bad_url",
@@ -86,9 +80,7 @@ ArtifactCapability: TypeAlias = Literal[
 RequestCapability: TypeAlias = Literal["raw_html", "raw_source", "text", "markdown"]
 WebMode: TypeAlias = Literal["article", "list_html", "raw_source"]
 SelectedFormat: TypeAlias = Literal["raw_html", "text", "markdown"]
-WebOutput: TypeAlias = Literal[
-    "artifact", "markdown", "text", "raw_html", "raw_source"
-]
+WebOutput: TypeAlias = Literal["artifact", "markdown", "text", "raw_html", "raw_source"]
 
 
 def _freeze_json(value: Any) -> Any:
@@ -137,20 +129,23 @@ def _validate_safe_identifier(value: str, field_name: str) -> str:
 
 def _is_secret_field(key: str) -> bool:
     normalized = key.casefold().replace("_", "-")
-    return (
-        normalized in {"api-key", "authorization", "proxy-authorization", "cookie", "set-cookie"}
-        or any(
-            token in normalized
-            for token in (
-                "authorization",
-                "proxy-authorization",
-                "cookie",
-                "set-cookie",
-                "api-key",
-                "token",
-                "secret",
-                "signature",
-            )
+    return normalized in {
+        "api-key",
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+    } or any(
+        token in normalized
+        for token in (
+            "authorization",
+            "proxy-authorization",
+            "cookie",
+            "set-cookie",
+            "api-key",
+            "token",
+            "secret",
+            "signature",
         )
     )
 
@@ -278,11 +273,15 @@ class ProviderBinding:
         object.__setattr__(self, "type", provider_type)
         object.__setattr__(self, "provider_type", provider_type)
         object.__setattr__(self, "options", _freeze_mapping(self.options))
-        object.__setattr__(self, "service_headers", _freeze_mapping(self.service_headers))
+        object.__setattr__(
+            self, "service_headers", _freeze_mapping(self.service_headers)
+        )
         object.__setattr__(self, "target_headers", _freeze_mapping(self.target_headers))
         object.__setattr__(self, "cookies", _freeze_mapping(self.cookies))
         if isinstance(self.target_policy, Mapping):
-            object.__setattr__(self, "target_policy", _freeze_mapping(self.target_policy))
+            object.__setattr__(
+                self, "target_policy", _freeze_mapping(self.target_policy)
+            )
 
         if (
             isinstance(self.transport_retries, bool)
@@ -325,15 +324,10 @@ class ProviderBinding:
                 finite_timeout = math.isfinite(timeout_seconds)
             except OverflowError:
                 finite_timeout = False
-            whole_timeout = (
-                isinstance(timeout_seconds, int)
-                or (isinstance(timeout_seconds, float) and timeout_seconds.is_integer())
+            whole_timeout = isinstance(timeout_seconds, int) or (
+                isinstance(timeout_seconds, float) and timeout_seconds.is_integer()
             )
-            if (
-                not finite_timeout
-                or timeout_seconds <= 0
-                or not whole_timeout
-            ):
+            if not finite_timeout or timeout_seconds <= 0 or not whole_timeout:
                 raise ValueError("timeout_seconds must be a positive whole number")
             timeout_seconds = int(timeout_seconds)
         if self.timeout is not None:
@@ -547,9 +541,7 @@ class WebBinding:
                 if self.extract_chain is None
                 else {
                     "name": self.extract_chain_name,
-                    "extractors": [
-                        extractor_projection(e) for e in self.extract_chain
-                    ],
+                    "extractors": [extractor_projection(e) for e in self.extract_chain],
                 }
             ),
             "quality": {
@@ -669,10 +661,7 @@ class FetchRequest:
                 finite_deadline = math.isfinite(self.stage_deadline)
             except OverflowError:
                 finite_deadline = False
-            if (
-                not finite_deadline
-                or self.stage_deadline <= 0
-            ):
+            if not finite_deadline or self.stage_deadline <= 0:
                 raise ValueError(
                     "stage_deadline must be a finite positive monotonic timestamp or null"
                 )
@@ -711,11 +700,13 @@ class DocumentArtifact:
 
     def __post_init__(self) -> None:
         if self.status_code is not None and (
-            isinstance(self.status_code, bool)
-            or not isinstance(self.status_code, int)
+            isinstance(self.status_code, bool) or not isinstance(self.status_code, int)
         ):
             raise ValueError("status_code must be an integer or null")
-        if self.selected_format is not None and self.selected_format not in SELECTED_FORMATS:
+        if (
+            self.selected_format is not None
+            and self.selected_format not in SELECTED_FORMATS
+        ):
             raise ValueError(f"unsupported selected format: {self.selected_format!r}")
         capabilities = frozenset(self.capabilities)
         if not capabilities <= ARTIFACT_CAPABILITIES:
@@ -779,8 +770,7 @@ class WebAttemptFailure:
         if self.reason not in STABLE_FAILURE_REASONS:
             raise ValueError(f"unsupported web failure reason: {self.reason!r}")
         if self.status_code is not None and (
-            isinstance(self.status_code, bool)
-            or not isinstance(self.status_code, int)
+            isinstance(self.status_code, bool) or not isinstance(self.status_code, int)
         ):
             raise ValueError("status_code must be an integer or null")
         if self.status_kind not in (None, "service", "target"):
@@ -810,12 +800,14 @@ class FetchChainExhausted(ExecutionError):
     def __new__(
         cls,
         attempts: tuple[WebAttemptFailure, ...] | list[WebAttemptFailure],
-    ) -> "FetchChainExhausted":
+    ) -> FetchChainExhausted:
         # Bypass BaseException's default ``__new__`` argument capture.  The
         # only retained payload is the validated attempts tuple below.
         return BaseException.__new__(cls)
 
-    def __init__(self, attempts: tuple[WebAttemptFailure, ...] | list[WebAttemptFailure]):
+    def __init__(
+        self, attempts: tuple[WebAttemptFailure, ...] | list[WebAttemptFailure]
+    ):
         safe_attempts = tuple(attempts)
         if not all(isinstance(attempt, WebAttemptFailure) for attempt in safe_attempts):
             raise TypeError("attempts must contain WebAttemptFailure values")
@@ -851,7 +843,11 @@ class WebExecutionProbe:
         check_fn: Callable[[], None] | None = None,
         stage_deadline: float | None = None,
     ) -> None:
-        supplied = [candidate for candidate in (callback, checker, check_fn) if candidate is not None]
+        supplied = [
+            candidate
+            for candidate in (callback, checker, check_fn)
+            if candidate is not None
+        ]
         if len(supplied) > 1:
             raise TypeError("provide only one WebExecutionProbe callback")
         selected = supplied[0] if supplied else None
@@ -863,7 +859,9 @@ class WebExecutionProbe:
             or not math.isfinite(stage_deadline)
             or stage_deadline <= 0
         ):
-            raise TypeError("stage_deadline must be a positive finite timestamp or null")
+            raise TypeError(
+                "stage_deadline must be a positive finite timestamp or null"
+            )
         object.__setattr__(self, "callback", selected)
         object.__setattr__(self, "stage_deadline", stage_deadline)
 
@@ -922,13 +920,14 @@ NO_MATCH: Final[_NoMatch] = _NoMatch()
 
 __all__ = [
     "ARTIFACT_CAPABILITIES",
+    "NO_MATCH",
     "REQUEST_CAPABILITIES",
     "STABLE_FAILURE_REASONS",
+    "WEB_EXECUTION_PROBE",
     "DocumentArtifact",
     "ExtractorBinding",
     "FetchChainExhausted",
     "FetchRequest",
-    "NO_MATCH",
     "PrivateWebInvocation",
     "ProviderBinding",
     "QualityPolicy",
@@ -938,7 +937,6 @@ __all__ = [
     "WebBinding",
     "WebExecutionProbe",
     "WebStageDeadlineExpired",
-    "WEB_EXECUTION_PROBE",
     "current_web_execution_probe",
     "get_web_execution_probe",
     "reset_web_execution_probe",
