@@ -287,9 +287,12 @@ def _claim_delivery(
                 "Delivery binding changed; the historical Delivery cannot be retried"
             )
         policy = _decode_policy(str(row["policy_json"]))
-        if state == "failed" and not manual_retry:
-            if int(row["retry_count"]) >= policy.retries:
-                return None
+        if (
+            state == "failed"
+            and not manual_retry
+            and int(row["retry_count"]) >= policy.retries
+        ):
+            return None
         running = int(
             app.conn.execute(
                 "SELECT COUNT(*) FROM deliveries WHERE pipeline_name=? AND node_name=? "
@@ -679,7 +682,11 @@ def _dispatch_deliveries(
                 # external Sink calls may overlap up to node concurrency.
                 # Submission follows manifest order; each worker still sends
                 # only after its own guarded row claim.
-                def _run(key: str) -> None:
+                def _run(
+                    key: str,
+                    pipeline_name: str = pipeline_name,
+                    node_name: str = node_name,
+                ) -> None:
                     row = app.conn.execute(
                         "SELECT rendered_item_id FROM deliveries WHERE delivery_key=?",
                         (key,),

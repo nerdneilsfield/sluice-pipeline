@@ -326,7 +326,7 @@ class _ThreadLocalCurlSession:
             kwargs["http_version"] = self._http_version
         try:
             session = factory(**kwargs)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise self._invalid_runtime() from None
         requester = getattr(session, "request", None)
         configured_options = getattr(session, "curl_options", None)
@@ -337,7 +337,7 @@ class _ThreadLocalCurlSession:
             if callable(close):
                 try:
                     close()
-                except Exception:
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                     pass
             raise self._invalid_runtime()
         try:
@@ -359,7 +359,7 @@ class _ThreadLocalCurlSession:
             if callable(close):
                 try:
                     close()
-                except Exception:
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                     pass
             raise self._invalid_runtime()
         return session
@@ -380,7 +380,7 @@ class _ThreadLocalCurlSession:
         error = WebSafetyError(reason)
         try:
             error.reason = reason
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         return error
 
@@ -463,7 +463,7 @@ class _ThreadLocalCurlSession:
             check_deadline(callback=True)
             try:
                 piece = bytes(chunk)
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 raise self._web_error("provider_error") from None
             next_total = total + len(piece)
             if next_total > limit:
@@ -502,7 +502,7 @@ class _ThreadLocalCurlSession:
             raise self._web_error("timeout") from None
         except WebSafetyError:
             raise
-        except BaseException:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             if overflowed:
                 raise self._web_error("body_too_large") from None
             if timed_out or (deadline is not None and time.monotonic() >= deadline):
@@ -531,7 +531,7 @@ class _ThreadLocalCurlSession:
             )
         except WebSafetyError:
             raise
-        except BaseException:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise self._web_error("provider_error") from None
 
     def close(self) -> None:
@@ -546,7 +546,7 @@ class _ThreadLocalCurlSession:
             if callable(close):
                 try:
                     close()
-                except Exception:
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                     _LOG.debug("curl_session_close_failed")
 
 
@@ -667,7 +667,7 @@ class WebRuntimeCatalog:
                 # Construct local extractor objects once per expanded binding
                 # so unsupported types/dependencies fail at startup.
                 for extractor in web.extractors:
-                    extractor_bindings.append(extractor)
+                    extractor_bindings += [extractor]
         for stage in getattr(definition, "stages", {}).values():
             for task in stage.tasks:
                 web = getattr(task, "web_binding", None)
@@ -676,7 +676,7 @@ class WebRuntimeCatalog:
                     for provider in web.providers:
                         add(provider)
                     for extractor in web.extractors:
-                        extractor_bindings.append(extractor)
+                        extractor_bindings += [extractor]
         catalog = cls(
             bindings, http_client=http_client, web_content_client=web_content_client
         )
@@ -826,7 +826,7 @@ class WebRuntimeCatalog:
                 )
             except DefinitionError:
                 raise
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 raise DefinitionError(
                     f"cannot create HTTPX client for provider {binding.name!r}"
                 ) from None
@@ -844,7 +844,7 @@ class WebRuntimeCatalog:
                 )
             except DefinitionError:
                 raise
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 raise DefinitionError(
                     f"curl_cffi dependency is unavailable for provider {binding.name!r}"
                 ) from None
@@ -878,7 +878,7 @@ class WebRuntimeCatalog:
             if callable(close):
                 try:
                     close()
-                except Exception:
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                     self._logger.debug("web_runtime_close_failed")
         if reject_closed:
             raise DefinitionError("web runtime catalog is closed")
@@ -1031,7 +1031,13 @@ class WebRuntimeCatalog:
                 if callable(close):
                     try:
                         close()
-                    except Exception:
+                    except (
+                        AttributeError,
+                        OSError,
+                        RuntimeError,
+                        TypeError,
+                        ValueError,
+                    ):
                         self._logger.debug("web_runtime_close_failed")
         finally:
             with self._lock:

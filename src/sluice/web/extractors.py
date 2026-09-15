@@ -219,7 +219,7 @@ def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
                 value = sanitize_markdown(
                     artifact.markdown, artifact.final_url or artifact.source_url
                 )
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 raise _failure() from None
             if not value.strip():
                 return NO_MATCH
@@ -246,7 +246,7 @@ def _identity_extract(artifact: DocumentArtifact) -> DocumentArtifact | object:
 def _soup_for_html(html: str) -> BeautifulSoup:
     try:
         soup = BeautifulSoup(html, "html.parser")
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise _failure() from None
     for node in list(soup.find_all(_HIDDEN_TAGS)):
         node.decompose()
@@ -259,7 +259,7 @@ def _remove_selectors(soup: BeautifulSoup, selectors: tuple[str, ...]) -> None:
     for selector in selectors:
         try:
             matches = soup.select(selector)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise _failure() from None
         for node in matches:
             node.decompose()
@@ -288,7 +288,7 @@ def _article_root(
     if selector:
         try:
             selected = soup.select_one(selector)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise _failure() from None
         if selected is None:
             return None
@@ -337,7 +337,7 @@ def _beautifulsoup_text(
     # previous behavior where a caller could explicitly remove ``title``.
     try:
         title_soup = BeautifulSoup(html, "html.parser")
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise _failure() from None
     _remove_selectors(title_soup, remove_selectors)
     title_node = title_soup.find("title")
@@ -432,13 +432,13 @@ def _extract_trafilatura(
     try:
         # Crucially this is the supplied body, never a URL/fetch_url call.
         value = module.extract(artifact.raw_html, **kwargs)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return NO_MATCH
     if not isinstance(value, str) or not value.strip():
         return NO_MATCH
     try:
         value = sanitize_markdown(value, artifact.final_url or artifact.source_url)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return NO_MATCH
     if not value.strip():
         return NO_MATCH
@@ -472,22 +472,22 @@ def _newspaper_article(module: Any, language: str | None) -> Any | None:
                 if key != "follow_meta_refresh"
             }
             article = article_cls("", **fallback_kwargs)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             try:
                 article = article_cls("")
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 return None
         config = getattr(article, "config", None)
         if config is not None:
             for key, value in kwargs.items():
                 try:
                     setattr(config, key, value)
-                except Exception:
+                except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                     pass
         if language:
             try:
                 article.config.language = language
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 pass
     return article
 
@@ -507,14 +507,14 @@ def _disable_newspaper_image_fetch(article: Any) -> None:
     if config is not None:
         try:
             config.fetch_images = False
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
     # Keep compatibility shims and test doubles from following a configured
     # read-more selector when they implement ``download`` themselves.
     try:
         article.read_more_link = ""
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
 
     def no_fetch_images(*_args: Any, **_kwargs: Any) -> None:
@@ -522,7 +522,7 @@ def _disable_newspaper_image_fetch(article: Any) -> None:
 
     try:
         article.fetch_images = no_fetch_images
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         # If an old implementation exposes a read-only method, its config
         # flag above is still the safest available guard.
         pass
@@ -583,7 +583,7 @@ def _extract_newspaper(
         parse = getattr(article, "parse", None)
         if callable(parse):
             parse()
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return NO_MATCH
     value = getattr(article, "text", None)
     if not isinstance(value, str) or not value.strip():
@@ -639,7 +639,7 @@ def _extract_resiliparse(
             main_content=main_content,
             preserve_formatting=preserve_formatting,
         )
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return NO_MATCH
     if not isinstance(value, str) or not value.strip():
         return NO_MATCH

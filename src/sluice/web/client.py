@@ -217,7 +217,7 @@ class WebContentClient:
         if isinstance(limiters, Mapping):
             try:
                 return limiters.get(self._name(binding))
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 return None
         return None
 
@@ -229,7 +229,7 @@ class WebContentClient:
         if callable(checker):
             try:
                 return bool(checker())
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 return False
         until = getattr(limiter, "cooldown_until", None)
         try:
@@ -239,7 +239,7 @@ class WebContentClient:
                 and math.isfinite(until)
                 and time.monotonic() < until
             )
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return False
 
     def _acquire(
@@ -288,7 +288,7 @@ class WebContentClient:
                 callback()
             else:
                 callback(value)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
     @staticmethod
@@ -299,7 +299,7 @@ class WebContentClient:
         if callable(release):
             try:
                 release()
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 pass
 
     def _extractor(self, binding: object) -> object:
@@ -326,7 +326,7 @@ class WebContentClient:
             options = getattr(binding, "options", {})
             try:
                 options = _json_value(options)
-            except Exception:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                 options = {}
             members.append(
                 {

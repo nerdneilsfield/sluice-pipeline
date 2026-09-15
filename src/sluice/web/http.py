@@ -304,7 +304,7 @@ class _PooledPinnedHTTPXClient:
                 if local_proxy and index + 1 < len(candidates):
                     continue
                 raise _error("network") from None
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 raise _error("provider_error") from None
         if response is None:
             raise _error("network")
@@ -334,7 +334,7 @@ class _PooledPinnedHTTPXClient:
                 raise _error("timeout") from None
             except (httpx.HTTPError, OSError):
                 raise _error("network") from None
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 raise _error("provider_error") from None
         finally:
             response.close()
@@ -352,7 +352,7 @@ def _error(reason: str) -> WebSafetyError:
     exc = WebSafetyError(reason)
     try:
         exc.reason = reason
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
     return exc
 
@@ -470,7 +470,7 @@ def _peer_from_response(response: Any) -> str | None:
                 return str(value[0])
             if value is not None:
                 return str(value)
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
     return None
 
@@ -1009,7 +1009,7 @@ def send_pinned_httpx_request(
             raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             # Injected transports are provider boundaries; vendor exception
             # text and response bodies must never escape this function.
             raise _error("provider_error") from None
@@ -1039,7 +1039,7 @@ def send_pinned_httpx_request(
         raise _error("timeout") from None
     except (httpx.HTTPError, OSError):
         raise _error("network") from None
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         # No third-party exception text is allowed to cross this boundary.
         raise _error("provider_error") from None
 
@@ -1077,7 +1077,7 @@ def send_pinned_httpx_post(
             raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             raise _error("provider_error") from None
 
     timeout = _httpx_timeout(request, binding)
@@ -1110,7 +1110,7 @@ def send_pinned_httpx_post(
         raise _error("timeout") from None
     except (httpx.HTTPError, OSError):
         raise _error("network") from None
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         raise _error("provider_error") from None
 
 
@@ -1179,13 +1179,13 @@ def bounded_manual_get(
                 raise
             except WebSafetyError as error:
                 raise _safe_transport_safety_error(error) from None
-            except Exception:
+            except (AttributeError, RuntimeError, ValueError):
                 raise _error("provider_error") from None
         except (WebAttemptCancelled, WebStageDeadlineExpired):
             raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             raise _error("provider_error") from None
 
         response = read_decompressed_limited(
@@ -1330,7 +1330,7 @@ def bounded_service_get(
         raise
     except WebSafetyError as error:
         raise _safe_transport_safety_error(error) from None
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         # Keep injected/direct transport details out of provider-facing errors.
         raise _error("provider_error") from None
 
@@ -1415,7 +1415,7 @@ def bounded_service_post(
         raise
     except WebSafetyError as error:
         raise _safe_transport_safety_error(error) from None
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         raise _error("provider_error") from None
 
 

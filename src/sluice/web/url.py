@@ -54,7 +54,7 @@ def _error(reason: str) -> WebSafetyError:
     # attribute is useful to adapters while ``str(exc)`` remains safe.
     try:
         exc.reason = reason
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
     return exc
 
@@ -332,13 +332,18 @@ def normalize_target_url(
             raise _error("bad_url")
         target_policy = policy
     target_policy_obj = TargetPolicy.from_value(target_policy)
-    if host in {"localhost", "localhost.localdomain", "ip6-localhost"}:
-        if host not in target_policy_obj.allow_hosts:
-            raise _error("ssrf_blocked")
+    if (
+        host in {"localhost", "localhost.localdomain", "ip6-localhost"}
+        and host not in target_policy_obj.allow_hosts
+    ):
+        raise _error("ssrf_blocked")
     literal = _normalise_ip_for_policy(host)
-    if literal is not None and _is_disallowed_address(literal):
-        if not _address_allowed(host, literal, target_policy_obj):
-            raise _error("ssrf_blocked")
+    if (
+        literal is not None
+        and _is_disallowed_address(literal)
+        and not _address_allowed(host, literal, target_policy_obj)
+    ):
+        raise _error("ssrf_blocked")
     return result
 
 
@@ -416,7 +421,7 @@ def guard_resolved_addresses(
         addresses = tuple(resolve_host(normalized_host))
     except WebSafetyError:
         raise
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise _error("ssrf_blocked") from None
     if not addresses:
         raise _error("ssrf_blocked")

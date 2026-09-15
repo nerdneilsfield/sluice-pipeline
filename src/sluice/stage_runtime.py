@@ -1170,12 +1170,9 @@ def _request_materialization(
             _attach_result_tx(app, request, int(current[0]), at_text)
             return _RequestOutcome(execution_id, cached=True, request=request)
 
-        (
-            app.conn.execute(
-                "INSERT OR IGNORE INTO materialization_claims(stage_name,lookup_key) VALUES (?,?)",
-                (stage.name, lookup_key),
-            ).rowcount
-            == 1
+        app.conn.execute(
+            "INSERT OR IGNORE INTO materialization_claims(stage_name,lookup_key) VALUES (?,?)",
+            (stage.name, lookup_key),
         )
         claim = app.conn.execute(
             "SELECT * FROM materialization_claims WHERE stage_name=? AND lookup_key=?",

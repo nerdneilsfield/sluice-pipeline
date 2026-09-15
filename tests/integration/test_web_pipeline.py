@@ -824,7 +824,8 @@ def test_provider_deadline_expiry_advances_to_next_source_provider(
     calls: list[str] = []
 
     class Catalog:
-        limiters = {"first": _FakeLimiter(), "second": _FakeLimiter()}
+        def __init__(self) -> None:
+            self.limiters = {"first": _FakeLimiter(), "second": _FakeLimiter()}
 
         def limiter(self, binding: ProviderBinding) -> _FakeLimiter:
             return self.limiters[binding.name]

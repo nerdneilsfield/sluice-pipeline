@@ -225,7 +225,7 @@ def _is_html(value: str) -> bool:
         return False
     try:
         soup = BeautifulSoup(candidate, "html.parser")
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return False
     # BeautifulSoup intentionally accepts arbitrary names as tags.  That is
     # useful for malformed HTML, but it also turns Markdown autolinks such as
@@ -356,7 +356,7 @@ def coerce_projector_input(
 def _soup_html(value: str) -> BeautifulSoup:
     try:
         soup = BeautifulSoup(value, "html.parser")
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise ExecutionError("web projector received invalid HTML") from None
     for node in list(soup.find_all(_HIDDEN_TAGS)):
         node.decompose()
@@ -507,7 +507,7 @@ def _html_to_markdown(value: str, base_url: str | None) -> str:
                 converted = converter(cleaned_value, allow_raw_html=False)
             except TypeError:
                 converted = converter(cleaned_value)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise ExecutionError("web Markdown conversion failed") from None
         if not isinstance(converted, str):
             raise ExecutionError("web Markdown conversion failed")
@@ -516,7 +516,7 @@ def _html_to_markdown(value: str, base_url: str | None) -> str:
         result = _own_html_to_markdown(value, base_url)
     try:
         return sanitize_markdown(result, base_url).strip()
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise ExecutionError("web Markdown sanitization failed") from None
 
 
@@ -531,7 +531,7 @@ def _markdown_to_text(value: str, base_url: str | None) -> str:
     try:
         value = sanitize_markdown(value, base_url)
         tokens = MarkdownIt("commonmark", {"html": True, "linkify": False}).parse(value)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise ExecutionError("web Markdown rendering failed") from None
     parts: list[str] = []
 
@@ -578,7 +578,7 @@ def _html_metadata(value: str, base_url: str | None) -> dict[str, Any]:
         # Keep head/title/JSON-LD nodes long enough to read metadata.  The
         # visible-content helper removes those nodes before rendering text.
         soup = BeautifulSoup(value, "html.parser")
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise ExecutionError("web projector received invalid HTML") from None
     for comment in list(soup.find_all(string=lambda item: isinstance(item, Comment))):
         comment.extract()
@@ -658,7 +658,7 @@ def _html_metadata(value: str, base_url: str | None) -> dict[str, Any]:
 def _markdown_metadata(value: str, base_url: str | None) -> dict[str, Any]:
     try:
         tokens = MarkdownIt("commonmark", {"html": True, "linkify": False}).parse(value)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return {}
     links: list[dict[str, str]] = []
     for token in tokens:

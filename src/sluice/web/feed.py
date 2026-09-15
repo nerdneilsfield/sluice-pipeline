@@ -66,7 +66,7 @@ def _reject_unsafe_declarations(raw_source: bytes) -> bool:
 def _tree_contains_xinclude(root: Any) -> bool:
     try:
         iterator = root.iter()
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return True
     for element in iterator:
         if _namespace(getattr(element, "tag", None)) == _XINCLUDE_NAMESPACE:
@@ -79,7 +79,7 @@ def _has_direct_child(root: Any, wanted: str) -> bool:
         return any(
             _local_name(getattr(child, "tag", None)) == wanted for child in list(root)
         )
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return False
 
 
@@ -108,7 +108,7 @@ def validate_raw_feed(
         )
     except (DefusedXmlException, ElementTree.ParseError, ValueError, TypeError):
         return None
-    except Exception:
+    except (AttributeError, OSError, RuntimeError):
         # Different defusedxml releases expose a few parser-limit exceptions
         # outside DefusedXmlException; none are safe to propagate here.
         return None

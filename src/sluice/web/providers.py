@@ -207,7 +207,7 @@ def _artifact_from_response(
         final_url = str(normalize_target_url(final_url, binding.target_policy))
     except WebSafetyError:
         raise
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise WebSafetyError("provider_error") from None
     representation = _allowed_representation(request, content_type)
     fields: dict[str, Any] = {
@@ -241,7 +241,7 @@ def _safe_fetch(call: Any) -> Any:
         raise
     except ExecutionError:
         raise
-    except BaseException:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise WebSafetyError("provider_error") from None
 
 
@@ -300,7 +300,7 @@ class StartupHTTPProvider:
                 if callable(client) and not callable(getter)
                 else getter(request.url)
             )
-        except BaseException:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise WebSafetyError("provider_error") from None
         force_final_url: str | None = None
         if isinstance(response, str):
@@ -410,7 +410,15 @@ class TrafilaturaProvider:
     def __post_init__(self) -> None:
         try:
             module = importlib.import_module("trafilatura")
-        except Exception:
+        except (
+            AttributeError,
+            ImportError,
+            ModuleNotFoundError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
             raise DefinitionError(
                 f"trafilatura dependency is unavailable for provider "
                 f"{self.binding.name!r}"
@@ -493,14 +501,14 @@ def _visible_text(value: str) -> str:
     try:
         soup = BeautifulSoup(value, "html.parser")
         return " ".join(soup.get_text(" ", strip=True).split())
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return " ".join(value.split())
 
 
 def _trafilatura_markdown(raw_html: str, options: Mapping[str, Any]) -> str | object:
     try:
         module = importlib.import_module("trafilatura")
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return NO_MATCH
     try:
         result = module.extract(
@@ -511,7 +519,7 @@ def _trafilatura_markdown(raw_html: str, options: Mapping[str, Any]) -> str | ob
             favor_precision=bool(options.get("favor_precision", False)),
             favor_recall=bool(options.get("favor_recall", False)),
         )
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return NO_MATCH
     if isinstance(result, str) and result.strip():
         return result.strip()
@@ -685,7 +693,7 @@ def _service_headers(
         return validate_target_headers(headers)
     except WebSafetyError:
         raise
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise WebSafetyError("provider_error") from None
 
 
@@ -802,7 +810,7 @@ def _json_from_response(
                 response, "final_url", None
             )
             return status, headers, value, None if final is None else str(final)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise WebSafetyError("provider_error") from None
     if isinstance(json_method, (Mapping, list, tuple)):
         status = int(
@@ -859,7 +867,7 @@ def _post_service_json(
         raise
     except WebSafetyError:
         raise
-    except BaseException:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise WebSafetyError("provider_error") from None
     if status < 200 or status >= 300:
         raise _service_failure(status, headers)
@@ -936,7 +944,7 @@ def _remote_final_url(
         )
     except WebSafetyError:
         raise
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise WebSafetyError("provider_error") from None
 
 
@@ -951,7 +959,7 @@ def _validate_remote_request_url(
         )
     except WebSafetyError:
         raise
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         raise WebSafetyError("provider_error") from None
     if str(normalized) == request.url:
         return request

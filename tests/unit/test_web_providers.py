@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from threading import Event, Thread
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -586,7 +586,7 @@ def test_provider_deadline_bounds_service_body_stream(monkeypatch) -> None:
 
     class StreamingResponse:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers = MappingProxyType({"content-type": "application/json"})
         url = "https://api.zyte.com/v1/extract"
         peer = "93.184.216.34"
 
@@ -800,9 +800,9 @@ def test_pooled_httpx_request_clamps_connect_and_read_to_remaining_budget(
 
     class Response:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers = MappingProxyType({"content-type": "application/json"})
         url = "https://api.zyte.com/v1/extract"
-        extensions: dict[str, object] = {}
+        extensions = MappingProxyType({})
 
         def iter_bytes(self):
             yield b"{}"
@@ -1296,7 +1296,7 @@ def test_catalog_service_post_uses_pinned_streaming_httpx_client(monkeypatch) ->
 
     class Response:
         status_code = 200
-        headers = {"content-type": "application/json"}
+        headers = MappingProxyType({"content-type": "application/json"})
 
         def __init__(self, request: object) -> None:
             self.url = request.url
@@ -1573,7 +1573,7 @@ def test_catalog_httpx_uses_pinned_stream_and_decompressed_cap(monkeypatch) -> N
 
     class Response:
         status_code = 200
-        headers = {"content-type": "text/plain"}
+        headers = MappingProxyType({"content-type": "text/plain"})
         url = "https://example.test/article"
 
         def __init__(self) -> None:
@@ -1691,7 +1691,7 @@ def test_httpx_profiles_use_resolved_proxy_but_guard_every_redirect_locally(
 
     class Response:
         status_code = 302
-        headers = {"location": "http://127.0.0.1/metadata"}
+        headers = MappingProxyType({"location": "http://127.0.0.1/metadata"})
 
         def __init__(self, request: object) -> None:
             self.url = request.url
@@ -1772,7 +1772,7 @@ def test_httpx_socks5_proxy_keeps_approved_target_address_and_original_identity(
 
     class Response:
         status_code = 200
-        headers = {"content-type": "text/plain"}
+        headers = MappingProxyType({"content-type": "text/plain"})
 
         def __init__(self, request: object) -> None:
             self.url = request.url
@@ -1877,9 +1877,9 @@ def test_catalog_creates_one_direct_httpx_client_and_closes_it(monkeypatch) -> N
 
         class Response:
             status_code = 200
-            headers = {"content-type": "text/plain"}
+            headers = MappingProxyType({"content-type": "text/plain"})
             url = "https://example.test/article"
-            extensions: dict[str, object] = {}
+            extensions = MappingProxyType({})
 
             def iter_bytes(self):
                 yield b"ok"
@@ -2054,7 +2054,7 @@ def test_catalog_curl_retains_per_worker_sessions_and_uses_pinned_callback_strea
 
     class Response:
         status_code = 200
-        headers = {"content-type": "text/plain"}
+        headers = MappingProxyType({"content-type": "text/plain"})
         primary_ip = "93.184.216.34"
 
         def __init__(self, url: str) -> None:

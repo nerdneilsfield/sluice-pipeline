@@ -184,7 +184,7 @@ def _challenge_reason(soup: BeautifulSoup, visible: str) -> str | None:
         try:
             if soup.select_one(selector) is not None:
                 return "challenge"
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             continue
     for script in soup.find_all("script"):
         src = str(script.get("src", "")).casefold()
@@ -295,7 +295,7 @@ def evaluate_quality(
 
     try:
         kind = _sniff_kind(artifact)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return QualityEvaluation(QualityMetrics(reason="provider_error"), artifact)
     if kind not in {"html", "text"}:
         return QualityEvaluation(QualityMetrics(reason="bad_content_type"), artifact)
@@ -316,7 +316,7 @@ def evaluate_quality(
             raw_challenge = raw_challenge or _challenge_reason(raw_soup, raw_visible)
             visible, link_ratio, soup = _visible_html(source)
             challenge = raw_challenge or _challenge_reason(soup, visible)
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return QualityEvaluation(QualityMetrics(reason="provider_error"), artifact)
         if challenge is not None:
             return QualityEvaluation(

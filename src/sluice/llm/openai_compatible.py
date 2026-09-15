@@ -116,12 +116,11 @@ class OpenAICompatibleClient:
         ):
             raise ValueError("max_backoff_seconds must be non-negative")
         if not isinstance(self.extra_headers, Mapping):
-            raise ValueError("extra_headers must be a mapping")
-        if any(
-            not isinstance(key, str) or not isinstance(value, str)
-            for key, value in self.extra_headers.items()
-        ):
-            raise ValueError("extra_headers keys and values must be strings")
+            raise TypeError("extra_headers must be a mapping")
+        if any(not isinstance(key, str) for key in self.extra_headers):
+            raise TypeError("extra_headers keys must be strings")
+        if any(not isinstance(value, str) for value in self.extra_headers.values()):
+            raise TypeError("extra_headers values must be strings")
         object.__setattr__(self, "base_url", self.base_url.strip().rstrip("/"))
         object.__setattr__(
             self, "extra_headers", MappingProxyType(dict(self.extra_headers))

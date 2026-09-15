@@ -93,7 +93,7 @@ def _visible_text(value: Any) -> str:
         ):
             comment.extract()
         return " ".join(soup.get_text(" ", strip=True).replace("\u00a0", " ").split())
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return ""
 
 
@@ -153,7 +153,7 @@ def _strip_html_blocks(value: str) -> str:
 
     try:
         tokens = _markdown_parse(value)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return value
     lines = value.splitlines(keepends=True)
     ranges = [
@@ -299,7 +299,7 @@ def sanitize_markdown(markdown: str, base_url: str | None = None) -> str:
         raise WebSafetyError("provider_error")
     try:
         _markdown_parse(markdown)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         # Parser failures are not rendered through an untrusted fallback; map
         # them to the same stable provider boundary as other sanitizer errors.
         raise WebSafetyError("provider_error") from None
@@ -929,7 +929,7 @@ def sanitize_web_error(error: BaseException) -> str:
             return "rate_limited" if status == 429 else "http_status"
         if isinstance(error, httpx.HTTPError):
             return "network"
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
     if isinstance(error, TimeoutError):
         return "timeout"

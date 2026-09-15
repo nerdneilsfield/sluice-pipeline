@@ -202,32 +202,29 @@ class QualityPolicy:
     max_body_bytes: int = 10_485_760
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.min_chars, bool)
-            or not isinstance(self.min_chars, int)
-            or self.min_chars < 0
-        ):
+        if isinstance(self.min_chars, bool) or not isinstance(self.min_chars, int):
+            raise TypeError("min_chars must be a non-negative integer")
+        if self.min_chars < 0:
             raise ValueError("min_chars must be a non-negative integer")
-        if self.min_words is not None and (
-            isinstance(self.min_words, bool)
-            or not isinstance(self.min_words, int)
-            or self.min_words <= 0
-        ):
-            raise ValueError("min_words must be a positive integer or null")
-        if self.max_link_ratio is not None and not (
-            not isinstance(self.max_link_ratio, bool)
-            and isinstance(self.max_link_ratio, (int, float))
-            and 0 <= self.max_link_ratio <= 1
-        ):
-            raise ValueError("max_link_ratio must be between 0 and 1")
+        if self.min_words is not None:
+            if isinstance(self.min_words, bool) or not isinstance(self.min_words, int):
+                raise TypeError("min_words must be a positive integer or null")
+            if self.min_words <= 0:
+                raise ValueError("min_words must be a positive integer or null")
+        if self.max_link_ratio is not None:
+            if isinstance(self.max_link_ratio, bool) or not isinstance(
+                self.max_link_ratio, (int, float)
+            ):
+                raise TypeError("max_link_ratio must be between 0 and 1")
+            if not 0 <= self.max_link_ratio <= 1:
+                raise ValueError("max_link_ratio must be between 0 and 1")
         if not isinstance(self.reject_challenges, bool):
-            raise ValueError("reject_challenges must be a boolean")
-        if (
-            isinstance(self.max_body_bytes, bool)
-            or not isinstance(self.max_body_bytes, int)
-            or self.max_body_bytes <= 0
-            or self.max_body_bytes > 10_485_760
+            raise TypeError("reject_challenges must be a boolean")
+        if isinstance(self.max_body_bytes, bool) or not isinstance(
+            self.max_body_bytes, int
         ):
+            raise TypeError("max_body_bytes must be between 1 and 10485760")
+        if not 0 < self.max_body_bytes <= 10_485_760:
             raise ValueError("max_body_bytes must be between 1 and 10485760")
 
 
@@ -284,24 +281,21 @@ class ProviderBinding:
                 self, "target_policy", _freeze_mapping(self.target_policy)
             )
 
-        if (
-            isinstance(self.transport_retries, bool)
-            or not isinstance(self.transport_retries, int)
-            or self.transport_retries < 0
+        if isinstance(self.transport_retries, bool) or not isinstance(
+            self.transport_retries, int
         ):
+            raise TypeError("transport_retries must be a non-negative integer")
+        if self.transport_retries < 0:
             raise ValueError("transport_retries must be a non-negative integer")
-        if (
-            isinstance(self.max_body_bytes, bool)
-            or not isinstance(self.max_body_bytes, int)
-            or self.max_body_bytes <= 0
-            or self.max_body_bytes > 10_485_760
+        if isinstance(self.max_body_bytes, bool) or not isinstance(
+            self.max_body_bytes, int
         ):
+            raise TypeError("max_body_bytes must be between 1 and 10485760")
+        if not 0 < self.max_body_bytes <= 10_485_760:
             raise ValueError("max_body_bytes must be between 1 and 10485760")
-        if (
-            isinstance(self.concurrency, bool)
-            or not isinstance(self.concurrency, int)
-            or self.concurrency <= 0
-        ):
+        if isinstance(self.concurrency, bool) or not isinstance(self.concurrency, int):
+            raise TypeError("concurrency must be a positive integer")
+        if self.concurrency <= 0:
             raise ValueError("concurrency must be a positive integer")
         if self.timeout is not None and self.timeout <= timedelta(0):
             raise ValueError("timeout must be positive")
@@ -346,9 +340,9 @@ class ProviderBinding:
                 raise ValueError("connect_timeout must be a whole number of seconds")
         object.__setattr__(self, "timeout_seconds", timeout_seconds)
         if not isinstance(self.only_main_content, bool):
-            raise ValueError("only_main_content must be a boolean")
+            raise TypeError("only_main_content must be a boolean")
         if not isinstance(self.mobile, bool):
-            raise ValueError("mobile must be a boolean")
+            raise TypeError("mobile must be a boolean")
         object.__setattr__(
             self,
             "actions",

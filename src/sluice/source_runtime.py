@@ -816,12 +816,9 @@ def collect_source(
     at_text = _timestamp(at)
     binding = _binding_digest(source_name, source)
 
-    try:
-        execution_id, checkpoint, superseded, _activated = _activate_binding(
-            app, source_name, source, binding, at_text, trigger
-        )
-    except ExecutionError:
-        raise
+    execution_id, checkpoint, superseded, _activated = _activate_binding(
+        app, source_name, source, binding, at_text, trigger
+    )
     for old_execution_id, old_binding in superseded:
         log_event(
             _LOGGER,
