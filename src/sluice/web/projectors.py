@@ -475,16 +475,13 @@ def _own_html_to_markdown(value: str, base_url: str | None) -> str:
     return "\n\n".join(compact)
 
 
-def _converter_html(value: str) -> str:
-    """Serialize cleaned HTML with literal text safe for Markdown conversion."""
+class _LiteralMarkdownText:
+    """Escape text at emission time, not before the converter parses HTML."""
 
-    soup = _soup_html(value)
-    for node in list(soup.find_all(string=True)):
-        parent = node.parent
-        if isinstance(parent, Tag) and parent.name.casefold() in {"pre", "code"}:
-            continue
-        node.replace_with(_escape_html_text(str(node)))
-    return str(soup)
+    def visit_text(self, context: Any, text: str) -> dict[str, str]:
+        if context.parent_tag in {"pre", "code"}:
+            return {"type": "continue"}
+        return {"type": "custom", "output": _escape_html_text(text)}
 
 
 def _html_to_markdown(value: str, base_url: str | None) -> str:
@@ -500,13 +497,12 @@ def _html_to_markdown(value: str, base_url: str | None) -> str:
     # projection before handing HTML to an optional converter.  Otherwise a
     # converter may retain fallback text nested in iframe/object/embed nodes
     # even though those nodes are non-visible content for this boundary.
-    cleaned_value = _converter_html(value)
+    cleaned_value = str(_soup_html(value))
     if callable(converter):
         try:
-            try:
-                converted = converter(cleaned_value, allow_raw_html=False)
-            except TypeError:
-                converted = converter(cleaned_value)
+            converted = converter(
+                cleaned_value, visitor=_LiteralMarkdownText()
+            ).content
         except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             raise ExecutionError("web Markdown conversion failed") from None
         if not isinstance(converted, str):
