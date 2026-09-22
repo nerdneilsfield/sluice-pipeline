@@ -4,7 +4,7 @@
 
 The `v4-cleanroom` implementation includes the core runtime and all twelve Web implementation tasks. The historical plans contain development-time red/green and review checklists; their unchecked boxes are not an inventory of missing code. This record describes the final checks actually rerun, rather than asserting that every historical process step took place.
 
-The closing changes fix `html-to-markdown` result handling and literal-text escaping, finish Ruff cleanup while retaining durable failure boundaries, and add a runnable example, README, and CI workflow. Type-checker (`ty`) cleanup is deferred by request.
+The closing changes fix `html-to-markdown` result handling and literal-text escaping, finish Ruff cleanup while retaining durable failure boundaries, and add a runnable example, README, and CI workflow. A subsequent notification pass adds default Telegram, SMTP email, and signed Feishu webhook senders plus the RSS notification example. The full-suite results below include those sender tests. Type-checker (`ty`) cleanup is deferred by request.
 
 ## Results
 
@@ -12,8 +12,8 @@ Checks used the committed `uv.lock` with `dev`, `web`, `ui`, and `prefect` extra
 
 | Check | Observed result |
 | --- | --- |
-| Full pytest suite, Python 3.14 | 396 passed, 1 warning; exit 0 |
-| Full pytest suite, Python 3.12.3 | 396 passed, 1 warning; exit 0 |
+| Full pytest suite, Python 3.14 | 402 passed, 1 warning; exit 0 |
+| Full pytest suite, Python 3.12.3 | 402 passed, 1 warning; exit 0 |
 | `ruff check .` | All checks passed |
 | `python -m compileall -q src tests examples` | Exit 0 |
 | `uv pip check` | Installed packages compatible |

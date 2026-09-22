@@ -69,6 +69,7 @@ BUILTIN_WEB_TASKS = frozenset(
 BUILTIN_SINK_BINDERS: dict[str, str] = {
     "sluice.sinks.email": "sluice.sinks.email.bind",
     "sluice.sinks.telegram": "sluice.sinks.telegram.bind",
+    "sluice.sinks.feishu": "sluice.sinks.feishu.bind",
 }
 
 
@@ -268,8 +269,8 @@ def bind_builtin_sink(
 ) -> SinkContract:
     try:
         binder = _bound_builtin(BUILTIN_SINK_BINDERS[path], path)
-        client = sink_clients[path]
-        if not callable(client):
+        client = sink_clients.get(path)
+        if client is not None and not callable(client):
             raise DefinitionError(f"startup Sink client for {path} is not callable")
         value = binder(client)
     except (KeyError, TypeError, AttributeError) as error:

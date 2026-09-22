@@ -1,0 +1,54 @@
+# Sends real messages to all three destinations. Remove unused Delivery nodes.
+version: 1
+database: rss-notifications.db
+sources:
+  feed:
+    use: sluice.sources.rss
+    schedule: 1h
+    with:
+      url: https://www.python.org/blogs/rss/
+      entry_output: text
+stages:
+  message:
+    input: each
+    tasks:
+      - use: sluice.tasks.render_telegram
+        with:
+          template: "{title}\n{link}"
+pipelines:
+  notifications:
+    nodes:
+      message:
+        stage: message
+        from: source.feed
+      telegram:
+        from: message
+        retries: 2
+        deliver:
+          use: sluice.sinks.telegram
+          with:
+            bot_token: env:TELEGRAM_BOT_TOKEN
+            chat_id: env:TELEGRAM_CHAT_ID
+      email:
+        from: message
+        retries: 2
+        deliver:
+          use: sluice.sinks.email
+          with:
+            smtp_host: env:SMTP_HOST
+            smtp_port: 587
+            security: starttls
+            username: env:SMTP_USERNAME
+            password: env:SMTP_PASSWORD
+            from: env:MAIL_FROM
+            to: env:MAIL_TO
+            subject: RSS updates
+      feishu:
+        from: message
+        retries: 2
+        deliver:
+          use: sluice.sinks.feishu
+          with:
+            webhook: env:FEISHU_WEBHOOK
+            # Remove secret if bot signing is disabled.
+            secret: env:FEISHU_SECRET

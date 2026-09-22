@@ -42,6 +42,10 @@ Direct web providers reject private and loopback targets to prevent SSRF. Hosted
 
 Configuration and extension contracts are documented in the [core design](docs/superpowers/specs/2026-08-14-sluice-v4-cleanroom-design.md) and [web design](docs/superpowers/specs/2026-08-18-sluice-v4-web-content-pipeline-design.md). Custom dotted-path callables must be importable when the App starts.
 
+## Send RSS notifications
+
+RSS 2.0, Atom, and RSS 1.0 feeds can deliver to Telegram, SMTP email, and Feishu custom bots using built-in senders. See [notification setup](docs/notifications.md) and [the three-channel RSS example](examples/rss-notifications.yml). This example sends real messages and needs your credentials; the webpage example above only prints to the console.
+
 ## Run and manage executions
 
 `sluice` is a one-shot runner, not a background scheduler. Invoke `tick` periodically through cron or an external scheduler. Supply an ISO-8601 timestamp with a timezone for execution commands:
