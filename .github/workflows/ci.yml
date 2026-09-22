@@ -1,0 +1,26 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - run: uv sync --locked --extra dev --extra web --extra ui --extra prefect
+      - run: .venv/bin/ruff check .
+      - run: .venv/bin/pytest -p no:cacheprovider -q tests
+      - run: .venv/bin/python -m compileall -q src tests examples
+      - run: uv pip check

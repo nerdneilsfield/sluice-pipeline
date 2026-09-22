@@ -1,5 +1,7 @@
 # Sluice v4 Clean-room Implementation Plan
 
+> **Current status:** Implementation is present. The final non-ty checks, runnable example, and remaining limits are recorded in [v4 verification](../../v4-verification.md). Historical step checkboxes below are preserved; they do not imply that implemented features are missing.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the approved Sluice v4 clean-room runtime: safe YAML definitions drive immutable SQLite-backed Sources, reusable Stage materializations, deterministic Pipeline reconciliation and batching, independent Deliveries, local/Prefect entrypoints, and the required management read model/UI.

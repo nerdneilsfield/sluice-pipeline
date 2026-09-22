@@ -1,5 +1,7 @@
 # Sluice v4 Web Content Pipeline Implementation Plan
 
+> **Current status:** Implementation is present. The final non-ty checks, runnable example, and remaining limits are recorded in [v4 verification](../../v4-verification.md). Historical step checkboxes below are preserved; they do not imply that implemented features are missing.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the approved configurable, safe, cache-correct web-content pipeline: named fetch and extraction chains turn URLs into deterministic Markdown or text through the existing Source and Stage runtime.

@@ -1,0 +1,45 @@
+# Run from the repository root; the database is relative to this file.
+version: 1
+database: webpage.db
+web:
+  providers:
+    direct:
+      type: httpx
+  fetch_chains:
+    direct:
+      providers: [direct]
+  extractors:
+    identity:
+      type: identity
+    article:
+      type: beautifulsoup
+  extract_chains:
+    article:
+      extractors: [identity, article]
+sources:
+  page:
+    use: sluice.sources.webpage
+    schedule: 1h
+    with:
+      url: https://example.com/
+      fetch_chain: direct
+      extract_chain: article
+      output: markdown
+      min_chars: 1
+stages:
+  text:
+    input: each
+    tasks:
+      - use: sluice.tasks.to_text
+        with: {input_format: markdown}
+pipelines:
+  webpage:
+    nodes:
+      text:
+        stage: text
+        from: source.page
+      console:
+        from: text
+        deliver:
+          use: examples.console.send
+          with: {}

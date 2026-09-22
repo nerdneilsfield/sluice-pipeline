@@ -1,0 +1,87 @@
+# Sluice v4
+
+Sluice collects RSS and webpage content, runs YAML-defined task graphs, and delivers results through independently retried Sinks. SQLite stores publications, execution state, shared Stage results, and Delivery attempts. Local commands and the optional Prefect flow use the same runtime.
+
+This branch is the v4 clean-room implementation. Use a separate database rather than pointing it at an older Sluice deployment. The runtime uses `fcntl` file locking and targets Unix-like systems; only one App can own a database at a time.
+
+## Run the webpage example
+
+Use Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Run these commands from the repository root:
+
+```sh
+uv sync --locked --extra dev --extra web --extra ui --extra prefect
+PYTHONPATH="$PWD" .venv/bin/sluice tick examples/webpage.yml \
+  --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+The example fetches `https://example.com/`, extracts visible content, converts it to text, and prints a JSON object containing `delivery_key` and `payload`. It does not send email or Telegram messages. Internet access is required. `PYTHONPATH` makes the example's custom Sink, `examples.console.send`, importable; it is not needed for definitions using only installed built-ins.
+
+State is stored in `examples/webpage.db`, relative to the YAML file. To inspect the result without relying on the CLI exit status:
+
+```sh
+.venv/bin/python - <<'PY'
+import sqlite3
+with sqlite3.connect('examples/webpage.db') as db:
+    print(db.execute('SELECT kind, state, error FROM executions').fetchall())
+    print(db.execute('SELECT state FROM deliveries').fetchall())
+PY
+```
+
+On a successful first run, Source, Stage, and Delivery states are `succeeded`. The CLI can return normally after recording an execution failure, so check these states when diagnosing a run. The Source has a one-hour schedule; an immediate second tick need not fetch again. Unchanged content does not create another delivery.
+
+## Configure a pipeline
+
+[examples/webpage.yml](examples/webpage.yml) contains an explicit HTTPX provider, fetch chain, extractor chain, Source, Stage, and console Delivery. YAML `version: 1` is the definition format, not the package major version.
+
+- `sources` collect immutable Items and publish changes. Built-ins include `sluice.sources.rss` and `sluice.sources.webpage`.
+- `stages` run `each` or `batch` task chains. Web fetch Tasks produce transient artifacts; end their chain with `sluice.tasks.to_markdown` or `sluice.tasks.to_text` before materialization.
+- `pipelines` connect Sources and Stages through `from` edges. Every Pipeline needs a Delivery endpoint.
+- `web` declares named providers and ordered fallback chains. HTTPX and BeautifulSoup work with core dependencies; the `web` extra adds curl_cffi, trafilatura, newspaper4k, and resiliparse.
+
+Direct web providers reject private and loopback targets to prevent SSRF. Hosted service endpoints have a separate policy. Keep credentials out of YAML values; provider credential fields accept environment references such as `api_key: env:FIRECRAWL_API_KEY`. Changing a secret's value does not change the authored binding identity.
+
+Configuration and extension contracts are documented in the [core design](docs/superpowers/specs/2026-08-14-sluice-v4-cleanroom-design.md) and [web design](docs/superpowers/specs/2026-08-18-sluice-v4-web-content-pipeline-design.md). Custom dotted-path callables must be importable when the App starts.
+
+## Run and manage executions
+
+`sluice` is a one-shot runner, not a background scheduler. Invoke `tick` periodically through cron or an external scheduler. Supply an ISO-8601 timestamp with a timezone for execution commands:
+
+```sh
+sluice tick definition.yml --at 2026-09-22T00:00:00Z
+sluice reconcile definition.yml pipeline_name node_name --at 2026-09-22T00:00:00Z
+sluice rebuild definition.yml 42 --at 2026-09-22T00:00:00Z
+sluice retry-delivery definition.yml DELIVERY_KEY --at 2026-09-22T00:00:00Z
+sluice ui definition.yml --host 127.0.0.1 --port 8000
+```
+
+Replace `definition.yml`, Pipeline/Node names, execution ID `42`, and `DELIVERY_KEY` with values from your deployment. A rebuild uses the retained execution input and snapshot. Retrying a Delivery can repeat an external side effect if the Sink did not honor the stable Delivery key.
+
+The `ui` extra provides the management interface at `http://127.0.0.1:8000/pipelines`. Keep it on a trusted local interface: it has mutation actions and no authentication. Stop the UI before running another process against the same database.
+
+With the `prefect` extra installed, call the same runtime through:
+
+```python
+from sluice.prefect_flow import prefect_tick
+
+prefect_tick('/absolute/path/definition.yml', '/absolute/path/state.db')
+```
+
+For an installation outside the checkout, use `pip install '.[web,ui,prefect]'`. Omit extras you do not use. Email, Telegram, and LLM integrations need their own configuration and credentials; the console example does not exercise them.
+
+## Verify changes
+
+After syncing the extras above, run:
+
+```sh
+.venv/bin/ruff check .
+.venv/bin/pytest -p no:cacheprovider -q tests
+.venv/bin/python -m compileall -q src tests examples
+uv pip check
+git diff --check
+```
+
+The suite uses fake provider transports; the Prefect parity test starts a temporary local server. It does not validate paid providers against live vendor accounts. The GitHub Actions workflow runs Ruff and the suite with the same locked extras on Python 3.12 and 3.14. `ty` cleanup is deferred and is not a CI gate.
+
+A newspaper4k warning about missing `nltk` is expected: its optional NLP features are not required for content extraction. Prefect may log `ValueError: I/O operation on closed file` while stopping its temporary server after pytest exits. Treat that specific teardown message as non-test output only if pytest reports all tests passing and exits zero.
+
+See [v4 verification](docs/v4-verification.md) for the checked scope and remaining limits.
