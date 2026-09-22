@@ -753,7 +753,7 @@ def test_curl_connect_read_and_callback_share_the_absolute_deadline(
             clock[0] = 106.0
             try:
                 callback(b"late")
-            except Exception:
+            except Exception:  # noqa: BLE001 - emulate curl wrapping callback failures
                 raise RuntimeError("curl callback aborted") from None
             raise AssertionError("the deadline must abort callback streaming")
 
@@ -1939,7 +1939,7 @@ def test_catalog_closes_new_owned_transport_when_close_wins_creation_race(
     def create_transport() -> None:
         try:
             catalog.transport_for(binding)
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001 - propagate worker failures to the test thread
             failures.append(error)
 
     worker = Thread(target=create_transport)
@@ -2131,7 +2131,7 @@ def test_catalog_curl_retains_per_worker_sessions_and_uses_pinned_callback_strea
             try:
                 provider.fetch(_request(acceptable=frozenset({"text"})))
                 provider.fetch(_request(acceptable=frozenset({"text"})))
-            except BaseException as error:
+            except BaseException as error:  # noqa: BLE001 - propagate worker failures to the test thread
                 failures.append(error)
 
         worker = Thread(target=fetch_twice)
@@ -2163,7 +2163,7 @@ def test_catalog_curl_caps_decompressed_callback_body(monkeypatch) -> None:
             callback(b"012")
             try:
                 callback(b"345")
-            except Exception:
+            except Exception:  # noqa: BLE001 - emulate curl wrapping callback failures
                 # curl_cffi may surface a callback abort as its own write
                 # error instead of propagating the callback exception.
                 raise RuntimeError("curl write callback aborted") from None

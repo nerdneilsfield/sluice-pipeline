@@ -611,7 +611,7 @@ def _execute_queued_source(app: App, execution_id: int, at: datetime) -> int:
         contract = app.sources[source_name]
         checkpoint = _checkpoint_value(expected_json)
         result = _validate_result(_collect_contract(app, source, contract, checkpoint))
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
         _record_failure(
             app,
             source_name,
@@ -848,7 +848,7 @@ def collect_source(
                 source_name, binding, execution_id, checkpoint, None, "returned"
             ),
         )
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
         log_event(
             _LOGGER,
             "source_external_completion",
@@ -898,7 +898,7 @@ def collect_source(
             return execution_id
     except ExecutionError:
         raise
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
         wrapped = ExecutionError("Source finalization failed")
         wrapped.__cause__ = error
         _record_failure(

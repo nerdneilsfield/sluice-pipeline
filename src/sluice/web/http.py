@@ -1185,7 +1185,7 @@ def bounded_manual_get(
             raise
         except WebSafetyError as error:
             raise _safe_transport_safety_error(error) from None
-        except (AttributeError, RuntimeError, TypeError, ValueError):
+        except (AttributeError, RuntimeError, ValueError):
             raise _error("provider_error") from None
 
         response = read_decompressed_limited(

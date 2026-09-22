@@ -4,17 +4,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 if TYPE_CHECKING:
     from .web.config import WebRegistryConfig
     from .web.contracts import WebBinding
 
 
-JSONValue: TypeAlias = (
+type JSONValue = (
     None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 )
-FrozenJSON: TypeAlias = (
+type FrozenJSON = (
     None
     | bool
     | int
@@ -125,9 +125,9 @@ class NEW:
         object.__setattr__(self, "metadata", freeze_item_json(self.metadata))
 
 
-TaskMarker: TypeAlias = Drop | FORWARD | NEW
-EachTaskResult: TypeAlias = TaskMarker
-BatchTaskResult: TypeAlias = tuple[TaskMarker, ...]
+type TaskMarker = Drop | FORWARD | NEW
+type EachTaskResult = TaskMarker
+type BatchTaskResult = tuple[TaskMarker, ...]
 
 
 @dataclass(frozen=True)

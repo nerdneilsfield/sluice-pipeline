@@ -593,7 +593,7 @@ class WebContentClient:
             )
             try:
                 fast = extract_identity(identity_input)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - sanitize unknown adapter failures before fallback
                 last_reason = sanitize_web_error(error)
                 continue
             if not isinstance(fast, DocumentArtifact):
@@ -640,7 +640,7 @@ class WebContentClient:
                 self._check_probe()
             except (WebAttemptCancelled, WebStageDeadlineExpired):
                 raise
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - sanitize unknown adapter failures before fallback
                 last_reason = sanitize_web_error(error)
                 continue
             if produced is NO_MATCH or produced is None:
@@ -880,7 +880,7 @@ class WebContentClient:
                         self._check_probe()
                     except (WebAttemptCancelled, WebStageDeadlineExpired):
                         raise
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 - sanitize unknown adapter failures before fallback
                         reason = sanitize_web_error(error)
                         attempts.append(
                             self._safe_failure(
@@ -947,7 +947,7 @@ class WebContentClient:
                 )
             except (WebAttemptCancelled, WebStageDeadlineExpired):
                 raise
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - sanitize unknown adapter failures before fallback
                 # A transport can report its effective timeout at the same
                 # instant that the owning Stage/probe becomes stale.  Durable
                 # Stage ownership dominates an ordinary provider failure.

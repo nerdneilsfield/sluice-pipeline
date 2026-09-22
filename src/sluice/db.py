@@ -29,7 +29,8 @@ def open_database(path: str | Path) -> LockedConnection:
         check_same_thread=False,
         factory=LockedConnection,
     )
-    lock_file = open(
+    # Ownership transfers to LockedConnection.close(); the lock spans its lifetime.
+    lock_file = open(  # noqa: SIM115
         database_path.with_suffix(database_path.suffix + ".lock"),
         "a+",
         encoding="utf-8",

@@ -22,16 +22,15 @@ from typing import (
     Final,
     Literal,
     Self,
-    TypeAlias,
 )
 from urllib.parse import urlsplit
 
 from ..errors import ExecutionError
 
-JSONValue: TypeAlias = (
+type JSONValue = (
     None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
 )
-FrozenJSON: TypeAlias = (
+type FrozenJSON = (
     None
     | bool
     | int
@@ -75,13 +74,13 @@ STABLE_FAILURE_REASONS: Final[frozenset[str]] = frozenset(
     }
 )
 
-ArtifactCapability: TypeAlias = Literal[
+type ArtifactCapability = Literal[
     "raw_html", "raw_source", "text", "markdown", "rendered_js"
 ]
-RequestCapability: TypeAlias = Literal["raw_html", "raw_source", "text", "markdown"]
-WebMode: TypeAlias = Literal["article", "list_html", "raw_source"]
-SelectedFormat: TypeAlias = Literal["raw_html", "text", "markdown"]
-WebOutput: TypeAlias = Literal["artifact", "markdown", "text", "raw_html", "raw_source"]
+type RequestCapability = Literal["raw_html", "raw_source", "text", "markdown"]
+type WebMode = Literal["article", "list_html", "raw_source"]
+type SelectedFormat = Literal["raw_html", "text", "markdown"]
+type WebOutput = Literal["artifact", "markdown", "text", "raw_html", "raw_source"]
 
 
 def _freeze_json(value: Any) -> Any:

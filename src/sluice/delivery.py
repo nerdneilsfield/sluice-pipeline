@@ -463,7 +463,7 @@ def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
         result = sink.send(raw_config, payload, attempt.delivery_key)
         if result is not None and not isinstance(result, str):
             raise ExecutionError("Sink must return a string or null")
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
         _fail_delivery_attempt(app, attempt, error, at)
         return
     _complete_delivery(app, attempt, result, at)

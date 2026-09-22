@@ -1242,7 +1242,7 @@ def test_stale_waiter_after_failed_owner_terminates_deterministically(tmp_path):
                 batch_id=None,
                 at=instant(0),
             )
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001 - propagate worker failures to the test thread
             errors[name] = error
 
     owner = Thread(target=invoke, args=("owner", "p1"), daemon=True)

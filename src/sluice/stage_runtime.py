@@ -1774,7 +1774,7 @@ def _execute_claimed_stage(app: App, execution_id: int, at: datetime) -> int:
                 )
             ),
         )
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
         has_web_task = any(task.web_binding is not None for task in stage.tasks)
         retry_id = _fail_execution(
             app,

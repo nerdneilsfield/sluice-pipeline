@@ -15,7 +15,7 @@ from sluice.contracts import (
     SourceRecord,
     SourceResult,
 )
-from sluice.errors import ExecutionError
+from sluice.errors import ExecutionError, WebSafetyError
 from sluice.web.contracts import (
     DocumentArtifact,
     FetchRequest,
@@ -63,8 +63,9 @@ def _link(element: Any, final_url: str) -> str | None:
             continue
         try:
             return normalize_target_url_string(urljoin(final_url, value))
-        except Exception:
-            continue
+        except (WebSafetyError, ValueError):
+            # A malformed entry link is omitted; never log untrusted feed data.
+            pass
     return None
 
 

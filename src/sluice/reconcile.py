@@ -1385,7 +1385,7 @@ def recover_startup(app: App, at: datetime) -> None:
                     and task.web_binding is None
                     for task in snapshot.tasks
                 )
-            except Exception:
+            except (ExecutionError, TypeError, ValueError):
                 legacy = False
             if legacy:
                 app.conn.execute(
@@ -1422,7 +1422,7 @@ def recover_startup(app: App, at: datetime) -> None:
                     and task.web_binding is None
                     for task in snapshot.tasks
                 )
-            except Exception:
+            except (ExecutionError, TypeError, ValueError):
                 legacy = False
         elif kind == "source":
             source_name = row["source_name"]
