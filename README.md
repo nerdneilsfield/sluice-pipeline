@@ -84,7 +84,7 @@ uv pip check
 git diff --check
 ```
 
-The suite uses fake provider transports; the Prefect parity test starts a temporary local server. It does not validate paid providers against live vendor accounts. The GitHub Actions workflow runs Ruff and the suite with the same locked extras on Python 3.12 and 3.14. `ty` cleanup is deferred and is not a CI gate.
+The suite uses fake provider transports; the Prefect parity test starts a temporary local server. It does not validate paid providers against live vendor accounts. The GitHub Actions workflow runs Ruff and the suite with the same locked extras on Python 3.12, 3.13, and 3.14. `ty` cleanup is deferred and is not a CI gate.
 
 A newspaper4k warning about missing `nltk` is expected: its optional NLP features are not required for content extraction. Prefect may log `ValueError: I/O operation on closed file` while stopping its temporary server after pytest exits. Treat that specific teardown message as non-test output only if pytest reports all tests passing and exits zero.
 

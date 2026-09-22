@@ -13,6 +13,7 @@ Checks used the committed `uv.lock` with `dev`, `web`, `ui`, and `prefect` extra
 | Check | Observed result |
 | --- | --- |
 | Full pytest suite, Python 3.14 | 402 passed, 1 warning; exit 0 |
+| Full pytest suite, Python 3.13 | 402 passed, 1 warning; exit 0 |
 | Full pytest suite, Python 3.12.3 | 402 passed, 1 warning; exit 0 |
 | `ruff check .` | All checks passed |
 | `python -m compileall -q src tests examples` | Exit 0 |
@@ -56,9 +57,10 @@ The README contains the full-suite and CLI commands. For a fresh CLI check, copy
 ## Limits and integration status
 
 - newspaper4k warns that optional `nltk` support is absent; extraction tests pass without it.
-- Prefect can emit a closed-console logging traceback during temporary-server shutdown after pytest completes. Both full-suite runs exited zero.
-- GitHub Actions is configured for Python 3.12 and 3.14, but has not been run remotely during this local work.
+- Prefect can emit a closed-console logging traceback during temporary-server shutdown after pytest completes. All three Python-version runs exited zero.
+- GitHub Actions is configured for Python 3.12, 3.13, and 3.14, but has not been run remotely during this local work.
 - No live email, Telegram, LLM, or paid Web provider credentials were used.
 - No independent review round was launched during this closing pass.
 - `.superpowers` is ignored and absent from the current tracked tree, but older reachable commits still contain it. The historical plan's history-cleanliness condition is not met; removing those records would require a separately authorized history rewrite.
-- The work remains on `v4-cleanroom`. Merge, push, and release are separate actions and have not been performed.
+- The local branch roles have changed: the former `master` is preserved as `old`, and the former `v4-cleanroom` is now `master`. Worktree directories were not moved. No remote push or release has been performed.
+- The original test CI was ported with its three-version matrix, full v4 integration tests, and a distribution build check; ty remains deferred. The old Docker and PyPI publishing workflows were not copied: Docker needs a v4 `src/` image definition, and PyPI targets `sluice-pipeline` while v4 currently builds distribution `sluice`. Publishing needs these choices resolved first.
