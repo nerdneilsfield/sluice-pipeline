@@ -1,0 +1,86 @@
+name: Docker
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Push to two registries on every v*.*.* tag:
+#   - ghcr.io/nerdneilsfield/sluice-pipeline  (GITHUB_TOKEN, no extra secret)
+#   - nerdneils/sluice-pipeline               (secret: DOCKERHUB_TOKEN)
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: Build & push Docker image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write   # required for GHCR push using GITHUB_TOKEN
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "Tag v$TAG does not match pyproject version $VERSION" >&2
+            exit 1
+          fi
+
+      # ── QEMU + Buildx for multi-platform builds ──────────────────────────
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ── Derive image tags ─────────────────────────────────────────────────
+      - name: Docker meta (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/nerdneilsfield/sluice-pipeline
+            nerdneils/sluice-pipeline
+          tags: |
+            # v1.2.3 → 1.2.3 + 1.2 + 1 + latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+
+      # ── Log in to GHCR (uses built-in GITHUB_TOKEN, no secret needed) ────
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Log in to Docker Hub (nerdneils) ─────────────────────────────────
+      - name: Login to Docker Hub (nerdneils)
+        uses: docker/login-action@v3
+        with:
+          username: nerdneils
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Build once, push to both registries ──────────────────────────────
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: scripts/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache stored on GHCR — free, no extra secret
+          cache-from: type=registry,ref=ghcr.io/nerdneilsfield/sluice-pipeline:buildcache
+          cache-to: type=registry,ref=ghcr.io/nerdneilsfield/sluice-pipeline:buildcache,mode=max

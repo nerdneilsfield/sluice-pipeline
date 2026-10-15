@@ -2432,7 +2432,7 @@ wheels = [
 ]
 
 [[package]]
-name = "sluice"
+name = "sluice-pipeline"
 version = "4.0.0"
 source = { editable = "." }
 dependencies = [

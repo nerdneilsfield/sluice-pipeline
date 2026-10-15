@@ -25,7 +25,7 @@ if flow is None:  # pragma: no cover - exercised only without the optional extra
 
         raise RuntimeError(
             "Prefect execution requires the optional dependency; "
-            "install sluice[prefect]"
+            "install sluice-pipeline[prefect]"
         )
 
 else:
