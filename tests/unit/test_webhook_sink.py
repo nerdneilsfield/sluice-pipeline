@@ -3,6 +3,7 @@
 import socket
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 
 from sluice.app import open_app
@@ -59,6 +60,29 @@ def test_posts_body_and_idempotency_key(respond):
     assert body == {"delivery_key": KEY, "payload": {"content": "hi"}}
     assert headers == {"Idempotency-Key": KEY}
     assert binding.max_body_bytes == 64 * 1024
+
+
+def test_lowercase_idempotency_key_is_replaced_on_the_wire(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get_list("idempotency-key"))
+        return httpx.Response(200)
+
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+    monkeypatch.setattr(
+        "sluice.web.http._PinnedHTTPTransport",
+        lambda addresses: httpx.MockTransport(handler),
+    )
+    webhook.send(
+        {
+            "url": "https://hooks.example.test/in",
+            "headers": {"idempotency-key": "attacker", "X-Source": "sluice"},
+        },
+        {"content": "hi"},
+        "real-key",
+    )
+    assert seen == [["real-key"]]
 
 
 def test_header_env_is_resolved_and_sent(respond, monkeypatch):

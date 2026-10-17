@@ -16,3 +16,4 @@ __pycache__/
 /examples/*.db-*
 /examples/*.db.lock
 .cw/
+/examples/hn-files/

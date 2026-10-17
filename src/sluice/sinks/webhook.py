@@ -37,7 +37,11 @@ def send(
         not isinstance(k, str) or not isinstance(v, str) for k, v in raw_headers.items()
     ):
         raise ExecutionError("Webhook headers must be a map of strings")
-    headers = {name: resolve_env(value, _LABEL) for name, value in raw_headers.items()}
+    headers = {
+        name: resolve_env(value, _LABEL)
+        for name, value in raw_headers.items()
+        if name.casefold() != "idempotency-key"
+    }
     headers["Idempotency-Key"] = delivery_key
     policy = target_policy(config, _LABEL)
     timeout = timeout_seconds(config, _LABEL)

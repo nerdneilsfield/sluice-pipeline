@@ -164,7 +164,7 @@ Request body:
 ```
 
 - The body is canonical JSON, at most 1 MiB; a larger body fails before any request is made.
-- The header `Idempotency-Key` is set to the Delivery key. It is applied after `headers`, so it cannot be overridden.
+- The header `Idempotency-Key` is set to the Delivery key. Any `Idempotency-Key` in `headers`, in any letter case, is removed first, so it cannot be overridden.
 - Any status from 200 to 299 succeeds. The response body is read up to 64 KiB and discarded. `external_id` is empty.
 - Any other status, including every 3xx, fails with `Webhook HTTP <status>`. A blocked address, a timeout, or a transport error fails with a fixed reason. The URL and header values never appear in errors, because webhook URLs commonly embed tokens.
 - `http://` URLs are rejected, even for a host allowed by `target_allow_hosts`. A receiver on a Docker network that speaks only plain HTTP needs a TLS-terminating proxy in front.
