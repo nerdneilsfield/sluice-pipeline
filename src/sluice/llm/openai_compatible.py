@@ -23,16 +23,6 @@ from ..errors import ExecutionError
 _RETRYABLE_HTTP_STATUS = frozenset({408, 429}) | frozenset(range(500, 600))
 
 
-def _read_error_body(error: HTTPError) -> str:
-    try:
-        value = error.read()
-    except (AttributeError, OSError):
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")[:1000]
-    return str(value)[:1000]
-
-
 def _strip_json_fence(value: str) -> str:
     text = value.strip()
     if not text.startswith("```"):
@@ -89,7 +79,7 @@ class OpenAICompatibleClient:
     """
 
     base_url: str
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     timeout: float = 60.0
     max_attempts: int = 3
     backoff_seconds: float = 1.0
@@ -173,7 +163,7 @@ class OpenAICompatibleClient:
                     status = response.getcode() or 200
                     body = response.read()
                 if status >= 400:
-                    description = f"HTTP {status}: {body[:1000].decode('utf-8', errors='replace')}"
+                    description = f"HTTP {status}"
                     if status not in _RETRYABLE_HTTP_STATUS:
                         raise ExecutionError(
                             f"OpenAI-compatible endpoint returned {description}"
@@ -184,11 +174,9 @@ class OpenAICompatibleClient:
                 else:
                     return body
             except HTTPError as error:
-                description = _read_error_body(error)
                 if error.code not in _RETRYABLE_HTTP_STATUS:
                     raise ExecutionError(
-                        "OpenAI-compatible endpoint returned "
-                        f"HTTP {error.code}: {description}"
+                        f"OpenAI-compatible endpoint returned HTTP {error.code}"
                     ) from error
                 last_error = error
             except (URLError, TimeoutError, OSError) as error:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import Any, Self
@@ -10,6 +11,7 @@ from urllib.error import HTTPError
 import pytest
 
 from sluice.contracts import Item
+from sluice.errors import ExecutionError
 from sluice.llm import OpenAICompatibleClient
 from sluice.tasks.llm import bind_llm
 
@@ -134,6 +136,23 @@ def test_openai_client_does_not_retry_non_transient_http_error(
     with pytest.raises(Exception, match="401"):
         client.complete("model-a", "Return JSON.", {"x": 1})
     assert attempts == 1
+
+
+def test_openai_client_error_message_omits_vendor_response_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        raise HTTPError(
+            request.full_url, 400, "bad", {}, io.BytesIO(b"SENTINEL-vendor-body")
+        )
+
+    monkeypatch.setattr("sluice.llm.openai_compatible.urlopen", fake_urlopen)
+    client = OpenAICompatibleClient("https://llm.example/v1", max_attempts=1)
+
+    with pytest.raises(ExecutionError) as excinfo:
+        client.complete("model-a", "Return JSON.", {"x": 1})
+    assert "400" in str(excinfo.value)
+    assert "SENTINEL-vendor-body" not in str(excinfo.value)
 
 
 def test_llm_task_uses_each_task_prompt_file(tmp_path: Path) -> None:
