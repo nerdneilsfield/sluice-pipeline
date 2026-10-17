@@ -154,6 +154,6 @@ Plan written 2026-10-17 at HEAD `0436334`; no code changes yet.
 - [x] T2 hacker_news
 - [x] T3 github_trending (deviation: `_http.fetch` gained optional `content_type`, enforced on the response media type; selectors re-checked against the live page 2026-10-17, unchanged from the plan; duplicate repos on one page keep the first; `limit` applies after skipping invalid rows)
 - [x] T4 github_activity (deviation: releases without an integer id and commits without a sha are skipped; `repo` rejects `.`/`..` segments; `events` must be non-empty and duplicate-free; non-list responses raise `github_activity <kind> response is not a list`; the DB-row assertion is in `test_token_never_reaches_sqlite_or_error_text`)
-- [ ] T5 webhook sink
+- [x] T5 webhook sink (deviation: D1 keys reuse `sources._http.target_policy`, `check_keys`, `resolve_env`, `timeout_seconds` rather than a new helper; unknown `with` keys are rejected at send time; `Idempotency-Key` is set after user headers so it always equals the delivery key; the request body is canonical JSON re-parsed for `send_pinned_httpx_post`, which takes a mapping; any 2xx succeeds)
 - [ ] T6 file sink
 - [ ] T7 docs

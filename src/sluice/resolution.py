@@ -75,6 +75,7 @@ BUILTIN_SINK_BINDERS: dict[str, str] = {
     "sluice.sinks.email": "sluice.sinks.email.bind",
     "sluice.sinks.telegram": "sluice.sinks.telegram.bind",
     "sluice.sinks.feishu": "sluice.sinks.feishu.bind",
+    "sluice.sinks.webhook": "sluice.sinks.webhook.bind",
 }
 
 
