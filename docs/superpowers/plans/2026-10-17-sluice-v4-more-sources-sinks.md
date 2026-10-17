@@ -48,7 +48,7 @@ Common: unknown `with` keys are rejected with `ExecutionError` at collect time (
 - logical_id = `str(id_field value)`. Payload = the item object unchanged (nested allowed). Metadata empty.
 - Payload change under the same logical_id: new Item, rerun/redelivery per the facts above. Users avoid noise by rendering only stable fields.
 - Templates: top-level keys of the item (`{title}`); nested via `{author[name]}`.
-- Security: user URL goes through the SSRF guard (public addresses only, D1); no redirects at all (headers may carry credentials); header values resolved from env at collect time, authored YAML keeps `env:NAME`.
+- Security: user URL goes through the SSRF guard (public only unless `target_allow_hosts`/`target_allow_cidrs`, D1); no redirects at all (headers may carry credentials); header values resolved from env at collect time, authored YAML keeps `env:NAME`.
 
 ### `sluice.sources.hacker_news`
 
@@ -84,15 +84,15 @@ Both return a stable `external_id` or `None`, never persist response bodies, and
 - Config: `url` (str, `https` only, required; may be `env:NAME`); `headers` (map, values may be `env:NAME`, validated like json_api); `timeout_seconds` (default 30, `(0, 300]`).
 - Request: one JSON `POST` via `send_pinned_httpx_post`; body `{"delivery_key": "...", "payload": <rendered payload>}`, <= 1 MiB; header `Idempotency-Key: <delivery_key>`; response capped at 64 KiB and discarded. Success = status 200-299; returns `None`.
 - Failure: non-2xx (including any 3xx, not followed) -> `ExecutionError("Webhook HTTP <status>")`; SSRF block / timeout / transport -> safe reason only; body > 1 MiB -> error before any request. URL and header values are never in errors (URLs commonly embed tokens).
-- Security: SSRF guard on the resolved address (public only, D1), https only, no redirects, credentials only through `env:`.
+- Security: SSRF guard on the resolved address (public only unless `target_allow_hosts`/`target_allow_cidrs`, D1), https only, no redirects, credentials only through `env:`.
 
 ### `sluice.sinks.file`
 
-- Config: `directory` (str, required); `extension` (`txt|md`, default `txt`).
+- Config: `directory` (str, required, relative to `file_root` or absolute inside it, D2); `extension` (`txt|md`, default `txt`).
 - Behavior: writes `<directory>/<delivery_key>.<extension>` containing `message_text(payload)` (strings as is, structures as canonical JSON, <= 10 MiB, empty -> error). Returns the file name as `external_id`.
 - Idempotency: the name is the delivery key, so a retry rewrites identical content; no append mode. A changed rendered payload has a new rendered item id, hence a new key and a new file; old files are kept.
 - Atomic: temp file in the same directory (`os.open` with `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0o600`), `fsync`, `os.replace`; temp file removed on any error.
-- Confinement (config.py): at definition load, `directory` is resolved against the definition's base directory (`Path.resolve()`, so symlinks are followed) and must be inside it, else `DefinitionError`. The resolved absolute path replaces the authored value in `with_config`. The sender requires an absolute directory whose `resolve()` equals itself (rejects a later symlink swap) and creates it with `mkdir(parents=True, exist_ok=True)`. File names come only from the hex delivery key, so no input can traverse.
+- Confinement (D2): `file_root` is resolved at load (`Path.resolve()`, symlinks followed); `directory` must resolve inside it, else `DefinitionError`. The authored `directory` stays in Delivery config/identity; the resolved root reaches the sender as startup runtime state (not persisted, not hashed), the same way `database` is resolved by `open_app`. Before writing, the sender re-resolves `file_root/directory` and rejects it if it escapes the root (symlink swap), then `mkdir(parents=True, exist_ok=True)`. File names come only from the hex delivery key. T6 must first confirm how a built-in Sink binder can receive this runtime value (e.g. `bind(...)` arguments in `resolution.py`/`app.py`); if it cannot without touching identity or snapshots, stop and report instead of improvising.
 - Failure: any `OSError` -> `ExecutionError("File Sink write failed")` without path or errno text.
 
 ## Files touched
@@ -122,12 +122,29 @@ Gate for every task: `.venv/bin/python -m pytest -q` passes except the known `te
 6. **T6 `feat: add file sink`**: module, registry entry, `config.py` confinement, tests, and the json_api -> file integration test. Acceptance: `load_definition` rejects escapes; kill-at-replace test leaves no partial file; existing `test_sink_senders.py` and config tests unchanged and green.
 7. **T7 `docs: document new sources and sinks`**: `docs/sources-and-sinks.md` (config tables from this plan, the payload-change rule, first-run flood, SSRF/redirect rules), `examples/hn-to-files.yml` (hacker_news -> render -> file; a test loads it with `load_definition`), README line, link from `docs/notifications.md`. Acceptance: every config key in the docs exists in code (grep each); example loads.
 
-## Decisions needed (defaults in bold)
+## Decisions (resolved 2026-10-17)
 
-- D1: Private targets. **webhook and json_api accept public addresses only, with no allow-list option.** This blocks internal receivers (n8n, Home Assistant on a LAN). Alternative: an explicit `allow_hosts` key mapped onto `TargetPolicy`.
-- D2: File Sink root. **`directory` must resolve inside the definition's directory.** Alternative: allow any absolute path (loses confinement). Side effect to accept: the stored absolute path is part of the Delivery binding, so moving the project directory re-keys Deliveries.
-- D3: GitHub activity and json_api are stateless, so **the first run emits up to `limit` historical entries** (default 30 per kind). Alternative: a checkpoint "start from now" mode, which adds state and a first-run special case.
-- Redirects are refused everywhere (GitHub 301 on a renamed repo fails with status 301). Stated here rather than asked; change only if it hurts.
+- D1: Private targets are configurable. `json_api` and `webhook` accept
+  `target_allow_hosts` (exact host names) and `target_allow_cidrs` (CIDRs),
+  the same key names and validation as web providers (`web/config.py`), mapped
+  onto `TargetPolicy`. Default stays public-only. Use case: receivers on the
+  same Docker network (`n8n`, `homeassistant`) or the same host
+  (`host.docker.internal`, `172.17.0.0/16`). Fixed-host Sources (Hacker News,
+  GitHub) do not take these keys.
+- D2: The file Sink root is configurable. New optional top-level key
+  `file_root` (str; relative to the definition directory, or absolute;
+  default: the definition directory). `directory` must resolve inside
+  `file_root`; it is checked at load and again at send. Store the authored
+  `directory` (not the resolved absolute path) in Delivery config, so moving the
+  project does not re-key Deliveries. `file_root` is runtime config like
+  `database` and is not part of Delivery identity. Docker: mount a host
+  directory at e.g. `/app/output` and set `file_root: /app/output`; document
+  this with a `docker run -v` example and the root-owned-files note.
+- D3: No "start from now" mode. The first run emits up to `limit` entries;
+  later runs rely on existing Item-identity dedup (same logical_id and payload
+  → no new Item, no new Delivery). Document the first-run behavior.
+- Redirects are refused everywhere (GitHub 301 on a renamed repo fails with
+  status 301).
 
 ## Progress
 
