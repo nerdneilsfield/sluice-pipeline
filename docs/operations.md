@@ -64,7 +64,7 @@ from sluice.prefect_flow import prefect_tick
 prefect_tick('/absolute/path/definition.yml', '/absolute/path/state.db')
 ```
 
-To install the extras into the current Python environment, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use.
+To install the extras from PyPI, run `pip install 'sluice-pipeline[web,ui,prefect]'`. From a checkout, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use.
 
 ## Database lock
 

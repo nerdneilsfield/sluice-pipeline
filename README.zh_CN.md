@@ -5,6 +5,7 @@
 [![CI](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/ci.yml)
 [![Docker](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/docker.yml/badge.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/docker.yml)
 [![Publish to PyPI](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/publish.yml/badge.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/publish.yml)
+[![PyPI](https://img.shields.io/pypi/v/sluice-pipeline)](https://pypi.org/project/sluice-pipeline/)
 [![Python 3.12+](https://img.shields.io/badge/python-%3E%3D3.12-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -16,34 +17,34 @@ Sluice 采集 RSS 和网页内容，运行由 YAML 定义的任务图，并通�
 
 ## 安装
 
-Sluice 需要 Python 3.12 或更高版本。下面三种方式任选其一。
-
-### 从源码安装
-
-先安装 [uv](https://docs.astral.sh/uv/)，然后在仓库根目录运行：
-
-```sh
-uv sync --locked --extra dev --extra web --extra ui --extra prefect
-```
-
-该命令会把 `sluice` 安装为 `.venv/bin/sluice`。下文的示例都使用这个路径。
+Sluice 需要 Python 3.12 或更高版本。下面三种方式任选其一：使用 Sluice 选 pip，在容器中运行选 Docker，参与开发选源码安装。
 
 ### 使用 pip
 
-发行包名为 `sluice-pipeline`，Python 导入名和命令名都是 `sluice`。要安装到当前 Python 环境，请在仓库根目录运行 `pip install '.[web,ui,prefect]'`，也可以把 `.` 换成检出目录的路径。不用的 extra 可以省略。邮件、Telegram 和 LLM 集成需要各自的配置和凭据；console 示例不会用到它们。
+推荐普通用户使用这种方式。发行包 `sluice-pipeline` 已发布到 [PyPI](https://pypi.org/project/sluice-pipeline/)，Python 导入名和命令名都是 `sluice`。按需选择 extra 后安装：
 
-推送 `v*.*.*` 标签时，发布 workflow 会把 `sluice-pipeline` 发布到 PyPI。本仓库没有记录 PyPI 上当前有哪些版本，因此请按上面的方式从检出目录安装，不要假定已有 v4 的发布版本。
+```sh
+pip install 'sluice-pipeline[web,ui,prefect]'
+sluice --help
+```
+
+不用的 extra 可以省略。邮件、Telegram 和 LLM 集成需要各自的配置和凭据；console 示例不会用到它们。
 
 ### 使用 Docker
 
-在仓库根目录构建镜像，并确认它能启动：
+已发布的镜像支持 `linux/amd64` 和 `linux/arm64`，可从 GitHub Container Registry（`ghcr.io/nerdneilsfield/sluice-pipeline`）和 Docker Hub（`nerdneils/sluice-pipeline`）获取，两处都有 `0.4.0`、`0.4`、`0` 和 `latest` 标签。拉取镜像并确认它能启动：
+
+```sh
+docker pull ghcr.io/nerdneilsfield/sluice-pipeline:latest
+docker run --rm ghcr.io/nerdneilsfield/sluice-pipeline:latest --help
+```
+
+如果想从检出目录自行构建，请在仓库根目录运行下面的命令，并在后文把已发布的镜像名换成 `sluice-pipeline:local`：
 
 ```sh
 docker build -f scripts/docker/Dockerfile -t sluice-pipeline:local .
 docker run --rm sluice-pipeline:local --help
 ```
-
-推送 `v*.*.*` 标签时，发布 workflow 会推送 `ghcr.io/nerdneilsfield/sluice-pipeline` 和 `nerdneils/sluice-pipeline`。本仓库没有记录当前已发布哪些标签；上面的本地构建是已验证的路径。
 
 镜像以 `/app` 为工作目录，入口是 `sluice`，并包含 `web`、`ui` 和 `prefect` 这几个运行时 extra。`/app/configs` 和 `/app/data` 两个目录分别用于存放定义和状态。默认的 `database` 路径相对于 YAML 文件，所以如果以只读方式挂载定义，请在 YAML 中把 `database` 设为绝对路径，例如 `/app/data/state.db`：
 
@@ -51,11 +52,21 @@ docker run --rm sluice-pipeline:local --help
 docker run --rm \
   -v "$PWD/configs:/app/configs:ro" \
   -v "$PWD/data:/app/data" \
-  sluice-pipeline:local tick /app/configs/definition.yml \
+  ghcr.io/nerdneilsfield/sluice-pipeline:latest tick /app/configs/definition.yml \
   --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
 请把 `configs/definition.yml` 换成你自己的定义。镜像没有设置 `USER`，容器会以 root 身份写入挂载的状态目录。如果定义使用自定义 Sink 或其他通过点分路径指定的可调用对象，对应的模块必须能在容器内导入，例如把它挂载到 `/app/configs` 下，并加上 `-e PYTHONPATH=/app/configs`。
+
+### 从源码安装
+
+这种方式用于开发，或运行仓库自带的示例。先安装 [uv](https://docs.astral.sh/uv/)，然后在仓库根目录运行：
+
+```sh
+uv sync --locked --extra dev --extra web --extra ui --extra prefect
+```
+
+该命令会把 `sluice` 安装为 `.venv/bin/sluice`。下文的示例都使用这个路径。
 
 ## 运行网页示例
 

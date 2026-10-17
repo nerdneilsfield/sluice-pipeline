@@ -49,15 +49,18 @@ docker run --rm sluice-pipeline:local --help
 The container includes the `web`, `ui`, and `prefect` runtime extras, not dev/test
 tools. Mount definitions and writable state directories when running a pipeline.
 
-The migrated Docker and PyPI workflows run when a `v*.*.*` tag is pushed and
-require the tag version to match `pyproject.toml`. They retain the original
-release destinations:
+The Docker and PyPI workflows run when a `v*.*.*` tag is pushed and require the
+tag version to match `pyproject.toml`. Pushing a release tag triggers real
+uploads to these destinations:
 
 - PyPI: `sluice-pipeline`, using trusted publishing in the `pypi` GitHub environment.
 - GHCR: `ghcr.io/nerdneilsfield/sluice-pipeline`, using `GITHUB_TOKEN`.
 - Docker Hub: `nerdneils/sluice-pipeline`, using the `DOCKERHUB_TOKEN` secret.
 
-Docker publishes Linux AMD64 and ARM64 images. These workflows retain the
-repository's existing external credentials/environment requirements; local builds
-do not verify PyPI trust configuration or registry permissions. Pushing a release
-tag triggers real uploads. No release tag was pushed during migration.
+Docker publishes Linux AMD64 and ARM64 images tagged with the full version, the
+minor version, the major version, and `latest`. Local builds do not verify PyPI
+trust configuration or registry permissions.
+
+v0.4.0 was published through these workflows: the wheel and sdist are on PyPI,
+and both image registries carry `0.4.0`, `0.4`, `0`, and `latest` for both
+architectures.

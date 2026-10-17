@@ -5,6 +5,7 @@ English | [简体中文](README.zh_CN.md)
 [![CI](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/ci.yml)
 [![Docker](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/docker.yml/badge.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/docker.yml)
 [![Publish to PyPI](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/publish.yml/badge.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/publish.yml)
+[![PyPI](https://img.shields.io/pypi/v/sluice-pipeline)](https://pypi.org/project/sluice-pipeline/)
 [![Python 3.12+](https://img.shields.io/badge/python-%3E%3D3.12-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -16,34 +17,34 @@ This branch is the v4 clean-room implementation. Use a separate database rather 
 
 ## Install
 
-Sluice needs Python 3.12 or later. Choose one of the three routes below.
-
-### From source
-
-Install [uv](https://docs.astral.sh/uv/), then run this command from the repository root:
-
-```sh
-uv sync --locked --extra dev --extra web --extra ui --extra prefect
-```
-
-The command installs `sluice` as `.venv/bin/sluice`. The examples below use that path.
+Sluice needs Python 3.12 or later. Choose one of the three routes below: pip for using Sluice, Docker for running it in a container, or source for development.
 
 ### With pip
 
-The distribution is named `sluice-pipeline`; the Python import and command are `sluice`. To install into the current Python environment, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use. Email, Telegram, and LLM integrations need their own configuration and credentials; the console example does not exercise them.
+This is the recommended route for users. The distribution `sluice-pipeline` is published on [PyPI](https://pypi.org/project/sluice-pipeline/); the Python import and command are `sluice`. Install it with the extras you need:
 
-The release workflow publishes `sluice-pipeline` to PyPI when a `v*.*.*` tag is pushed. This repository does not record which versions are currently on PyPI, so install from the checkout as shown above rather than assuming a published v4 release.
+```sh
+pip install 'sluice-pipeline[web,ui,prefect]'
+sluice --help
+```
+
+Omit extras you do not use. Email, Telegram, and LLM integrations need their own configuration and credentials; the console example does not exercise them.
 
 ### With Docker
 
-Build the image from the repository root and check that it starts:
+Published images are available for `linux/amd64` and `linux/arm64` from GitHub Container Registry (`ghcr.io/nerdneilsfield/sluice-pipeline`) and Docker Hub (`nerdneils/sluice-pipeline`). Both carry the tags `0.4.0`, `0.4`, `0`, and `latest`. Pull one and check that it starts:
+
+```sh
+docker pull ghcr.io/nerdneilsfield/sluice-pipeline:latest
+docker run --rm ghcr.io/nerdneilsfield/sluice-pipeline:latest --help
+```
+
+To build the image from a checkout instead, run this from the repository root and use `sluice-pipeline:local` in place of the published image name below:
 
 ```sh
 docker build -f scripts/docker/Dockerfile -t sluice-pipeline:local .
 docker run --rm sluice-pipeline:local --help
 ```
-
-The release workflow pushes `ghcr.io/nerdneilsfield/sluice-pipeline` and `nerdneils/sluice-pipeline` when a `v*.*.*` tag is pushed. This repository does not record which tags are currently published; the local build above is the verified route.
 
 The image runs `sluice` as its entrypoint from `/app` and includes the `web`, `ui`, and `prefect` runtime extras. The directories `/app/configs` and `/app/data` exist for definitions and state. The default `database` path is relative to the YAML file, so for a read-only definition mount, set an absolute `database` such as `/app/data/state.db` in the YAML:
 
@@ -51,11 +52,21 @@ The image runs `sluice` as its entrypoint from `/app` and includes the `web`, `u
 docker run --rm \
   -v "$PWD/configs:/app/configs:ro" \
   -v "$PWD/data:/app/data" \
-  sluice-pipeline:local tick /app/configs/definition.yml \
+  ghcr.io/nerdneilsfield/sluice-pipeline:latest tick /app/configs/definition.yml \
   --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
 Replace `configs/definition.yml` with your definition. The image sets no `USER`, so the container writes files in the mounted state directory as root. A definition that uses a custom Sink or other dotted-path callable needs that module importable inside the container, for example by mounting it under `/app/configs` and adding `-e PYTHONPATH=/app/configs`.
+
+### From source
+
+Use this route for development, or to run the bundled examples. Install [uv](https://docs.astral.sh/uv/), then run this command from the repository root:
+
+```sh
+uv sync --locked --extra dev --extra web --extra ui --extra prefect
+```
+
+The command installs `sluice` as `.venv/bin/sluice`. The examples below use that path.
 
 ## Run the webpage example
 
