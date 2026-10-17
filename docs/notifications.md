@@ -36,7 +36,7 @@ The Telegram bot must have permission to send to the target chat. Feishu keyword
 
 ## Run and inspect
 
-From the repository root, after the installation steps in the README:
+From the repository root, after the source installation steps in the [README](../README.md#from-source):
 
 ```sh
 .venv/bin/sluice tick examples/rss-notifications.yml \
@@ -66,4 +66,4 @@ Protocol tests use HTTP and SMTP fakes, including signed Feishu bodies, environm
 
 References: [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage), [Feishu custom bots](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN).
 
-To deliver an LLM-generated digest instead of raw feed text, see [Summarize with an LLM](../README.md#summarize-with-an-llm).
+To deliver an LLM-generated digest instead of raw feed text, see [Summarize with an LLM](llm.md).

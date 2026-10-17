@@ -1,0 +1,88 @@
+# Operate Sluice
+
+`sluice` is a one-shot runner, not a background scheduler. Each command opens the definition, does its work, and exits. This page covers scheduling, the execution commands, the management UI, Prefect, the database lock, and inspecting state.
+
+## Run tick periodically
+
+Invoke `tick` periodically through cron or an external scheduler. Supply an ISO-8601 timestamp with a timezone for every execution command. The `--at` value is required.
+
+```sh
+sluice tick definition.yml --at 2026-09-22T00:00:00Z
+```
+
+For a cron job, pass the current time instead of a fixed one, as in the README examples:
+
+```sh
+sluice tick definition.yml --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+Environment variables that a definition references with `env:NAME` must be available to the process that runs `tick`. Replace `definition.yml` with your definition path.
+
+## Reconcile, rebuild, and retry a Delivery
+
+```sh
+sluice reconcile definition.yml pipeline_name node_name --at 2026-09-22T00:00:00Z
+sluice rebuild definition.yml 42 --at 2026-09-22T00:00:00Z
+sluice retry-delivery definition.yml DELIVERY_KEY --at 2026-09-22T00:00:00Z
+```
+
+Replace `definition.yml`, Pipeline/Node names, execution ID `42`, and `DELIVERY_KEY` with values from your deployment.
+
+### Reconcile a node
+
+`reconcile` runs the named Node of the named Pipeline together with the Nodes it depends on. `tick` runs the whole definition.
+
+### Rebuild a Stage execution
+
+`rebuild` forces a Stage materialization from one retained Stage execution, identified by its execution ID. A rebuild uses the retained execution input and snapshot. If the Stage's LLM Tasks need a client, the definition must still provide one; see [LLM startup rules](llm.md#startup-rules).
+
+### Retry a Delivery
+
+`retry-delivery` retries one failed Delivery without requesting any upstream work. Retrying a Delivery can repeat an external side effect if the Sink did not honor the stable Delivery key. See [Limits and retry behavior](notifications.md#limits-and-retry-behavior) for the built-in senders.
+
+## Management UI
+
+```sh
+sluice ui definition.yml --host 127.0.0.1 --port 8000
+```
+
+The `ui` extra provides the management interface at `http://127.0.0.1:8000/pipelines`.
+
+> **Warning:** The UI has mutation actions and no authentication. Keep it on a trusted local interface.
+
+Stop the UI before running another process against the same database; see [Database lock](#database-lock).
+
+## Prefect
+
+With the `prefect` extra installed, call the same runtime through:
+
+```python
+from sluice.prefect_flow import prefect_tick
+
+prefect_tick('/absolute/path/definition.yml', '/absolute/path/state.db')
+```
+
+Install the extra with `pip install '.[web,ui,prefect]'` for an installation outside the checkout; omit extras you do not use.
+
+## Database lock
+
+The runtime uses `fcntl` file locking and targets Unix-like systems. Only one App can own a database at a time, so a second process opened against the same database cannot run while the first holds it. This applies to `tick`, the other execution commands, the UI, and `prefect_tick` alike.
+
+Use a separate database for v4 rather than pointing it at an older Sluice deployment.
+
+## Inspect state in SQLite
+
+Check recorded states instead of relying on the CLI exit status. The CLI can return normally after recording an execution failure. The examples use the webpage example's database; replace the path with your `database` value, which is relative to the YAML file.
+
+```sh
+.venv/bin/python - <<'PY'
+import sqlite3
+with sqlite3.connect('examples/webpage.db') as db:
+    print(db.execute('SELECT kind, state, error FROM executions').fetchall())
+    print(db.execute('SELECT state FROM deliveries').fetchall())
+PY
+```
+
+On a successful first run, Source, Stage, and Delivery states are `succeeded`. The Source has a one-hour schedule in the examples; an immediate second tick need not fetch again. Unchanged content does not create another delivery.
+
+For per-destination Delivery state in the RSS notification example, see [Run and inspect](notifications.md#run-and-inspect).

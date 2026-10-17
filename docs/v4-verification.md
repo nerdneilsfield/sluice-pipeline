@@ -31,7 +31,7 @@ The full suite includes management actions, Prefect/local parity, retained Web b
 
 ## Reproduce the schema check
 
-After installing the extras listed in the README:
+After installing the extras listed in [CONTRIBUTING.md](../CONTRIBUTING.md#set-up):
 
 ```sh
 .venv/bin/python - <<'PY'
@@ -52,7 +52,7 @@ print('schema checks passed')
 PY
 ```
 
-The README contains the full-suite and CLI commands. For a fresh CLI check, copy the example YAML to a temporary directory, keep `PYTHONPATH` set to the repository root, and run `tick` against that copy. The database is created beside the copied definition.
+[CONTRIBUTING.md](../CONTRIBUTING.md#verify-changes) contains the full-suite commands, and the [README](../README.md#run-the-webpage-example) contains the CLI command. For a fresh CLI check, copy the example YAML to a temporary directory, keep `PYTHONPATH` set to the repository root, and run `tick` against that copy. The database is created beside the copied definition.
 
 ## Limits and integration status
 
