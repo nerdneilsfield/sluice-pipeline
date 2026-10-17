@@ -96,7 +96,7 @@ On a successful first run, Source, Stage, and Delivery states are `succeeded`. T
 
 [examples/webpage.yml](examples/webpage.yml) contains an explicit HTTPX provider, fetch chain, extractor chain, Source, Stage, and console Delivery. YAML `version: 1` is the definition format, not the package major version.
 
-- `sources` collect immutable Items and publish changes. Built-ins include `sluice.sources.rss` and `sluice.sources.webpage`.
+- `sources` collect immutable Items and publish changes. Built-ins are `sluice.sources.rss`, `webpage`, `json_api`, `hacker_news`, `github_trending`, and `github_activity`. Built-in Sinks include Telegram, email, Feishu, `sluice.sinks.webhook`, and `sluice.sinks.file`. Keys and rules: [Sources and Sinks reference](docs/sources-and-sinks.md).
 - `stages` run `each` or `batch` task chains.
 - `pipelines` connect Sources and Stages through `from` edges. Every Pipeline needs a Delivery endpoint.
 - `web` declares named providers and ordered fallback chains. HTTPX and BeautifulSoup work with core dependencies; the `web` extra adds curl_cffi, trafilatura, newspaper4k, and resiliparse.
@@ -112,6 +112,8 @@ Rules for task chains and transient artifacts, the authored binding identity, an
 **Webpage.** [examples/webpage.yml](examples/webpage.yml) fetches a page, extracts its text, and prints it through a console Sink. It is the example run above.
 
 **RSS notifications.** RSS 2.0, Atom, and RSS 1.0 feeds can deliver to Telegram, SMTP email, and Feishu custom bots using built-in senders. See [notification setup](docs/notifications.md) and [the three-channel RSS example](examples/rss-notifications.yml). This example sends real messages and needs your credentials; the webpage example above only prints to the console.
+
+**Hacker News to files.** [examples/hn-to-files.yml](examples/hn-to-files.yml) writes one text file per top story with the file Sink and needs no credentials. The first run emits up to `limit` stories. See the [Sources and Sinks reference](docs/sources-and-sinks.md).
 
 **LLM digest.** [examples/rss-llm-digest.yml](examples/rss-llm-digest.yml) runs RSS → fetch → `llm_extract` → `llm_summary` → console, using one OpenAI-compatible `/chat/completions` endpoint configured in a top-level `llm` block. See [LLM digest setup](docs/llm.md).
 

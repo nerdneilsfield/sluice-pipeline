@@ -1,0 +1,33 @@
+# Writes one text file per Hacker News story to ./hn-files/stories/. No credentials needed.
+# The first run emits up to `limit` stories; later runs write only new ones.
+version: 1
+database: hn-to-files.db
+file_root: hn-files
+sources:
+  hn:
+    use: sluice.sources.hacker_news
+    schedule: 1h
+    with:
+      feed: top
+      limit: 10
+stages:
+  message:
+    input: each
+    tasks:
+      - use: sluice.tasks.render_telegram
+        with:
+          template: "{title}\n{url}\n{hn_url}"
+pipelines:
+  hn_files:
+    nodes:
+      message:
+        stage: message
+        from: source.hn
+      files:
+        from: message
+        retries: 2
+        deliver:
+          use: sluice.sinks.file
+          with:
+            directory: stories
+            extension: txt

@@ -96,7 +96,7 @@ PY
 
 [examples/webpage.yml](examples/webpage.yml) 包含显式配置的 HTTPX provider、fetch chain、extractor chain、Source、Stage 和 console Delivery。YAML 中的 `version: 1` 是定义格式的版本，不是软件包的主版本号。
 
-- `sources` 采集不可变的 Item 并发布变化。内置的有 `sluice.sources.rss` 和 `sluice.sources.webpage`。
+- `sources` 采集不可变的 Item 并发布变化。内置的有 `sluice.sources.rss`、`webpage`、`json_api`、`hacker_news`、`github_trending` 和 `github_activity`。内置 Sink 包括 Telegram、邮件、飞书、`sluice.sinks.webhook` 和 `sluice.sinks.file`。配置项与规则见 [Sources and Sinks 参考](docs/sources-and-sinks.md)（英文）。
 - `stages` 运行 `each` 或 `batch` 类型的任务链。
 - `pipelines` 通过 `from` 边把 Source 和 Stage 连接起来。每个 Pipeline 都需要一个 Delivery 端点。
 - `web` 声明具名 provider 和有序的 fallback chain。HTTPX 与 BeautifulSoup 只需核心依赖；`web` extra 会额外安装 curl_cffi、trafilatura、newspaper4k 和 resiliparse。
@@ -112,6 +112,8 @@ PY
 **网页。** [examples/webpage.yml](examples/webpage.yml) 抓取一个页面，提取其中的文本，并通过 console Sink 打印。上文运行的就是这个示例。
 
 **RSS 通知。** RSS 2.0、Atom 和 RSS 1.0 订阅源可以用内置的发送器投递到 Telegram、SMTP 邮件和飞书自定义机器人。参见[通知配置](docs/notifications.md)和[三通道 RSS 示例](examples/rss-notifications.yml)。该示例会发送真实消息，需要你提供凭据；上面的网页示例只会打印到 console。
+
+**Hacker News 写入文件。** [examples/hn-to-files.yml](examples/hn-to-files.yml) 用 file Sink 为每条热门故事写一个文本文件，不需要凭据。首次运行最多输出 `limit` 条故事。参见 [Sources and Sinks 参考](docs/sources-and-sinks.md)（英文）。
 
 **LLM 摘要。** [examples/rss-llm-digest.yml](examples/rss-llm-digest.yml) 依次运行 RSS → fetch → `llm_extract` → `llm_summary` → console，使用顶层 `llm` 块中配置的一个 OpenAI 兼容 `/chat/completions` 端点。参见 [LLM 摘要配置](docs/llm.md)。
 

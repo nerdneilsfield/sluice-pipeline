@@ -66,4 +66,6 @@ Protocol tests use HTTP and SMTP fakes, including signed Feishu bodies, environm
 
 References: [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage), [Feishu custom bots](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN).
 
+For the generic webhook and file Sinks, and for non-RSS Sources, see [Sources and Sinks reference](sources-and-sinks.md).
+
 To deliver an LLM-generated digest instead of raw feed text, see [Summarize with an LLM](llm.md).
