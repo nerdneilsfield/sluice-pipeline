@@ -1,9 +1,9 @@
-import time
 from datetime import UTC, datetime, timedelta
-from threading import Event, Lock, Thread
+from threading import Event, Lock, Thread, current_thread
 
 import pytest
 
+from sluice import stage_runtime
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult, StageEnvelope
 from sluice.reconcile import reconcile, reconcile_node, tick
@@ -581,6 +581,21 @@ pipelines:
     return app
 
 
+@pytest.fixture
+def waiter_registered(monkeypatch):
+    registered = Event()
+    await_waiter = stage_runtime._await_waiter_execution
+
+    def await_registered_waiter(*args, **kwargs):
+        registered.set()
+        return await_waiter(*args, **kwargs)
+
+    monkeypatch.setattr(
+        stage_runtime, "_await_waiter_execution", await_registered_waiter
+    )
+    return registered
+
+
 def test_shared_owner_waiter_survives_restart_and_waiter_uses_cached_result(tmp_path):
     url = "https://example.test/0"
     http = BarrierHttp((url,))
@@ -798,7 +813,9 @@ def test_stage_attachment_keeps_computed_lookup_key_on_node_member(tmp_path):
     assert row[0] == row[1]
 
 
-def test_execute_stage_waiter_returns_its_cached_terminal_attempt(tmp_path):
+def test_execute_stage_waiter_returns_its_cached_terminal_attempt(
+    tmp_path, monkeypatch, waiter_registered
+):
     url = "https://example.test/0"
     http = BarrierHttp((url,))
     app = shared_app(tmp_path, http)
@@ -836,14 +853,37 @@ def test_execute_stage_waiter_returns_its_cached_terminal_attempt(tmp_path):
     owner = Thread(target=owner_call)
     owner.start()
     assert http.started[url].wait(timeout=5)
+    polling = Event()
+    release_poll = Event()
+    execute = app.conn.execute
+
+    def pause_waiter_poll(sql, parameters=()):
+        if (
+            current_thread() is waiter
+            and waiter_registered.is_set()
+            and sql.startswith("SELECT result_id FROM stage_result_current")
+        ):
+            polling.set()
+            assert release_poll.wait(timeout=5)
+        return execute(sql, parameters)
+
+    monkeypatch.setattr(app.conn, "execute", pause_waiter_poll)
     waiter = Thread(target=waiter_call)
     waiter.start()
-    # The public waiter call must remain pending until the owner terminally
-    # resolves, rather than returning the owner's running ID immediately.
-    assert waiter.is_alive()
-    http.release[url].set()
-    owner.join(timeout=5)
-    waiter.join(timeout=5)
+    try:
+        assert waiter_registered.wait(timeout=5)
+        assert polling.wait(timeout=5)
+        # A paused poll must exclude owner writes, not inspect a half-promoted waiter.
+        acquired = app.conn.transaction_lock.acquire(blocking=False)
+        if acquired:
+            app.conn.transaction_lock.release()
+        assert not acquired
+        assert waiter.is_alive()
+    finally:
+        release_poll.set()
+        http.release[url].set()
+        owner.join(timeout=5)
+        waiter.join(timeout=5)
     assert not owner.is_alive() and not waiter.is_alive()
     assert results["waiter"] != results["owner"]
     assert (
@@ -1122,7 +1162,9 @@ pipelines:
         assert tuple(second_member) == (2, second_result, "terminal")
 
 
-def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(tmp_path):
+def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(
+    tmp_path, waiter_registered
+):
     url = "https://example.test/0"
     http = BarrierHttp((url,))
     app = shared_app(tmp_path, http)
@@ -1165,42 +1207,30 @@ def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(tmp
     ).fetchone()[0]
     waiter = Thread(target=waiter_call)
     waiter.start()
+    assert waiter_registered.wait(timeout=5)
     assert waiter.is_alive()
-    for _ in range(1000):
-        with app.conn.transaction_lock:
-            count = app.conn.execute(
-                "SELECT COUNT(*) FROM materialization_waiters WHERE force=0"
-            ).fetchone()[0]
-        if count == 1:
-            break
-        time.sleep(0.001)
-    with app.conn.transaction_lock:
-        assert (
-            app.conn.execute(
-                "SELECT COUNT(*) FROM materialization_waiters WHERE force=0"
-            ).fetchone()[0]
-            == 1
-        )
 
     rebuild = rebuild_stage(app, owner_id, instant(1))
     assert rebuild.execution_id is None
     assert rebuild.status == "queued"
-    waiters = [
-        tuple(row)
-        for row in app.conn.execute(
-            "SELECT force,rebuild_target_id FROM materialization_waiters "
-            "ORDER BY force DESC,waiting_sequence"
-        )
-    ]
+    with app.conn.transaction_lock:
+        waiters = [
+            tuple(row)
+            for row in app.conn.execute(
+                "SELECT force,rebuild_target_id FROM materialization_waiters "
+                "ORDER BY force DESC,waiting_sequence"
+            )
+        ]
     assert waiters == [(1, owner_id), (0, None)]
 
     http.release[url].set()
     owner.join(timeout=5)
     assert not owner.is_alive()
-    forced_id = app.conn.execute(
-        "SELECT id FROM executions WHERE rebuild_target_id=? ORDER BY id DESC LIMIT 1",
-        (owner_id,),
-    ).fetchone()[0]
+    with app.conn.transaction_lock:
+        forced_id = app.conn.execute(
+            "SELECT id FROM executions WHERE rebuild_target_id=? ORDER BY id DESC LIMIT 1",
+            (owner_id,),
+        ).fetchone()[0]
     _execute_claimed_stage(app, forced_id, instant(2))
     waiter.join(timeout=5)
     assert not waiter.is_alive()
@@ -1218,7 +1248,9 @@ def test_forced_rebuild_keeps_a_distinct_force_waiter_ahead_of_normal_waiter(tmp
     )
 
 
-def test_stale_waiter_after_failed_owner_terminates_deterministically(tmp_path):
+def test_stale_waiter_after_failed_owner_terminates_deterministically(
+    tmp_path, waiter_registered
+):
     url = "https://example.test/0"
     http = FailingBarrierHttp(url)
     app = shared_app(tmp_path, http)
@@ -1250,12 +1282,14 @@ def test_stale_waiter_after_failed_owner_terminates_deterministically(tmp_path):
     assert http.started.wait(timeout=5)
     waiter = Thread(target=invoke, args=("waiter", "p2"), daemon=True)
     waiter.start()
+    assert waiter_registered.wait(timeout=5)
     assert waiter.is_alive()
 
-    app.conn.execute(
-        "UPDATE node_edge_members SET active=0 "
-        "WHERE pipeline_name='p2' AND node_name='prepare'"
-    )
+    with app.conn.transaction_lock:
+        app.conn.execute(
+            "UPDATE node_edge_members SET active=0 "
+            "WHERE pipeline_name='p2' AND node_name='prepare'"
+        )
     reconcile_node(app, "p2", "prepare", instant(1))
     http.release.set()
     owner.join(timeout=5)

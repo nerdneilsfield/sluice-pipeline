@@ -1807,83 +1807,87 @@ def _await_waiter_execution(
     lookup_key = stage_lookup_key(stage, items, history)
     owner_id = int(owner_execution_id)
     while True:
-        current = app.conn.execute(
-            "SELECT result_id FROM stage_result_current WHERE stage_name=? AND lookup_key=?",
-            (stage.name, lookup_key),
-        ).fetchone()
-        if current is not None:
-            cached = app.conn.execute(
-                "SELECT id FROM executions WHERE kind='stage' AND state='cached' "
-                "AND stage_name=? AND lookup_key=? AND pipeline_name IS ? AND node_name IS ? "
-                "AND result_id=? ORDER BY id DESC LIMIT 1",
-                (
-                    stage.name,
-                    lookup_key,
-                    request.owner[0] if request.owner else None,
-                    request.owner[1] if request.owner else None,
-                    int(current[0]),
-                ),
+        queued_owner_id = None
+        # Observe owner finalization and waiter promotion as one committed state.
+        with app.conn.transaction_lock:
+            current = app.conn.execute(
+                "SELECT result_id FROM stage_result_current WHERE stage_name=? AND lookup_key=?",
+                (stage.name, lookup_key),
             ).fetchone()
-            if cached is not None:
-                return int(cached[0])
-            outcome = _request_materialization(app, request, at)
-            if outcome.execution_id is not None:
-                return int(outcome.execution_id)
-
-        claim = app.conn.execute(
-            "SELECT owner_execution_id FROM materialization_claims WHERE stage_name=? AND lookup_key=?",
-            (stage.name, lookup_key),
-        ).fetchone()
-        if claim is not None and claim[0] is not None:
-            claim_owner = int(claim[0])
-            execution = app.conn.execute(
-                "SELECT state,pipeline_name,node_name FROM executions WHERE id=?",
-                (claim_owner,),
-            ).fetchone()
-            if (
-                execution is not None
-                and execution[0] == "queued"
-                and request.owner is not None
-                and execution[1] == request.owner[0]
-                and execution[2] == request.owner[1]
-            ):
-                owner_id = claim_owner
-                _execute_claimed_stage(app, owner_id, at)
-                continue
-            owner_id = claim_owner
-        else:
-            # A normal waiter can be discarded when reconciliation makes its
-            # node member stale while the shared owner is failing.  In that
-            # case promotion intentionally consumes the waiter row without
-            # creating an Execution; stop polling instead of spinning forever.
-            waiter = app.conn.execute(
-                "SELECT 1 FROM materialization_waiters WHERE stage_name=? AND lookup_key=? "
-                "AND pipeline_name IS ? AND node_name IS ? AND envelope_json=?",
-                (
-                    stage.name,
-                    lookup_key,
-                    request.owner[0] if request.owner else None,
-                    request.owner[1] if request.owner else None,
-                    _envelope_json(request.envelope),
-                ),
-            ).fetchone()
-            if waiter is None:
-                raise ExecutionError(
-                    "Stage waiter was discarded after the shared owner failed"
-                )
-            if owner_id:
-                execution = app.conn.execute(
-                    "SELECT state FROM executions WHERE id=?", (owner_id,)
+            if current is not None:
+                cached = app.conn.execute(
+                    "SELECT id FROM executions WHERE kind='stage' AND state='cached' "
+                    "AND stage_name=? AND lookup_key=? AND pipeline_name IS ? AND node_name IS ? "
+                    "AND result_id=? ORDER BY id DESC LIMIT 1",
+                    (
+                        stage.name,
+                        lookup_key,
+                        request.owner[0] if request.owner else None,
+                        request.owner[1] if request.owner else None,
+                        int(current[0]),
+                    ),
                 ).fetchone()
-                if execution is not None and execution[0] in {
-                    "failed",
-                    "dropped",
-                    "succeeded",
-                    "cached",
-                }:
-                    # The owner has reached a terminal state; continue
-                    # polling the durable waiter promotion.
-                    pass
+                if cached is not None:
+                    return int(cached[0])
+                outcome = _request_materialization(app, request, at)
+                if outcome.execution_id is not None:
+                    return int(outcome.execution_id)
+
+            claim = app.conn.execute(
+                "SELECT owner_execution_id FROM materialization_claims WHERE stage_name=? AND lookup_key=?",
+                (stage.name, lookup_key),
+            ).fetchone()
+            if claim is not None and claim[0] is not None:
+                claim_owner = int(claim[0])
+                execution = app.conn.execute(
+                    "SELECT state,pipeline_name,node_name FROM executions WHERE id=?",
+                    (claim_owner,),
+                ).fetchone()
+                if (
+                    execution is not None
+                    and execution[0] == "queued"
+                    and request.owner is not None
+                    and execution[1] == request.owner[0]
+                    and execution[2] == request.owner[1]
+                ):
+                    queued_owner_id = claim_owner
+                owner_id = claim_owner
+            else:
+                # A normal waiter can be discarded when reconciliation makes its
+                # node member stale while the shared owner is failing.  In that
+                # case promotion intentionally consumes the waiter row without
+                # creating an Execution; stop polling instead of spinning forever.
+                waiter = app.conn.execute(
+                    "SELECT 1 FROM materialization_waiters WHERE stage_name=? AND lookup_key=? "
+                    "AND pipeline_name IS ? AND node_name IS ? AND envelope_json=?",
+                    (
+                        stage.name,
+                        lookup_key,
+                        request.owner[0] if request.owner else None,
+                        request.owner[1] if request.owner else None,
+                        _envelope_json(request.envelope),
+                    ),
+                ).fetchone()
+                if waiter is None:
+                    raise ExecutionError(
+                        "Stage waiter was discarded after the shared owner failed"
+                    )
+                if owner_id:
+                    execution = app.conn.execute(
+                        "SELECT state FROM executions WHERE id=?", (owner_id,)
+                    ).fetchone()
+                    if execution is not None and execution[0] in {
+                        "failed",
+                        "dropped",
+                        "succeeded",
+                        "cached",
+                    }:
+                        # The owner has reached a terminal state; continue
+                        # polling the durable waiter promotion.
+                        pass
+        if queued_owner_id is not None:
+            _execute_claimed_stage(app, queued_owner_id, at)
+            continue
         time.sleep(0.001)
 
 
