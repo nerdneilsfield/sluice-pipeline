@@ -1,0 +1,79 @@
+# Run from the repository root; the database is relative to this file.
+# Needs network access and LLM_API_KEY for the endpoint in the `llm` block.
+version: 1
+database: rss-llm-digest.db
+llm:
+  base_url: https://api.openai.com/v1   # any OpenAI-compatible /chat/completions endpoint
+  api_key: env:LLM_API_KEY              # exact env:NAME only; empty value sends no Authorization header
+  timeout_seconds: 60
+  max_attempts: 3
+web:
+  providers:
+    direct:
+      type: httpx
+  fetch_chains:
+    direct:
+      providers: [direct]
+  extractors:
+    identity:
+      type: identity
+    article:
+      type: beautifulsoup
+  extract_chains:
+    article:
+      extractors: [identity, article]
+sources:
+  feed:
+    use: sluice.sources.rss
+    schedule: 1h
+    with:
+      url: https://www.python.org/blogs/rss/
+stages:
+  # Web fetch/extract chains must end in a projector inside their own Stage.
+  article:
+    input: each
+    tasks:
+      - use: sluice.tasks.fetch_webpage
+        with: {fetch_chain: direct, extract_chain: article, min_chars: 1}
+      - use: sluice.tasks.extract_content
+        with: {extract_chain: article, min_chars: 1}
+      - use: sluice.tasks.to_markdown
+  # The model sees only the Markdown string, never title, link or metadata.web.
+  extract:
+    input: each
+    tasks:
+      - use: sluice.tasks.llm_extract
+        with:
+          model: gpt-4o-mini
+          prompt: prompts/extract.md
+          output: {summary: string}
+          invalid: drop
+  # The model receives a JSON array of the extract results.
+  digest:
+    input: batch
+    tasks:
+      - use: sluice.tasks.llm_summary
+        with:
+          model: gpt-4o-mini
+          prompt: prompts/summary.md
+          output: {summary: string}
+  message:
+    input: each
+    tasks:
+      - use: sluice.tasks.render_telegram
+        with: {template: "{summary}"}
+pipelines:
+  digest:
+    nodes:
+      article: {stage: article, from: source.feed}
+      extract: {stage: extract, from: article}
+      digest:
+        stage: digest
+        from: extract
+        batch: {count: 1}
+      message: {stage: message, from: digest}
+      console:
+        from: message
+        deliver:
+          use: examples.console.send
+          with: {}

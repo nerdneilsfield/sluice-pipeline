@@ -48,6 +48,34 @@ Configuration and extension contracts are documented in the [core design](docs/s
 
 RSS 2.0, Atom, and RSS 1.0 feeds can deliver to Telegram, SMTP email, and Feishu custom bots using built-in senders. See [notification setup](docs/notifications.md) and [the three-channel RSS example](examples/rss-notifications.yml). This example sends real messages and needs your credentials; the webpage example above only prints to the console.
 
+## Summarize with an LLM
+
+[examples/rss-llm-digest.yml](examples/rss-llm-digest.yml) runs RSS → fetch → `llm_extract` → `llm_summary` → console. The top-level `llm` block configures one OpenAI-compatible `/chat/completions` endpoint; `tick` and `prefect_tick` build the client from it at startup.
+
+```yaml
+llm:
+  base_url: https://api.example.com/v1   # http(s) with a host; no userinfo, query or fragment
+  api_key: env:LLM_API_KEY               # optional; exact env:NAME only, literal keys are rejected
+  timeout_seconds: 60                    # optional, finite and > 0
+  max_attempts: 3                        # optional, integer >= 1
+```
+
+```sh
+export LLM_API_KEY=...   # edit base_url and model in the YAML for your provider
+PYTHONPATH="$PWD" .venv/bin/sluice tick examples/rss-llm-digest.yml \
+  --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+Inspect `executions` and `deliveries` in `examples/rss-llm-digest.db` as in the webpage example; Stage and Delivery states should be `succeeded`.
+
+- An unset `LLM_API_KEY` fails startup, even if no Stage uses an LLM Task. An empty value is accepted and sends no `Authorization` header.
+- A definition that uses `llm_extract` or `llm_summary` without an `llm` block fails at startup. Retained queued, running or waiting LLM work also needs a client; terminal history opens without one, but `rebuild` of it fails.
+- The endpoint is not part of cache identity. Changing `base_url` or the key reuses existing results for the same model, prompt and output shape. Use `rebuild` or bump the Stage `cache_version` to recompute.
+- The model sees only the projected Item payload: Markdown text for `llm_extract`, and a JSON array of the extract results for `llm_summary`. Title, link and `metadata.web` are not sent, so templates after `llm_extract` cannot use `{title}` or `{link}`.
+- The client sends no `response_format`; the prompts ask for bare JSON.
+- Failed LLM calls store only the HTTP status in `executions.error`, never the vendor response body.
+- To send the digest to Telegram, email or Feishu instead of the console, replace the `console` node with the Sink from [notification setup](docs/notifications.md).
+
 ## Run and manage executions
 
 `sluice` is a one-shot runner, not a background scheduler. Invoke `tick` periodically through cron or an external scheduler. Supply an ISO-8601 timestamp with a timezone for execution commands:

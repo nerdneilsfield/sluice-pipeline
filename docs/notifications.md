@@ -65,3 +65,5 @@ Delivery retries are not exactly-once external delivery. If a remote server acce
 Protocol tests use HTTP and SMTP fakes, including signed Feishu bodies, environment-secret handling, vendor failures, and three sibling Deliveries without injected clients. Live delivery still needs validation with your accounts; no credentials were available during implementation.
 
 References: [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage), [Feishu custom bots](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN).
+
+To deliver an LLM-generated digest instead of raw feed text, see [Summarize with an LLM](../README.md#summarize-with-an-llm).

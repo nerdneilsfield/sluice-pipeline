@@ -189,7 +189,7 @@ Run tasks in order; verify, inspect the diff, commit, then update this plan.
 
 ### T1: Build and guard the LLM client from the definition
 
-Status: pending
+Status: done
 Depends on: none
 Acceptance: A1–A9
 Targets: `src/sluice/config.py` (`_TOP_LEVEL_KEYS`, `_decode_definition`),
@@ -226,7 +226,7 @@ Evidence:
 
 ### T2: Runnable LLM digest example and docs
 
-Status: pending
+Status: done
 Depends on: T1
 Acceptance: A10
 Targets: new `examples/rss-llm-digest.yml`, new `examples/prompts/extract.md`
@@ -262,7 +262,22 @@ than the exit code.
 
 ## Progress and handoff
 
-Not started.
+T1 done (commits 342727d, 242d7c2); T2 done (docs commit).
+
+- T1 tests: `tests/integration/test_llm_runtime_wiring.py` (A1-A8) and
+  `test_openai_client_error_message_omits_vendor_response_body` (A7 unit).
+  Without the src changes, 10 of the 22 new/touched tests fail.
+- A9: full suite 435 passed, 1 failed:
+  `tests/smoke/test_prefect_parity.py` needs the optional `prefect` extra,
+  which is not installed in this venv. It fails identically on the base
+  commit.
+- A10 offline: `load_definition("examples/rss-llm-digest.yml")` succeeds.
+  A10 online (real endpoint, `tick`, SQLite states): not run, no credentials.
+- Environment: `.venv/bin/python` is a dangling symlink (Homebrew Python 3.14
+  removed), so tests ran as `PYTHONPATH=.venv/lib/python3.14/site-packages
+  /usr/bin/python3 -m pytest ...` (Python 3.12). `ruff format --check .`
+  already reports `src/sluice/web/projectors.py` and 4 other files on the
+  base commit; it is not a gate here.
 
 Verified facts the plan relies on:
 - Structured-output validation and `_decode_completion` errors carry no model
