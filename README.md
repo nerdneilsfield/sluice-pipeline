@@ -30,7 +30,7 @@ The command installs `sluice` as `.venv/bin/sluice`. The examples below use that
 
 ### With pip
 
-The distribution is named `sluice-pipeline`; the Python import and command are `sluice`. For an installation outside the checkout, use `pip install '.[web,ui,prefect]'`. Omit extras you do not use. Email, Telegram, and LLM integrations need their own configuration and credentials; the console example does not exercise them.
+The distribution is named `sluice-pipeline`; the Python import and command are `sluice`. To install into the current Python environment, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use. Email, Telegram, and LLM integrations need their own configuration and credentials; the console example does not exercise them.
 
 The release workflow publishes `sluice-pipeline` to PyPI when a `v*.*.*` tag is pushed. This repository does not record which versions are currently on PyPI, so install from the checkout as shown above rather than assuming a published v4 release.
 
@@ -86,15 +86,15 @@ On a successful first run, Source, Stage, and Delivery states are `succeeded`. T
 [examples/webpage.yml](examples/webpage.yml) contains an explicit HTTPX provider, fetch chain, extractor chain, Source, Stage, and console Delivery. YAML `version: 1` is the definition format, not the package major version.
 
 - `sources` collect immutable Items and publish changes. Built-ins include `sluice.sources.rss` and `sluice.sources.webpage`.
-- `stages` run `each` or `batch` task chains. Web fetch Tasks produce transient artifacts; end their chain with `sluice.tasks.to_markdown` or `sluice.tasks.to_text` before materialization.
+- `stages` run `each` or `batch` task chains.
 - `pipelines` connect Sources and Stages through `from` edges. Every Pipeline needs a Delivery endpoint.
 - `web` declares named providers and ordered fallback chains. HTTPX and BeautifulSoup work with core dependencies; the `web` extra adds curl_cffi, trafilatura, newspaper4k, and resiliparse.
 
-Direct web providers reject private and loopback targets to prevent SSRF. Hosted service endpoints have a separate policy. Keep credentials out of YAML values; provider credential fields accept environment references such as `api_key: env:FIRECRAWL_API_KEY`. Changing a secret's value does not change the authored binding identity.
+Direct web providers reject private and loopback targets to prevent SSRF. Hosted service endpoints have a separate policy. Keep credentials out of YAML values; provider credential fields accept environment references such as `api_key: env:FIRECRAWL_API_KEY`.
 
 For Crawl4AI, use the [0.9.x configuration guide](docs/crawl4ai.md); older API formats are not supported.
 
-Configuration and extension contracts are documented in the [core design](docs/superpowers/specs/2026-08-14-sluice-v4-cleanroom-design.md) and [web design](docs/superpowers/specs/2026-08-18-sluice-v4-web-content-pipeline-design.md). Custom dotted-path callables must be importable when the App starts.
+Rules for task chains and transient artifacts, the authored binding identity, and the extension contracts, including dotted-path callable requirements, are in [Write a definition](docs/configuration.md).
 
 ## Scenario examples
 

@@ -30,7 +30,9 @@ Replace `definition.yml`, Pipeline/Node names, execution ID `42`, and `DELIVERY_
 
 ### Reconcile a node
 
-`reconcile` runs the named Node of the named Pipeline together with the Nodes it depends on. `tick` runs the whole definition.
+`reconcile` limits the run to one Pipeline and a set of Nodes: the named Node, its ancestors, and every downstream Node that depends on any Node in that set. It requests Stage work and dispatches Deliveries for those Nodes, so reconciling an upstream Node can run downstream Stages and send real messages through their Sinks.
+
+`reconcile` does not collect due Sources. It consumes Source publications that already exist, so run `tick` first, or let a scheduled `tick` collect, when you need fresh input. `tick` scans the whole definition and also collects due Sources.
 
 ### Rebuild a Stage execution
 
@@ -62,7 +64,7 @@ from sluice.prefect_flow import prefect_tick
 prefect_tick('/absolute/path/definition.yml', '/absolute/path/state.db')
 ```
 
-Install the extra with `pip install '.[web,ui,prefect]'` for an installation outside the checkout; omit extras you do not use.
+To install the extras into the current Python environment, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use.
 
 ## Database lock
 

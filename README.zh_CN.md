@@ -30,7 +30,7 @@ uv sync --locked --extra dev --extra web --extra ui --extra prefect
 
 ### 使用 pip
 
-发行包名为 `sluice-pipeline`，Python 导入名和命令名都是 `sluice`。要在检出目录之外安装，运行 `pip install '.[web,ui,prefect]'`，不用的 extra 可以省略。邮件、Telegram 和 LLM 集成需要各自的配置和凭据；console 示例不会用到它们。
+发行包名为 `sluice-pipeline`，Python 导入名和命令名都是 `sluice`。要安装到当前 Python 环境，请在仓库根目录运行 `pip install '.[web,ui,prefect]'`，也可以把 `.` 换成检出目录的路径。不用的 extra 可以省略。邮件、Telegram 和 LLM 集成需要各自的配置和凭据；console 示例不会用到它们。
 
 推送 `v*.*.*` 标签时，发布 workflow 会把 `sluice-pipeline` 发布到 PyPI。本仓库没有记录 PyPI 上当前有哪些版本，因此请按上面的方式从检出目录安装，不要假定已有 v4 的发布版本。
 
@@ -55,7 +55,7 @@ docker run --rm \
   --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-请把 `configs/definition.yml` 换成你自己的定义。镜像没有设置 `USER`，容器会以 root 身份写入挂载的状态目录。如果定义使用自定义 Sink 或其他 dotted-path callable，对应的模块必须能在容器内导入，例如把它挂载到 `/app/configs` 下，并加上 `-e PYTHONPATH=/app/configs`。
+请把 `configs/definition.yml` 换成你自己的定义。镜像没有设置 `USER`，容器会以 root 身份写入挂载的状态目录。如果定义使用自定义 Sink 或其他通过点分路径指定的可调用对象，对应的模块必须能在容器内导入，例如把它挂载到 `/app/configs` 下，并加上 `-e PYTHONPATH=/app/configs`。
 
 ## 运行网页示例
 
@@ -86,15 +86,15 @@ PY
 [examples/webpage.yml](examples/webpage.yml) 包含显式配置的 HTTPX provider、fetch chain、extractor chain、Source、Stage 和 console Delivery。YAML 中的 `version: 1` 是定义格式的版本，不是软件包的主版本号。
 
 - `sources` 采集不可变的 Item 并发布变化。内置的有 `sluice.sources.rss` 和 `sluice.sources.webpage`。
-- `stages` 运行 `each` 或 `batch` 类型的 Task chain。网页抓取 Task 产生的是临时 artifact；在 materialization 之前，必须用 `sluice.tasks.to_markdown` 或 `sluice.tasks.to_text` 结束该 chain。
+- `stages` 运行 `each` 或 `batch` 类型的任务链。
 - `pipelines` 通过 `from` 边把 Source 和 Stage 连接起来。每个 Pipeline 都需要一个 Delivery 端点。
 - `web` 声明具名 provider 和有序的 fallback chain。HTTPX 与 BeautifulSoup 只需核心依赖；`web` extra 会额外安装 curl_cffi、trafilatura、newspaper4k 和 resiliparse。
 
-为防止 SSRF，直连的 web provider 会拒绝私有地址和回环地址。托管服务的端点适用另一套策略。不要把凭据写进 YAML 的值里；provider 的凭据字段接受环境变量引用，例如 `api_key: env:FIRECRAWL_API_KEY`。修改密钥的值不会改变已编写的绑定标识。
+为防止 SSRF，直连的 web provider 会拒绝私有地址和回环地址。托管服务的端点适用另一套策略。不要把凭据写进 YAML 的值里；provider 的凭据字段接受环境变量引用，例如 `api_key: env:FIRECRAWL_API_KEY`。
 
 使用 Crawl4AI 时，请参阅 [0.9.x 配置指南](docs/crawl4ai.md)；不支持更早的 API 格式。
 
-配置与扩展契约记录在[核心设计](docs/superpowers/specs/2026-08-14-sluice-v4-cleanroom-design.md)和 [web 设计](docs/superpowers/specs/2026-08-18-sluice-v4-web-content-pipeline-design.md)中。自定义的 dotted-path callable 必须在 App 启动时可导入。
+任务链与临时产物的规则、定义中的绑定标识，以及扩展契约（包括通过点分路径指定的可调用对象的要求），见 [Write a definition](docs/configuration.md)。
 
 ## 场景示例
 
