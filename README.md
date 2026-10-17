@@ -1,4 +1,12 @@
+English | [简体中文](README.zh_CN.md)
+
 # Sluice v4
+
+[![CI](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/ci.yml)
+[![Docker](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/docker.yml/badge.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/docker.yml)
+[![Publish to PyPI](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/publish.yml/badge.svg)](https://github.com/nerdneilsfield/sluice-pipeline/actions/workflows/publish.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-%3E%3D3.12-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Sluice collects RSS and webpage content, runs YAML-defined task graphs, and delivers results through independently retried Sinks. SQLite stores publications, execution state, shared Stage results, and Delivery attempts. Local commands and the optional Prefect flow use the same runtime.
 
