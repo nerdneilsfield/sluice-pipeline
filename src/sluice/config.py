@@ -29,6 +29,7 @@ from sluice.contracts import (
     ExecutionPolicy,
     FrozenJSON,
     JSONValue,
+    LLMConfig,
     NodeDef,
     PipelineDef,
     SourceDef,
@@ -63,7 +64,16 @@ BUILTIN_TASK_MODES: dict[str, str] = {
 }
 
 
-_TOP_LEVEL_KEYS = {"version", "database", "web", "sources", "stages", "pipelines"}
+_TOP_LEVEL_KEYS = {
+    "version",
+    "database",
+    "web",
+    "llm",
+    "sources",
+    "stages",
+    "pipelines",
+}
+_LLM_KEYS = {"base_url", "api_key", "timeout_seconds", "max_attempts"}
 _SOURCE_KEYS = {"use", "schedule", "with", "timeout", "retries"}
 _STAGE_KEYS = {"input", "tasks", "output", "output_schema", "cache_version"}
 _TASK_KEYS = {"use", "with"}
@@ -574,6 +584,52 @@ def _decode_pipelines(raw: Mapping[str, object]) -> dict[str, PipelineDef]:
     return decoded
 
 
+def _decode_llm_config(value: object) -> LLMConfig | None:
+    if value is None:
+        return None
+    spec = _mapping(value, "llm")
+    _check_keys(spec, _LLM_KEYS, "llm")
+    base_url = _required_string(spec, "base_url", "llm")
+    try:
+        parsed = urlsplit(base_url)
+        _ = parsed.port
+    except ValueError as error:
+        raise DefinitionError("llm.base_url is not a valid URL") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise DefinitionError(
+            "llm.base_url must be an http(s) URL with a host and no "
+            "userinfo, query, or fragment"
+        )
+    api_key = spec.get("api_key")
+    if api_key is not None and (
+        not isinstance(api_key, str)
+        or _SNAPSHOT_ENV_REFERENCE.fullmatch(api_key) is None
+    ):
+        raise DefinitionError("llm.api_key must be an exact env:NAME reference")
+    timeout = spec.get("timeout_seconds", 60)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
+        raise DefinitionError("llm.timeout_seconds must be a finite positive number")
+    max_attempts = _integer(spec.get("max_attempts", 3), "llm.max_attempts", minimum=1)
+    return LLMConfig(
+        base_url=base_url,
+        api_key=api_key,
+        timeout_seconds=timeout,
+        max_attempts=max_attempts,
+    )
+
+
 def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
     _check_keys(raw, _TOP_LEVEL_KEYS, "definition")
     version = raw.get("version")
@@ -596,6 +652,7 @@ def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
             _decode_pipelines(_mapping(raw.get("pipelines"), "pipelines"))
         ),
         web=registry,
+        llm=_decode_llm_config(raw.get("llm")),
     )
 
 

@@ -43,6 +43,7 @@ from .contracts import (
 from .db import write_transaction
 from .errors import DefinitionError, ExecutionError, InvalidStructuredOutput
 from .logging import log_event
+from .resolution import BUILTIN_LLM_TASKS
 from .web.contracts import (
     FetchChainExhausted,
     WebAttemptCancelled,
@@ -1976,6 +1977,8 @@ def rebuild_stage(app: App, execution_id: int, at: datetime) -> RebuildResult:
     for task in retained_stage.tasks:
         if task.use in legacy_web_uses and task.web_binding is None:
             raise DefinitionError("legacy web snapshot cannot rebuild")
+        if task.use in BUILTIN_LLM_TASKS and not app.llm_available:
+            raise DefinitionError(f"{task.use} cannot rebuild without an LLM client")
         if task.web_binding is not None:
             catalog = getattr(app, "web_runtime_catalog", None)
             if catalog is not None:

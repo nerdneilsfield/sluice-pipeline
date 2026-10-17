@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from collections.abc import Callable, Mapping
@@ -22,7 +23,9 @@ from sluice.contracts import (
 )
 from sluice.db import init_schema, open_database
 from sluice.errors import DefinitionError, ExecutionError
+from sluice.llm import OpenAICompatibleClient
 from sluice.resolution import (
+    BUILTIN_LLM_TASKS,
     BoundaryAdapters,
     freeze_adapters,
     resolve_retained_tasks,
@@ -50,6 +53,7 @@ class App:
     sinks: MappingProxyType
     web_runtime_catalog: WebRuntimeCatalog | None = None
     web_content_client: object | None = None
+    llm_available: bool = False
     _admission: _AdmissionState = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -112,6 +116,24 @@ def _definition_and_base(
     return load_definition(path), path.parent.resolve()
 
 
+def _build_llm_client(definition: Definition) -> OpenAICompatibleClient | None:
+    config = definition.llm
+    if config is None:
+        return None
+    api_key = None
+    if config.api_key is not None:
+        name = config.api_key[4:]
+        api_key = os.environ.get(name)
+        if api_key is None:
+            raise DefinitionError(f"missing environment secret {name}")
+    return OpenAICompatibleClient(
+        config.base_url,
+        api_key=api_key,
+        timeout=config.timeout_seconds,
+        max_attempts=config.max_attempts,
+    )
+
+
 def open_app(
     definition_path: str | Path,
     db_path: str | Path | None = None,
@@ -134,6 +156,8 @@ def open_app(
     definition, base_dir = _definition_and_base(definition_path)
     catalog: WebRuntimeCatalog | None = None
     try:
+        if llm_client is None:
+            llm_client = _build_llm_client(definition)
         catalog = WebRuntimeCatalog.from_definition(
             definition,
             http_client=http_client,
@@ -178,6 +202,15 @@ def open_app(
                         f"{task.use} declares {task_cache[task.use].input_mode}, "
                         f"expected {stage.input_mode}"
                     )
+
+        if llm_client is None:
+            for stage in definition.stages.values():
+                for task in stage.tasks:
+                    if task.use in BUILTIN_LLM_TASKS:
+                        raise DefinitionError(
+                            f"Stage {stage.name} uses {task.use} but the "
+                            "definition has no llm block"
+                        )
 
         for pipeline in definition.pipelines.values():
             for node in pipeline.nodes.values():
@@ -238,6 +271,15 @@ def open_app(
             # terminal snapshot may refer to a retired env secret, so defer
             # only that lookup until an explicit rebuild.
             for task in stage.tasks:
+                if (
+                    llm_client is None
+                    and not allow_missing
+                    and task.use in BUILTIN_LLM_TASKS
+                ):
+                    raise DefinitionError(
+                        f"retained executable Stage {stage.name} uses "
+                        f"{task.use} but no LLM client is configured"
+                    )
                 web_binding = task.web_binding
                 if web_binding is None:
                     continue
@@ -271,6 +313,7 @@ def open_app(
         sinks=MappingProxyType(sink_cache),
         web_runtime_catalog=catalog,
         web_content_client=adapters.web_content_client,
+        llm_available=adapters.llm_client is not None,
     )
     # Recovery is a process-start transition, not a periodic tick callback.
     # Import lazily to avoid the app/reconcile module cycle during assembly.

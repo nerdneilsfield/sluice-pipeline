@@ -275,6 +275,16 @@ class PipelineDef:
 
 
 @dataclass(frozen=True, slots=True)
+class LLMConfig:
+    """One OpenAI-compatible endpoint; ``api_key`` is an unresolved ``env:NAME``."""
+
+    base_url: str
+    api_key: str | None = None
+    timeout_seconds: float = 60.0
+    max_attempts: int = 3
+
+
+@dataclass(frozen=True, slots=True)
 class Definition:
     version: int
     database: str
@@ -282,6 +292,7 @@ class Definition:
     stages: Mapping[str, StageDef]
     pipelines: Mapping[str, PipelineDef]
     web: WebRegistryConfig | None = None
+    llm: LLMConfig | None = None
 
 
 # ``web.contracts`` deliberately has no eager dependency on this module so it

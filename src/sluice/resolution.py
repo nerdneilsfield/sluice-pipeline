@@ -66,6 +66,7 @@ BUILTIN_WEB_TASKS = frozenset(
         "sluice.tasks.to_text",
     }
 )
+BUILTIN_LLM_TASKS = frozenset({"sluice.tasks.llm_extract", "sluice.tasks.llm_summary"})
 BUILTIN_SINK_BINDERS: dict[str, str] = {
     "sluice.sinks.email": "sluice.sinks.email.bind",
     "sluice.sinks.telegram": "sluice.sinks.telegram.bind",
