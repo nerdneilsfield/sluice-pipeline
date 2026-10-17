@@ -19,7 +19,7 @@ A complete runnable definition is [examples/hn-to-files.yml](../examples/hn-to-f
 ## Rules shared by all Sources
 
 - **Scheduling.** Source-level `schedule` (`<n>m` or `<n>h`), `timeout` (`<n>s`, `<n>m`, or `<n>h`), and `retries` sit beside `with`, not inside it. Set `schedule` on any Source that `tick` should poll repeatedly.
-- **Stateless collection.** `json_api`, `hacker_news`, `github_trending`, and `github_activity` keep no checkpoint. They fetch the current window on every run and rely on Item identity to drop repeats, so a missed run loses nothing.
+- **Stateless collection.** `json_api`, `hacker_news`, `github_trending`, and `github_activity` keep no checkpoint. They fetch the current window on every run and rely on Item identity to drop repeats. An entry that leaves the window (for example, drops out of the first `limit` Hacker News ids) before the next run is never collected, so schedule runs often enough for the window you read.
 - **Failure.** A failed request fails the whole collection. No partial records are published. Error text is a fixed message plus the HTTP status where there is one; it never contains the URL, query, header values, token, or response body.
 - **Unknown keys.** The four network Sources and the `webhook` and `file` Sinks reject any key not listed for them. The error is raised when the Source runs or the Sink sends, not when the definition loads. The exception is credentials: see [Credentials](#credentials).
 - **`timeout_seconds`.** Accepted by `json_api`, `hacker_news`, `github_trending`, `github_activity`, `webhook`. Number greater than 0 and at most 300; default 30.
@@ -56,7 +56,7 @@ Fetches one URL and treats a list in the JSON response as records.
 | `target_allow_hosts` | list of strings | none | Unique, non-empty. See [Private targets](#private-targets). |
 | `target_allow_cidrs` | list of strings | none | Unique, valid CIDRs. See [Private targets](#private-targets). |
 
-Limits: the response is at most 5 MiB. Every element must be a JSON object. A missing `items_path`, a value that is not a list, or an invalid JSON body fails the run. An empty list is a valid empty result. `NaN` and `Infinity` are rejected.
+Limits: the response is at most 5 MiB. The first `limit` elements must be JSON objects. A missing `items_path`, a value that is not a list, or an invalid JSON body fails the run. An empty list is a valid empty result. `NaN` and `Infinity` are rejected.
 
 - `logical_id`: `str(<id_field value>)`. Duplicate ids inside one response keep the first.
 - Payload: the item object unchanged, nested values included. Template fields are its keys.
@@ -76,7 +76,7 @@ The host is fixed to `hacker-news.firebaseio.com`. One request lists story ids, 
 - `logical_id`: `hn:<id>`.
 - Payload fields: `id`, `title`, `url`, `hn_url`, `by`, `time`, `type`, `text`. `url` is the story URL, or the discussion URL when the story has none. `hn_url` is `https://news.ycombinator.com/item?id=<id>`. `time` is a Unix timestamp. `text` is raw HTML from the API. `title`, `by`, `type`, `text`, and `time` are omitted when absent.
 - With `include_stats: true`: `score` and `descendants`.
-- Payload change: without `include_stats` the payload is stable, so a story is delivered once. With `include_stats: true` every score or comment-count change is a new Item. Use it as a re-emit switch, or render only fields that do not change.
+- Payload change: without `include_stats`, score and comment-count changes do not create a new Item; an edit to `title` or `text` still does. With `include_stats: true` every score or comment-count change is a new Item. Use it as a re-emit switch, or render only fields that do not change.
 
 ### `sluice.sources.github_trending`
 
@@ -95,7 +95,7 @@ The response must be status 200 with media type `text/html`, at most 2 MiB. If t
 - `logical_id`: `owner/name`.
 - Payload fields: `repo`, `url`, `description`, `language`. `description` and `language` are omitted when absent.
 - With `include_stats: true`: `stars_total`, `forks`, `stars_period` (integers, each omitted when the page does not show it).
-- Payload change: by default a repository is delivered once, the first time it appears, not each time it re-enters the list. With `include_stats: true` any change in a count is a new Item.
+- Payload change: by default count changes do not create a new Item, and a repository that re-enters the list unchanged is not delivered again; a change to `description` or `language` still creates one. With `include_stats: true` any change in a count is a new Item.
 
 ### `sluice.sources.github_activity`
 
@@ -165,7 +165,7 @@ Request body:
 
 - The body is canonical JSON, at most 1 MiB; a larger body fails before any request is made.
 - The header `Idempotency-Key` is set to the Delivery key. Any `Idempotency-Key` in `headers`, in any letter case, is removed first, so it cannot be overridden.
-- Any status from 200 to 299 succeeds. The response body is read up to 64 KiB and discarded. `external_id` is empty.
+- Any status from 200 to 299 succeeds. The response body is read and discarded; a body larger than 64 KiB fails the Delivery even with a 2xx status. `external_id` is empty.
 - Any other status, including every 3xx, fails with `Webhook HTTP <status>`. A blocked address, a timeout, or a transport error fails with a fixed reason. The URL and header values never appear in errors, because webhook URLs commonly embed tokens.
 - `http://` URLs are rejected, even for a host allowed by `target_allow_hosts`. A receiver on a Docker network that speaks only plain HTTP needs a TLS-terminating proxy in front.
 
@@ -239,7 +239,7 @@ Invalid values in these keys are reported when the Source runs or the Sink sends
 
 ## Redirects
 
-No Source or Sink on this page follows redirects. Any 3xx status is an error: `GitHub API HTTP 301`, `Webhook HTTP 302`, and so on. Headers may carry credentials, and following a redirect could send them to another origin. Configure the final URL.
+`json_api`, `hacker_news`, `github_trending`, `github_activity`, and `webhook` do not follow redirects. Any 3xx status is an error: `GitHub API HTTP 301`, `Webhook HTTP 302`, and so on. Headers may carry credentials, and following a redirect could send them to another origin. Configure the final URL. The `rss` and `webpage` Sources fetch through web providers instead; their HTTPX provider follows up to 10 redirects, checking each target against the same address policy.
 
 ## Credentials
 
