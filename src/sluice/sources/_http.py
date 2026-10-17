@@ -26,6 +26,7 @@ def fetch(
     max_bytes: int,
     label: str,
     policy: TargetPolicy | None = None,
+    content_type: str | None = None,
 ) -> bytes:
     """One DNS-pinned, redirect-free GET; anything but HTTP 200 is an error.
 
@@ -47,6 +48,8 @@ def fetch(
     )
     if response.status_code != 200:
         raise ExecutionError(f"{label} HTTP {response.status_code}")
+    if content_type is not None and response.content_type != content_type:
+        raise ExecutionError(f"{label} response is not {content_type}")
     return response.body
 
 
