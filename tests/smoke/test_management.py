@@ -1,5 +1,8 @@
 from datetime import UTC, datetime
+from threading import Event, Thread
 from urllib.parse import quote
+
+import pytest
 
 from sluice.app import open_app
 from sluice.contracts import SourceRecord, SourceResult
@@ -91,3 +94,44 @@ def test_management_read_model_states_counts_and_actions(tmp_path):
     assert client.post(
         f"/deliveries/{quote(delivery_key, safe='')}/retry"
     ).status_code in {202, 303}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/pipelines/daily_digest/nodes/failed_summary/rebuild",
+        "/executions/1/rebuild",
+        "/deliveries/missing/retry",
+    ],
+)
+def test_ui_actions_are_refused_after_app_close(tmp_path, path):
+    app = management_app(tmp_path)
+    client = create_ui(app).test_client()
+    app.close()
+
+    assert client.post(path).status_code == 404
+
+
+def test_ui_action_holds_app_admission_so_close_waits_for_it(tmp_path, monkeypatch):
+    app = management_app(tmp_path)
+    client = create_ui(app).test_client()
+    admitted = []
+    entered = Event()
+    release = Event()
+
+    def blocked_retry(app_, delivery_key, at):
+        admitted.append(app._admission.active)
+        entered.set()
+        assert release.wait(timeout=5)
+        return delivery_key
+
+    monkeypatch.setattr("sluice.ui.retry_delivery_action", blocked_retry)
+    request = Thread(target=lambda: client.post("/deliveries/k/retry"))
+    request.start()
+    try:
+        assert entered.wait(timeout=5)
+        assert admitted == [1]
+    finally:
+        release.set()
+        request.join(timeout=5)
+    app.close()

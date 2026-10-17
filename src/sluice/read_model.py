@@ -450,93 +450,99 @@ def pipeline_list(app: App) -> tuple[PipelineSummary, ...]:
 
     _require_app(app)
     result: list[PipelineSummary] = []
-    for name in app.definition.pipelines:
-        state, pending, failed, latest_delivery, latest_error = _pipeline_health(
-            app, name
-        )
-        result.append(
-            PipelineSummary(
-                name=name,
-                state=state,
-                pending_count=pending,
-                failed_count=failed,
-                latest_delivery=latest_delivery,
-                latest_error=latest_error,
+    # Flask request threads share the connection: read one committed snapshot.
+    with app.conn.transaction_lock:
+        for name in app.definition.pipelines:
+            state, pending, failed, latest_delivery, latest_error = _pipeline_health(
+                app, name
             )
-        )
+            result.append(
+                PipelineSummary(
+                    name=name,
+                    state=state,
+                    pending_count=pending,
+                    failed_count=failed,
+                    latest_delivery=latest_delivery,
+                    latest_error=latest_error,
+                )
+            )
     return tuple(result)
 
 
 def pipeline_detail(app: App, pipeline_name: str) -> PipelineDetail:
     """Return a deterministic DAG/execution/batch/Delivery projection."""
 
-    pipeline = _pipeline(app, pipeline_name)
-    node_details: list[NodeDetail] = []
-    frozen_batches: dict[str, tuple[str, ...]] = {}
-    delivery_states: dict[str, str] = {}
-    all_deliveries = _current_delivery_rows(app, pipeline_name)
-    for row in all_deliveries:
-        delivery_states[str(row["delivery_key"])] = str(row["state"])
+    with app.conn.transaction_lock:
+        pipeline = _pipeline(app, pipeline_name)
+        node_details: list[NodeDetail] = []
+        frozen_batches: dict[str, tuple[str, ...]] = {}
+        delivery_states: dict[str, str] = {}
+        all_deliveries = _current_delivery_rows(app, pipeline_name)
+        for row in all_deliveries:
+            delivery_states[str(row["delivery_key"])] = str(row["state"])
 
-    for node_name, node in pipeline.nodes.items():
-        binding = _current_node_binding(app, pipeline_name, node_name)
-        executions: tuple[int, ...] = ()
-        frozen_items: tuple[str, ...] = ()
-        delivery_keys: tuple[str, ...] = ()
-        if binding is not None:
-            if node.stage is not None:
-                executions = tuple(
-                    int(row["id"])
-                    for row in _leaf_stage_rows(app, pipeline_name, node_name, binding)
+        for node_name, node in pipeline.nodes.items():
+            binding = _current_node_binding(app, pipeline_name, node_name)
+            executions: tuple[int, ...] = ()
+            frozen_items: tuple[str, ...] = ()
+            delivery_keys: tuple[str, ...] = ()
+            if binding is not None:
+                if node.stage is not None:
+                    executions = tuple(
+                        int(row["id"])
+                        for row in _leaf_stage_rows(
+                            app, pipeline_name, node_name, binding
+                        )
+                    )
+                    batch_id = _current_batch_id(app, pipeline_name, node_name, binding)
+                    state = _batch_state(app, batch_id)
+                    if batch_id is not None and state in {"frozen", "failed"}:
+                        rows = app.conn.execute(
+                            "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
+                            (batch_id,),
+                        ).fetchall()
+                        frozen_items = tuple(str(row[0]) for row in rows)
+                        frozen_batches[node_name] = frozen_items
+                else:
+                    delivery_keys = tuple(
+                        str(row["delivery_key"])
+                        for row in all_deliveries
+                        if str(row["node_name"]) == node_name
+                    )
+            node_details.append(
+                NodeDetail(
+                    name=node_name,
+                    stage=node.stage,
+                    executions=executions,
+                    frozen_items=frozen_items,
+                    deliveries=delivery_keys,
                 )
-                batch_id = _current_batch_id(app, pipeline_name, node_name, binding)
-                state = _batch_state(app, batch_id)
-                if batch_id is not None and state in {"frozen", "failed"}:
-                    rows = app.conn.execute(
-                        "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
-                        (batch_id,),
-                    ).fetchall()
-                    frozen_items = tuple(str(row[0]) for row in rows)
-                    frozen_batches[node_name] = frozen_items
-            else:
-                delivery_keys = tuple(
-                    str(row["delivery_key"])
-                    for row in all_deliveries
-                    if str(row["node_name"]) == node_name
-                )
-        node_details.append(
-            NodeDetail(
-                name=node_name,
-                stage=node.stage,
-                executions=executions,
-                frozen_items=frozen_items,
-                deliveries=delivery_keys,
             )
+        return PipelineDetail(
+            name=pipeline_name,
+            nodes=tuple(node_details),
+            frozen_batches=MappingProxyType(frozen_batches),
+            deliveries=MappingProxyType(delivery_states),
         )
-    return PipelineDetail(
-        name=pipeline_name,
-        nodes=tuple(node_details),
-        frozen_batches=MappingProxyType(frozen_batches),
-        deliveries=MappingProxyType(delivery_states),
-    )
 
 
 def default_rebuild_target(app: App, pipeline_name: str, node_name: str) -> int | None:
     """Return the newest failed Stage attempt still unsatisfied in this node."""
 
-    pipeline = _pipeline(app, pipeline_name)
-    node = pipeline.nodes.get(node_name)
-    if node is None:
-        raise ExecutionError(f"unknown Pipeline node: {pipeline_name}.{node_name}")
-    if node.stage is None:
-        return None
-    binding = _current_node_binding(app, pipeline_name, node_name)
-    if binding is None:
-        return None
-    candidates = _failed_stage_rows(app, pipeline_name, node_name, binding)
-    if not candidates:
-        return None
-    return int(max(candidates, key=lambda row: int(row["id"]))["id"])
+    with app.conn.transaction_lock:
+        pipeline = _pipeline(app, pipeline_name)
+        node = pipeline.nodes.get(node_name)
+        if node is None:
+            raise ExecutionError(f"unknown Pipeline node: {pipeline_name}.{node_name}")
+        if node.stage is None:
+            return None
+        binding = _current_node_binding(app, pipeline_name, node_name)
+        if binding is None:
+            return None
+        candidates = _failed_stage_rows(app, pipeline_name, node_name, binding)
+        if not candidates:
+            return None
+        return int(max(candidates, key=lambda row: int(row["id"]))["id"])
 
 
 def rebuild_action(app: App, execution_id: int, at) -> RebuildResult:

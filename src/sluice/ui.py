@@ -107,14 +107,13 @@ def create_ui(app):
 
     @web.post("/pipelines/<pipeline_name>/nodes/<node_name>/rebuild")
     def rebuild_node(pipeline_name: str, node_name: str):
+        # admit() refuses during App.close(); that surfaces as the same 404.
         try:
-            target = default_rebuild_target(app, pipeline_name, node_name)
-        except ExecutionError:
-            abort(404)
-        if target is None:
-            abort(404)
-        try:
-            result = rebuild_action(app, target, datetime.now(UTC))
+            with app.admit():
+                target = default_rebuild_target(app, pipeline_name, node_name)
+                if target is None:
+                    abort(404)
+                result = rebuild_action(app, target, datetime.now(UTC))
         except ExecutionError:
             abort(404)
         return _action_page(
@@ -124,7 +123,8 @@ def create_ui(app):
     @web.post("/executions/<int:execution_id>/rebuild")
     def rebuild_execution(execution_id: int):
         try:
-            result = rebuild_action(app, execution_id, datetime.now(UTC))
+            with app.admit():
+                result = rebuild_action(app, execution_id, datetime.now(UTC))
         except ExecutionError:
             abort(404)
         return _action_page(
@@ -134,7 +134,8 @@ def create_ui(app):
     @web.post("/deliveries/<path:delivery_key>/retry")
     def retry_delivery(delivery_key: str):
         try:
-            key = retry_delivery_action(app, delivery_key, datetime.now(UTC))
+            with app.admit():
+                key = retry_delivery_action(app, delivery_key, datetime.now(UTC))
         except ExecutionError:
             abort(404)
         return _action_page(f"Delivery retry requested: {key}")
