@@ -214,6 +214,8 @@ def test_current_llm_stage_without_client_fails_before_database_is_created(tmp_p
         ["base_url: http://h/v1", "model: x"],
         ["base_url: http://user:pw@h/v1"],
         ["base_url: http://h/v1?token=1"],
+        ["base_url: https://h/v1?"],
+        ["base_url: https://h/v1#"],
         ["base_url: http://h/v1", "timeout_seconds: true"],
         ["base_url: http://h/v1", "timeout_seconds: 0"],
         ["base_url: http://h/v1", "max_attempts: 0"],

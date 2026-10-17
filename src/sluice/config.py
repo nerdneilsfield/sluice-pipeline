@@ -602,6 +602,8 @@ def _decode_llm_config(value: object) -> LLMConfig | None:
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
+        or "?" in base_url
+        or "#" in base_url
     ):
         raise DefinitionError(
             "llm.base_url must be an http(s) URL with a host and no "

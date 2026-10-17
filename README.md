@@ -73,7 +73,7 @@ Inspect `executions` and `deliveries` in `examples/rss-llm-digest.db` as in the 
 - The endpoint is not part of cache identity. Changing `base_url` or the key reuses existing results for the same model, prompt and output shape. Use `rebuild` or bump the Stage `cache_version` to recompute.
 - The model sees only the projected Item payload: Markdown text for `llm_extract`, and a JSON array of the extract results for `llm_summary`. Title, link and `metadata.web` are not sent, so templates after `llm_extract` cannot use `{title}` or `{link}`.
 - The client sends no `response_format`; the prompts ask for bare JSON.
-- Failed LLM calls store only the HTTP status in `executions.error`, never the vendor response body.
+- Error messages never contain the vendor response body; non-retryable HTTP errors keep the status code, retry exhaustion reports the attempt count.
 - To send the digest to Telegram, email or Feishu instead of the console, replace the `console` node with the Sink from [notification setup](docs/notifications.md).
 
 ## Run and manage executions
