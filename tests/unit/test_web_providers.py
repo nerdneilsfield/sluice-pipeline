@@ -225,15 +225,24 @@ def test_firecrawl_list_requests_raw_html_only(monkeypatch) -> None:
     assert artifact.markdown is None
 
 
-def test_crawl4ai_uses_sync_crawl_never_legacy_poll_paths(monkeypatch) -> None:
+def test_crawl4ai_09_uses_declarative_hooks_and_single_result(monkeypatch) -> None:
     monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
     service = _FakeService(
         {
             "success": True,
-            "url": "https://example.test/article",
-            "html": "<html><body>article</body></html>",
-            "markdown": "article markdown",
-            "status_code": 200,
+            "results": [
+                {
+                    "success": True,
+                    "url": "https://example.test/article",
+                    "html": "<article>body</article>",
+                    "markdown": {"raw_markdown": "article markdown"},
+                    "status_code": 200,
+                }
+            ],
+            "hooks": {
+                "status": "success",
+                "attached": ["before_goto", "on_page_context_created"],
+            },
         }
     )
     binding = ProviderBinding(
@@ -252,79 +261,169 @@ def test_crawl4ai_uses_sync_crawl_never_legacy_poll_paths(monkeypatch) -> None:
         cookies={"session": "cookie-secret"},
         capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
     )
-
-    request = FetchRequest(
-        url="https://example.test/article",
-        mode="article",
-        acceptable=frozenset({"text", "raw_html", "markdown"}),
-        preferred=("markdown", "raw_html", "text"),
-        target_headers={"X-Request": "request"},
-        quality=QualityPolicy(min_chars=1),
-    )
-
+    request = replace(_request(), target_headers={"X-Request": "request"})
     artifact = Crawl4AIProvider(binding, service).fetch(request)
-
-    assert [request.path for request in service.requests] == ["/crawl"]
-    payload = service.requests[0].json
-    assert payload == {
+    assert len(service.requests) == 1
+    sent = service.requests[0]
+    assert sent.path == "/crawl"
+    assert sent.json == {
         "urls": ["https://example.test/article"],
-        "browser_config": {
-            "type": "BrowserConfig",
-            "params": {
-                "browser_type": "firefox",
-                "headless": False,
-                "headers": {
-                    "type": "dict",
-                    "value": {
-                        "X-Binding": "binding",
-                        "X-Request": "request",
+        "browser_config": {"browser_type": "firefox", "headless": False},
+        "crawler_config": {
+            "cache_mode": "bypass",
+            "wait_until": "networkidle",
+            "wait_for": "css:.ready",
+            "delay_before_return_html": 3,
+        },
+        "hooks": {
+            "hooks": [
+                {
+                    "action": "set_headers",
+                    "params": {
+                        "headers": {"X-Binding": "binding", "X-Request": "request"}
                     },
                 },
-                "cookies": [
-                    {
-                        "type": "dict",
-                        "value": {
-                            "name": "session",
-                            "value": "cookie-secret",
-                            "url": "https://example.test/article",
-                        },
-                    }
-                ],
-            },
-        },
-        "crawler_config": {
-            "type": "CrawlerRunConfig",
-            "params": {
-                "cache_mode": "bypass",
-                "stream": False,
-                "wait_until": "networkidle",
-                "wait_for": ".ready",
-                "delay_before_return_html": 3,
-            },
+                {
+                    "action": "add_cookies",
+                    "params": {
+                        "cookies": [
+                            {
+                                "name": "session",
+                                "value": "cookie-secret",
+                                "domain": "example.test",
+                                "path": "/",
+                                "secure": True,
+                            }
+                        ]
+                    },
+                },
+            ]
         },
     }
-    assert service.requests[0].headers == {"Authorization": "Bearer service-secret"}
-    assert artifact.raw_html == "<html><body>article</body></html>"
+    assert sent.headers == {"Authorization": "Bearer service-secret"}
+    assert sent.follow_redirects is False
+    assert artifact.raw_html == "<article>body</article>"
     assert artifact.markdown == "article markdown"
-    assert service.requests[0].url == "http://crawl4ai.internal:11235/crawl"
-    assert service.requests[0].follow_redirects is False
 
 
-def test_crawl4ai_self_host_can_omit_bearer_authentication(monkeypatch) -> None:
+def test_crawl4ai_09_does_not_send_hooks_without_headers_or_cookies(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
     service = _FakeService(
-        {"success": True, "html": "<article>body</article>", "markdown": "body"}
+        {
+            "success": True,
+            "results": [{"success": True, "html": "<article>body</article>"}],
+        }
     )
     binding = ProviderBinding(
         name="browser",
         type="crawl4ai",
         base_url="http://crawl4ai.internal:11235",
-        capabilities=frozenset({"raw_html", "markdown", "rendered_js"}),
+        options={"api_key": "service-secret"},
     )
-
     Crawl4AIProvider(binding, service).fetch(_request())
+    assert "hooks" not in service.requests[0].json
+    assert service.requests[0].headers == {"Authorization": "Bearer service-secret"}
 
-    assert service.requests[0].headers == {}
+
+@pytest.mark.parametrize(
+    "url,secure",
+    [("https://example.test/article", True), ("http://example.test/article", False)],
+)
+def test_crawl4ai_09_cookie_domain_and_secure_follow_target(monkeypatch, url, secure):
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.2"])
+    service = _FakeService(
+        {
+            "success": True,
+            "results": [{"success": True}],
+            "hooks": {"status": "success", "attached": ["on_page_context_created"]},
+        }
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="https://service.example",
+        cookies={"session": "value"},
+    )
+    # This test concerns cookie mapping, not the injected service's socket peer.
+    captured = []
+
+    def post(binding, runtime, path, payload, **kwargs):
+        captured.append(payload)
+        return service.payload, 200, {}, None
+
+    monkeypatch.setattr(provider_module, "_post_service_json", post)
+    Crawl4AIProvider(binding, service).fetch(replace(_request(), url=url))
+    cookie = captured[0]["hooks"]["hooks"][0]["params"]["cookies"][0]
+    assert cookie == {
+        "name": "session",
+        "value": "value",
+        "domain": "example.test",
+        "path": "/",
+        "secure": secure,
+    }
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"success": True, "html": "legacy"},
+        {"success": True, "data": {"html": "legacy"}},
+        {"success": False, "results": [{"success": True}]},
+        {"success": True, "results": []},
+        {"success": True, "results": [{"success": True}, {"success": True}]},
+        {"success": True, "results": [None]},
+        {"success": True, "results": [{"html": "missing status"}]},
+        {
+            "success": True,
+            "results": [
+                {
+                    "success": False,
+                    "html": "failed body",
+                    "error_message": "private-secret",
+                }
+            ],
+        },
+    ],
+)
+def test_crawl4ai_09_rejects_failed_or_non_09_results(monkeypatch, response) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
+    service = _FakeService(response)
+    binding = ProviderBinding(
+        name="browser", type="crawl4ai", base_url="http://crawl4ai.internal:11235"
+    )
+    with pytest.raises(WebSafetyError, match="^provider_error$"):
+        Crawl4AIProvider(binding, service).fetch(_request())
+    assert len(service.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        None,
+        {"status": "success", "attached": []},
+        {"status": "failed", "attached": ["before_goto"]},
+    ],
+)
+def test_crawl4ai_09_requires_hooks_to_be_attached(monkeypatch, report) -> None:
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["10.0.0.8"])
+    service = _FakeService(
+        {
+            "success": True,
+            "results": [{"success": True, "html": "body"}],
+            "hooks": report,
+        }
+    )
+    binding = ProviderBinding(
+        name="browser",
+        type="crawl4ai",
+        base_url="http://crawl4ai.internal:11235",
+        target_headers={"X-Test": "value"},
+    )
+    with pytest.raises(WebSafetyError, match="^provider_error$"):
+        Crawl4AIProvider(binding, service).fetch(_request())
+    assert len(service.requests) == 1
 
 
 def test_jina_reader_posts_for_json_markdown_with_declared_reader_headers(
@@ -1042,6 +1141,17 @@ def test_catalog_hosted_provider_prefers_binding_pinned_transport_over_global_ht
                 headers={"content-type": "application/json"},
                 body=json_module_dumps(
                     {
+                        "success": True,
+                        "results": [
+                            {
+                                "success": True,
+                                "html": "<html>binding</html>",
+                                "url": "https://example.test/article",
+                            }
+                        ],
+                    }
+                    if provider_type == "crawl4ai"
+                    else {
                         "success": True,
                         "data": {
                             "rawHtml": "<html>binding</html>",

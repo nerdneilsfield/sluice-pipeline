@@ -608,6 +608,10 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
             raise DefinitionError(f"{label}.wait_until is unsupported")
         if "wait_for_selector" in spec:
             wait_for_selector = _required_string(spec, "wait_for_selector", label)
+            if wait_for_selector.strip().startswith(("js:", "()", "function")):
+                raise DefinitionError(
+                    f"{label}.wait_for_selector must be CSS for Crawl4AI 0.9"
+                )
         delay = _duration(
             spec.get("delay_before_return_html", "0s"),
             f"{label}.delay_before_return_html",

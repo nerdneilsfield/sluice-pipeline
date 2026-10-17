@@ -40,6 +40,8 @@ On a successful first run, Source, Stage, and Delivery states are `succeeded`. T
 
 Direct web providers reject private and loopback targets to prevent SSRF. Hosted service endpoints have a separate policy. Keep credentials out of YAML values; provider credential fields accept environment references such as `api_key: env:FIRECRAWL_API_KEY`. Changing a secret's value does not change the authored binding identity.
 
+For Crawl4AI, use the [0.9.x configuration guide](docs/crawl4ai.md); older API formats are not supported.
+
 Configuration and extension contracts are documented in the [core design](docs/superpowers/specs/2026-08-14-sluice-v4-cleanroom-design.md) and [web design](docs/superpowers/specs/2026-08-18-sluice-v4-web-content-pipeline-design.md). Custom dotted-path callables must be importable when the App starts.
 
 ## Send RSS notifications

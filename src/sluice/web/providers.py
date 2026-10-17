@@ -1151,7 +1151,7 @@ class FirecrawlProvider:
 
 @dataclass(frozen=True, slots=True)
 class Crawl4AIProvider:
-    """Synchronous Crawl4AI ``/crawl`` adapter (no job polling)."""
+    """Crawl4AI 0.9.x synchronous ``/crawl`` and declarative hooks only."""
 
     binding: ProviderBinding
     runtime: object | None = None
@@ -1159,55 +1159,71 @@ class Crawl4AIProvider:
     def fetch(self, request: FetchRequest) -> DocumentArtifact:
         request = _validate_remote_request_url(self.binding, request)
         options = self.binding.options
+        target = urlsplit(request.url)
         target_headers = merge_target_headers(request, self.binding)
         browser_headers = {
             name: value
             for name, value in target_headers.items()
             if name.casefold() != "cookie"
         }
-        cookies = [
-            {
-                "type": "dict",
-                "value": {
-                    "name": str(name),
-                    "value": str(value),
-                    "url": request.url,
-                },
-            }
-            for name, value in self.binding.cookies.items()
-        ]
-        browser_params: dict[str, Any] = {
-            "browser_type": options.get("browser_type", "chromium"),
-            "headless": bool(options.get("headless", True)),
-        }
+        # 0.9 rejects headers/cookies inside BrowserConfig. Only declarative
+        # hooks may set them, with the server's hooks feature explicitly on.
+        hooks: list[dict[str, Any]] = []
+        required_hook_points: set[str] = set()
         if browser_headers:
-            browser_params["headers"] = {
-                "type": "dict",
-                "value": browser_headers,
-            }
-        if cookies:
-            browser_params["cookies"] = cookies
+            if len(browser_headers) > 20 or any(
+                re.fullmatch(r"[A-Za-z0-9-]{1,64}", name) is None
+                for name in browser_headers
+            ):
+                raise DefinitionError("Crawl4AI 0.9 headers exceed hook limits")
+            hooks.append(
+                {"action": "set_headers", "params": {"headers": browser_headers}}
+            )
+            required_hook_points.add("before_goto")
+        if self.binding.cookies:
+            cookies = []
+            for name, value in self.binding.cookies.items():
+                if len(name) > 256 or len(value) > 4096:
+                    raise DefinitionError("Crawl4AI 0.9 cookies exceed hook limits")
+                cookies.append(
+                    {
+                        "name": name,
+                        "value": value,
+                        "domain": target.hostname,
+                        "path": "/",
+                        "secure": target.scheme == "https",
+                    }
+                )
+            if len(cookies) > 20:
+                raise DefinitionError("Crawl4AI 0.9 cookies exceed hook limits")
+            hooks.append({"action": "add_cookies", "params": {"cookies": cookies}})
+            required_hook_points.add("on_page_context_created")
+        selector = options.get("wait_for_selector", self.binding.wait_for_selector)
+        if selector is not None:
+            if (
+                not isinstance(selector, str)
+                or not selector.strip()
+                or selector.strip().startswith(("js:", "()", "function"))
+            ):
+                raise DefinitionError("Crawl4AI 0.9 wait_for_selector must be CSS")
+            selector = selector.strip()
+            if not selector.startswith("css:"):
+                selector = "css:" + selector
         payload: dict[str, Any] = {
             "urls": [request.url],
             "browser_config": {
-                "type": "BrowserConfig",
-                "params": browser_params,
+                "browser_type": options.get("browser_type", "chromium"),
+                "headless": bool(options.get("headless", True)),
             },
             "crawler_config": {
-                "type": "CrawlerRunConfig",
-                "params": {
-                    "cache_mode": "bypass",
-                    "stream": False,
-                    "wait_until": options.get("wait_until", "domcontentloaded"),
-                    "wait_for": options.get(
-                        "wait_for_selector", self.binding.wait_for_selector
-                    ),
-                    "delay_before_return_html": options.get(
-                        "delay_before_return_html", 0
-                    ),
-                },
+                "cache_mode": "bypass",
+                "wait_until": options.get("wait_until", "domcontentloaded"),
+                "wait_for": selector,
+                "delay_before_return_html": options.get("delay_before_return_html", 0),
             },
         }
+        if hooks:
+            payload["hooks"] = {"hooks": hooks}
         data, status, headers, _response_url = _post_service_json(
             self.binding,
             self.runtime,
@@ -1215,16 +1231,32 @@ class Crawl4AIProvider:
             payload,
             deadline=request.stage_deadline,
         )
-        if data.get("success") is False:
+        results = data.get("results")
+        if (
+            data.get("success") is not True
+            or not isinstance(results, list)
+            or len(results) != 1
+            or not isinstance(results[0], Mapping)
+            or results[0].get("success") is not True
+        ):
             raise WebSafetyError("provider_error")
+        if hooks:
+            report = data.get("hooks")
+            if not isinstance(report, Mapping) or report.get("status") != "success":
+                raise WebSafetyError("provider_error")
+            attached = report.get("attached")
+            if not isinstance(attached, list) or not all(
+                point in attached for point in required_hook_points
+            ):
+                raise WebSafetyError("provider_error")
         return _remote_artifact(
             self.binding,
             request,
-            _remote_data(data),
+            results[0],
             response_status=status,
             response_headers=headers,
-            raw_html_keys=("rawHtml", "raw_html", "html"),
-            raw_source_keys=("body", "rawHtml"),
+            raw_html_keys=("html",),
+            raw_source_keys=("body",),
         )
 
 

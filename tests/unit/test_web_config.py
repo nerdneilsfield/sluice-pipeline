@@ -424,3 +424,20 @@ stages:
     canonical = definition.stages["article"].canonical_config_json
     assert "env:TEST_KEY" in canonical
     assert "actual-secret" not in canonical
+
+
+@pytest.mark.parametrize("selector", ["js:() => true", "() => true", "function() {}"])
+def test_crawl4ai_09_rejects_javascript_wait_at_load(tmp_path, selector):
+    path = _write(
+        tmp_path,
+        f"""version: 1
+web:
+  providers:
+    browser:
+      type: crawl4ai
+      base_url: http://crawl4ai.internal:11235
+      wait_for_selector: '{selector}'
+""",
+    )
+    with pytest.raises(DefinitionError, match="must be CSS"):
+        load_definition(path)
