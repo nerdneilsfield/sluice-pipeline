@@ -293,6 +293,8 @@ class Definition:
     pipelines: Mapping[str, PipelineDef]
     web: WebRegistryConfig | None = None
     llm: LLMConfig | None = None
+    # Runtime-only like ``database``: never hashed into Delivery identity.
+    file_root: str | None = None
 
 
 # ``web.contracts`` deliberately has no eager dependency on this module so it

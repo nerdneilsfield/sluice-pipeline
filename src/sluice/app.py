@@ -33,6 +33,7 @@ from sluice.resolution import (
     resolve_source,
     resolve_task,
 )
+from sluice.sinks.file import resolve_file_root
 from sluice.web.registry import WebRuntimeCatalog
 
 
@@ -173,6 +174,7 @@ def open_app(
             llm_client=llm_client,
             sink_clients=sink_clients,
             web_content_client=selected_web_client,
+            file_root=resolve_file_root(definition.file_root, base_dir),
         )
     except BaseException:
         if catalog is not None:

@@ -37,6 +37,8 @@ from sluice.contracts import (
     TaskDef,
 )
 from sluice.errors import DefinitionError, ExecutionError, GraphError
+from sluice.sinks.file import SINK_PATH as FILE_SINK
+from sluice.sinks.file import resolve_file_root, resolve_inside
 from sluice.web.config import WebRegistryConfig, decode_web_config, expand_web_binding
 from sluice.web.contracts import (
     ExtractorBinding,
@@ -67,6 +69,7 @@ BUILTIN_TASK_MODES: dict[str, str] = {
 _TOP_LEVEL_KEYS = {
     "version",
     "database",
+    "file_root",
     "web",
     "llm",
     "sources",
@@ -640,7 +643,18 @@ def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
     database = raw.get("database", ".sluice/sluice.db")
     if not isinstance(database, str) or not database:
         raise DefinitionError("database must be a non-empty string")
+    file_root = raw.get("file_root")
+    if file_root is not None and (not isinstance(file_root, str) or not file_root):
+        raise DefinitionError("file_root must be a non-empty string")
     registry = decode_web_config(raw.get("web"), base_dir)
+    pipelines = _decode_pipelines(_mapping(raw.get("pipelines"), "pipelines"))
+    root = resolve_file_root(file_root, base_dir)
+    for pipeline in pipelines.values():
+        for node in pipeline.nodes.values():
+            if node.deliver is not None and node.deliver.use == FILE_SINK:
+                resolve_inside(
+                    root, node.deliver.with_config.get("directory"), DefinitionError
+                )
     return Definition(
         version=1,
         database=database,
@@ -650,11 +664,10 @@ def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
         stages=MappingProxyType(
             _decode_stages(_mapping(raw.get("stages"), "stages"), base_dir, registry)
         ),
-        pipelines=MappingProxyType(
-            _decode_pipelines(_mapping(raw.get("pipelines"), "pipelines"))
-        ),
+        pipelines=MappingProxyType(pipelines),
         web=registry,
         llm=_decode_llm_config(raw.get("llm")),
+        file_root=file_root,
     )
 
 

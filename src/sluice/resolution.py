@@ -10,6 +10,7 @@ import importlib
 import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
@@ -36,6 +37,7 @@ class BoundaryAdapters:
         str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]
     ]
     web_content_client: object | None = None
+    file_root: Path | None = None
 
 
 # Built-ins are an explicit, fixed map.  Runtime resolution never discovers
@@ -73,6 +75,7 @@ BUILTIN_WEB_TASKS = frozenset(
 BUILTIN_LLM_TASKS = frozenset({"sluice.tasks.llm_extract", "sluice.tasks.llm_summary"})
 BUILTIN_SINK_BINDERS: dict[str, str] = {
     "sluice.sinks.email": "sluice.sinks.email.bind",
+    "sluice.sinks.file": "sluice.sinks.file.bind",
     "sluice.sinks.telegram": "sluice.sinks.telegram.bind",
     "sluice.sinks.feishu": "sluice.sinks.feishu.bind",
     "sluice.sinks.webhook": "sluice.sinks.webhook.bind",
@@ -272,13 +275,19 @@ def bind_builtin_sink(
     sink_clients: Mapping[
         str, Callable[[Mapping[str, JSONValue], JSONValue, str], str | None]
     ],
+    file_root: Path | None = None,
 ) -> SinkContract:
     try:
         binder = _bound_builtin(BUILTIN_SINK_BINDERS[path], path)
         client = sink_clients.get(path)
         if client is not None and not callable(client):
             raise DefinitionError(f"startup Sink client for {path} is not callable")
-        value = binder(client)
+        # The file Sink needs the runtime root, which is not part of any identity.
+        value = (
+            binder(client, file_root=file_root)
+            if path == "sluice.sinks.file"
+            else binder(client)
+        )
     except (KeyError, TypeError, AttributeError) as error:
         raise DefinitionError(f"cannot bind built-in Sink {path}") from error
     return value  # normalized by resolve_sink below
@@ -372,7 +381,7 @@ def resolve_retained_tasks(
 
 def resolve_sink(path: str, adapters: BoundaryAdapters) -> SinkContract:
     value = (
-        bind_builtin_sink(path, adapters.sink_clients)
+        bind_builtin_sink(path, adapters.sink_clients, adapters.file_root)
         if path in BUILTIN_SINK_BINDERS
         else import_value(path)
     )
@@ -395,6 +404,7 @@ def freeze_adapters(
     ]
     | None = None,
     web_content_client: object | None = None,
+    file_root: Path | None = None,
 ) -> BoundaryAdapters:
     """Copy the startup boundary bundle into immutable mapping storage."""
 
@@ -404,6 +414,7 @@ def freeze_adapters(
         llm_client=llm_client,
         sink_clients=MappingProxyType(clients),
         web_content_client=web_content_client,
+        file_root=file_root,
     )
 
 
