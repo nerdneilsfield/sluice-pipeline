@@ -21,7 +21,7 @@ _LABEL = "github_activity"
 _KEYS = {"repo", "events", "branch", "limit", "token", "timeout_seconds"}
 _EVENTS = ("releases", "commits")
 _REPO = re.compile(r"^[\w.-]+/[\w.-]+$")
-_TOKEN = re.compile(r"^env:[A-Za-z_][A-Za-z0-9_]*$")
+TOKEN_REFERENCE = re.compile(r"^env:[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -118,7 +118,9 @@ def collect(config: Mapping[str, JSONValue], checkpoint: JSONValue) -> SourceRes
         raise ExecutionError("github_activity branch must be a non-empty string")
     limit = int_option(config, "limit", 30, 1, 100, _LABEL)
     token = config.get("token")
-    if token is not None and not (isinstance(token, str) and _TOKEN.fullmatch(token)):
+    if token is not None and not (
+        isinstance(token, str) and TOKEN_REFERENCE.fullmatch(token)
+    ):
         raise ExecutionError("github_activity token must be env:NAME")
     timeout = timeout_seconds(config, _LABEL)
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "sluice"}

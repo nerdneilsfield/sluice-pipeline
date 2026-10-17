@@ -39,7 +39,13 @@ from sluice.contracts import (
 from sluice.errors import DefinitionError, ExecutionError, GraphError
 from sluice.sinks.file import SINK_PATH as FILE_SINK
 from sluice.sinks.file import resolve_file_root, resolve_inside
-from sluice.web.config import WebRegistryConfig, decode_web_config, expand_web_binding
+from sluice.sources.github_activity import TOKEN_REFERENCE
+from sluice.web.config import (
+    WebRegistryConfig,
+    decode_headers,
+    decode_web_config,
+    expand_web_binding,
+)
 from sluice.web.contracts import (
     ExtractorBinding,
     ProviderBinding,
@@ -347,6 +353,24 @@ def _decode_source_policy(spec: Mapping[str, object], label: str) -> ExecutionPo
     return ExecutionPolicy(timeout=timeout, retries=retries, concurrency=1)
 
 
+_HEADER_BUILTINS = frozenset({"sluice.sources.json_api", "sluice.sinks.webhook"})
+
+
+def _check_builtin_credentials(
+    use: str, with_config: Mapping[str, object], label: str
+) -> None:
+    """Reject literal credentials of built-ins before the config is persisted."""
+
+    if use == "sluice.sources.github_activity" and "token" in with_config:
+        token = with_config["token"]
+        if not (isinstance(token, str) and TOKEN_REFERENCE.fullmatch(token)):
+            raise DefinitionError(
+                f"{label}.with.token must be an exact env:NAME reference"
+            )
+    if use in _HEADER_BUILTINS and with_config.get("headers") is not None:
+        decode_headers(with_config["headers"], f"{label}.with.headers")
+
+
 def _decode_sources(
     raw: Mapping[str, object], registry: WebRegistryConfig
 ) -> dict[str, SourceDef]:
@@ -358,6 +382,7 @@ def _decode_sources(
         _check_keys(spec, _SOURCE_KEYS | {"concurrency"}, f"sources.{name}")
         use = _required_string(spec, "use", f"sources.{name}")
         with_config = _mapping(spec.get("with"), f"sources.{name}.with")
+        _check_builtin_credentials(use, with_config, f"sources.{name}")
         try:
             web_binding = expand_web_binding(use, with_config, registry)
         except DefinitionError as error:
@@ -527,10 +552,10 @@ def _decode_batch(value: object, label: str) -> BatchPolicy | None:
 def _decode_delivery(value: object, label: str) -> DeliveryDef:
     spec = _mapping(value, label)
     _check_keys(spec, _DELIVERY_KEYS, label)
-    return DeliveryDef(
-        use=_required_string(spec, "use", label),
-        with_config=freeze_mapping(_mapping(spec.get("with"), f"{label}.with")),
-    )
+    use = _required_string(spec, "use", label)
+    with_config = _mapping(spec.get("with"), f"{label}.with")
+    _check_builtin_credentials(use, with_config, label)
+    return DeliveryDef(use=use, with_config=freeze_mapping(with_config))
 
 
 def _decode_node(name: str, spec: Mapping[str, object], label: str) -> NodeDef:

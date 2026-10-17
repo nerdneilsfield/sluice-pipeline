@@ -21,7 +21,7 @@ A complete runnable definition is [examples/hn-to-files.yml](../examples/hn-to-f
 - **Scheduling.** Source-level `schedule` (`<n>m` or `<n>h`), `timeout` (`<n>s`, `<n>m`, or `<n>h`), and `retries` sit beside `with`, not inside it. Set `schedule` on any Source that `tick` should poll repeatedly.
 - **Stateless collection.** `json_api`, `hacker_news`, `github_trending`, and `github_activity` keep no checkpoint. They fetch the current window on every run and rely on Item identity to drop repeats, so a missed run loses nothing.
 - **Failure.** A failed request fails the whole collection. No partial records are published. Error text is a fixed message plus the HTTP status where there is one; it never contains the URL, query, header values, token, or response body.
-- **Unknown keys.** The four network Sources and the `webhook` and `file` Sinks reject any key not listed for them. The error is raised when the Source runs or the Sink sends, not when the definition loads.
+- **Unknown keys.** The four network Sources and the `webhook` and `file` Sinks reject any key not listed for them. The error is raised when the Source runs or the Sink sends, not when the definition loads. The exception is credentials: see [Credentials](#credentials).
 - **`timeout_seconds`.** Accepted by `json_api`, `hacker_news`, `github_trending`, `github_activity`, `webhook`. Number greater than 0 and at most 300; default 30.
 
 ## Deduplication and first run
@@ -50,7 +50,7 @@ Fetches one URL and treats a list in the JSON response as records.
 | `url` | string | required | `http` or `https`, no user info. Not read from `env:`. |
 | `id_field` | string | required | Dotted path inside each item. Value must be a non-empty string or an integer (not a boolean). |
 | `items_path` | string | `""` | Dotted keys to the list, such as `data.items`. `""` means the response root is the list. |
-| `headers` | map of string to string | none | Values may be `env:NAME`, resolved on each run. Names such as `Cookie`, `Host`, `Proxy-Authorization`, and `X-Forwarded-*` are rejected. |
+| `headers` | map of string to string | none | Values are literal strings, except that a sensitive name must be exactly `env:NAME` (see [Credentials](#credentials)); `env:` values are resolved on each run. Names such as `Cookie`, `Host`, `Proxy-Authorization`, and `X-Forwarded-*` are rejected. |
 | `limit` | integer | 100 | 1 to 1000. The first N items are kept. |
 | `timeout_seconds` | number | 30 | (0, 300] |
 | `target_allow_hosts` | list of strings | none | Unique, non-empty. See [Private targets](#private-targets). |
@@ -107,7 +107,7 @@ Releases and commits of one repository from the public REST API at `api.github.c
 | `events` | list | `[releases, commits]` | Non-empty, no duplicates, subset of `releases`, `commits`. |
 | `branch` | string | none | Non-empty. Commits only; sent as `sha`. |
 | `limit` | integer | 30 | 1 to 100, per event kind (`per_page`). |
-| `token` | string | none | Must be exactly `env:NAME`; a literal token is rejected. |
+| `token` | string | none | Must be exactly `env:NAME`; a literal token is rejected when the definition loads. |
 | `timeout_seconds` | number | 30 | (0, 300] |
 
 Each response is at most 5 MiB. Requests carry `Accept: application/vnd.github+json` and `User-Agent: sluice`, plus `Authorization: Bearer <token>` when `token` is set. If `token` names an unset environment variable the run fails; it does not fall back to anonymous requests. Anonymous requests are limited by GitHub to 60 per hour, and a rate-limit rejection fails the run with `GitHub API HTTP 403` or `429`. A renamed repository answers `301`, which is refused and fails with `GitHub API HTTP 301`.
@@ -152,7 +152,7 @@ Sends one JSON `POST` per Delivery.
 | Key | Type | Default | Limits |
 | --- | --- | --- | --- |
 | `url` | string | required | `https` only. May be `env:NAME`. |
-| `headers` | map of string to string | none | Values may be `env:NAME`. Same name restrictions as `json_api`. |
+| `headers` | map of string to string | none | Same sensitive-name rule and name restrictions as `json_api`: a sensitive name must be exactly `env:NAME`, checked when the definition loads. |
 | `timeout_seconds` | number | 30 | (0, 300] |
 | `target_allow_hosts` | list of strings | none | See [Private targets](#private-targets). |
 | `target_allow_cidrs` | list of strings | none | See [Private targets](#private-targets). |
@@ -245,11 +245,16 @@ No Source or Sink on this page follows redirects. Any 3xx status is an error: `G
 
 Authored configuration is stored in SQLite as written, and the binding identity includes it. Put secrets in environment variables and reference them as `env:NAME`; the value is resolved at run time and is not stored or logged.
 
+Two rules are checked when the definition loads, so a literal credential is rejected before anything is written to SQLite. The error names the key, never the value.
+
+- `github_activity` `token` must be exactly `env:NAME`.
+- A `json_api` or `webhook` header whose name contains `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `api-key`, `token`, `secret`, or `signature` (case-insensitive) must have an exact `env:NAME` value. Other headers, such as `X-Source: sluice`, stay literal.
+
 | Place | `env:` accepted | Notes |
 | --- | --- | --- |
-| `json_api` `headers` values | yes | Missing or empty variable fails the run. |
+| `json_api` `headers` values | required for sensitive names | Missing or empty variable fails the run. |
 | `github_activity` `token` | required | A literal value is rejected. |
-| `webhook` `url` and `headers` values | yes | Missing or empty variable fails the Delivery. |
+| `webhook` `url`, and `headers` values | `url` yes; `headers` required for sensitive names | Missing or empty variable fails the Delivery. |
 | `json_api` `url` | no | Do not put a token in the query string; use a header. |
 
 The variables must be set in the environment of the process that runs `tick`. In Docker, pass them with `-e NAME` or `--env-file`.

@@ -359,7 +359,7 @@ def _provider_base_url(spec: Mapping[str, object], typ: str, label: str) -> str 
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
-def _headers(
+def decode_headers(
     value: object, label: str, *, cookies: bool = False
 ) -> Mapping[str, object]:
     spec = _mapping(value, label)
@@ -498,9 +498,13 @@ def _decode_provider(name: str, raw: object) -> ProviderBinding:
     retries = _integer(
         spec.get("transport_retries", retries_default), f"{label}.transport_retries"
     )
-    service_headers = _headers(spec.get("service_headers"), f"{label}.service_headers")
-    target_headers = _headers(spec.get("target_headers"), f"{label}.target_headers")
-    cookies = _headers(
+    service_headers = decode_headers(
+        spec.get("service_headers"), f"{label}.service_headers"
+    )
+    target_headers = decode_headers(
+        spec.get("target_headers"), f"{label}.target_headers"
+    )
+    cookies = decode_headers(
         spec.get("target_cookies"), f"{label}.target_cookies", cookies=True
     )
     proxy = spec.get("proxy")
