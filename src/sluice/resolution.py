@@ -41,6 +41,7 @@ class BoundaryAdapters:
 # Built-ins are an explicit, fixed map.  Runtime resolution never discovers
 # modules speculatively or imports configured paths after startup.
 BUILTIN_SOURCE_BINDERS: dict[str, str] = {
+    "sluice.sources.hacker_news": "sluice.sources.hacker_news.bind",
     "sluice.sources.json_api": "sluice.sources.json_api.bind",
     "sluice.sources.rss": "sluice.sources.rss.bind",
     "sluice.sources.webpage": "sluice.sources.webpage.bind",

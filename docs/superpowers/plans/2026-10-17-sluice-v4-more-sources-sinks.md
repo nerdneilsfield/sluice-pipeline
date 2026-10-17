@@ -151,7 +151,7 @@ Gate for every task: `.venv/bin/python -m pytest -q` passes except the known `te
 Plan written 2026-10-17 at HEAD `0436334`; no code changes yet.
 
 - [x] T1 json_api (deviation: `_http.fetch` also takes `policy`; `_http.target_policy(config, label)` parses D1 keys, raising `ExecutionError` at collect time because Sources have no load-time hook; `fetch` runs `validate_target_headers` itself. `resolve_env` returns non-`env:` values unchanged.)
-- [ ] T2 hacker_news
+- [x] T2 hacker_news
 - [ ] T3 github_trending
 - [ ] T4 github_activity
 - [ ] T5 webhook sink
