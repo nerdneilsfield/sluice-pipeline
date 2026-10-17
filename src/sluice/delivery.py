@@ -109,9 +109,10 @@ def _decode_policy(value: str):
 
 
 def _item_payload(app: Any, rendered_item_id: str) -> Any:
-    row = app.conn.execute(
-        "SELECT * FROM items WHERE id=?", (rendered_item_id,)
-    ).fetchone()
+    with app.conn.transaction_lock:
+        row = app.conn.execute(
+            "SELECT * FROM items WHERE id=?", (rendered_item_id,)
+        ).fetchone()
     if row is None:
         raise ExecutionError(f"rendered Item is missing: {rendered_item_id}")
     return load_item(row).payload
@@ -413,9 +414,12 @@ def _fail_delivery_attempt(
 
 
 def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
-    row = app.conn.execute(
-        "SELECT * FROM deliveries WHERE delivery_key=?", (attempt.delivery_key,)
-    ).fetchone()
+    # Worker-thread reads must not observe another thread's open transaction.
+    # The lock is released before the external Sink call.
+    with app.conn.transaction_lock:
+        row = app.conn.execute(
+            "SELECT * FROM deliveries WHERE delivery_key=?", (attempt.delivery_key,)
+        ).fetchone()
     if row is None:
         return
     try:
@@ -441,9 +445,11 @@ def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
         # and failure updates remain guarded by their own token predicates.
         # Re-read after all local preparation so recovery/timeout transitions
         # that happen in the meantime are observed by the ownership check.
-        current = app.conn.execute(
-            "SELECT * FROM deliveries WHERE delivery_key=?", (attempt.delivery_key,)
-        ).fetchone()
+        with app.conn.transaction_lock:
+            current = app.conn.execute(
+                "SELECT * FROM deliveries WHERE delivery_key=?",
+                (attempt.delivery_key,),
+            ).fetchone()
         if current is None:
             return
         current_token = current["attempt_token"]
@@ -512,9 +518,10 @@ def _timeout_deliveries(
 ) -> bool:
     changed = False
     now = utc_datetime(at)
-    rows = app.conn.execute(
-        "SELECT * FROM deliveries WHERE state='running' ORDER BY delivery_key"
-    ).fetchall()
+    with app.conn.transaction_lock:
+        rows = app.conn.execute(
+            "SELECT * FROM deliveries WHERE state='running' ORDER BY delivery_key"
+        ).fetchall()
     for row in rows:
         if (
             allowed_nodes is not None
@@ -582,17 +589,7 @@ def _delivery_rows_for_dispatch(
         if include_failed
         else "d.state='queued'"
     )
-    if include_failed:
-        rows = app.conn.execute(
-            "SELECT d.delivery_key FROM deliveries d JOIN node_members nm ON "
-            "nm.pipeline_name=d.pipeline_name AND nm.node_name=d.node_name "
-            "AND nm.binding_digest=? AND nm.item_id=d.rendered_item_id "
-            "WHERE nm.state!='stale' AND d.pipeline_name=? AND d.node_name=? AND d.binding_digest=? AND "
-            + state_filter
-            + " ORDER BY nm.ordinal,d.rendered_item_id",
-            (node_binding, pipeline_name, node_name, binding),
-        ).fetchall()
-    else:
+    with app.conn.transaction_lock:
         rows = app.conn.execute(
             "SELECT d.delivery_key FROM deliveries d JOIN node_members nm ON "
             "nm.pipeline_name=d.pipeline_name AND nm.node_name=d.node_name "
@@ -623,19 +620,20 @@ def _dispatch_deliveries(
             ):
                 continue
             _ensure_delivery_rows(app, pipeline_name, node_name, at)
-            running = int(
-                app.conn.execute(
-                    "SELECT COUNT(*) FROM deliveries WHERE pipeline_name=? AND node_name=? "
-                    "AND state='running'",
-                    (pipeline_name, node_name),
-                ).fetchone()[0]
-            )
-            policy_row = app.conn.execute(
-                "SELECT policy_json FROM deliveries WHERE pipeline_name=? AND node_name=? "
-                "AND binding_digest=? AND state IN ('queued','running','failed') "
-                "ORDER BY updated_at,delivery_key LIMIT 1",
-                (pipeline_name, node_name, _binding(app, pipeline_name, node_name)),
-            ).fetchone()
+            with app.conn.transaction_lock:
+                running = int(
+                    app.conn.execute(
+                        "SELECT COUNT(*) FROM deliveries WHERE pipeline_name=? AND node_name=? "
+                        "AND state='running'",
+                        (pipeline_name, node_name),
+                    ).fetchone()[0]
+                )
+                policy_row = app.conn.execute(
+                    "SELECT policy_json FROM deliveries WHERE pipeline_name=? AND node_name=? "
+                    "AND binding_digest=? AND state IN ('queued','running','failed') "
+                    "ORDER BY updated_at,delivery_key LIMIT 1",
+                    (pipeline_name, node_name, _binding(app, pipeline_name, node_name)),
+                ).fetchone()
             try:
                 concurrency = (
                     _decode_policy(str(policy_row[0])).concurrency
@@ -653,24 +651,23 @@ def _dispatch_deliveries(
             ):
                 if available <= 0:
                     break
-                before = app.conn.execute(
-                    "SELECT state,retry_count FROM deliveries WHERE delivery_key=?",
-                    (key,),
-                ).fetchone()
+                with app.conn.transaction_lock:
+                    before = app.conn.execute(
+                        "SELECT state,retry_count FROM deliveries WHERE delivery_key=?",
+                        (key,),
+                    ).fetchone()
                 if before is None:
                     continue
                 # Automatic tick retries honor the persisted retry budget;
                 # explicit retry_delivery is the manual escape hatch.
                 if before[0] == "failed":
                     try:
-                        policy = _decode_policy(
-                            str(
-                                app.conn.execute(
-                                    "SELECT policy_json FROM deliveries WHERE delivery_key=?",
-                                    (key,),
-                                ).fetchone()[0]
-                            )
-                        )
+                        with app.conn.transaction_lock:
+                            policy_json = app.conn.execute(
+                                "SELECT policy_json FROM deliveries WHERE delivery_key=?",
+                                (key,),
+                            ).fetchone()[0]
+                        policy = _decode_policy(str(policy_json))
                     except (ExecutionError, TypeError, AttributeError):
                         continue
                     if int(before[1]) >= policy.retries:
@@ -687,10 +684,11 @@ def _dispatch_deliveries(
                     pipeline_name: str = pipeline_name,
                     node_name: str = node_name,
                 ) -> None:
-                    row = app.conn.execute(
-                        "SELECT rendered_item_id FROM deliveries WHERE delivery_key=?",
-                        (key,),
-                    ).fetchone()
+                    with app.conn.transaction_lock:
+                        row = app.conn.execute(
+                            "SELECT rendered_item_id FROM deliveries WHERE delivery_key=?",
+                            (key,),
+                        ).fetchone()
                     if row is None:
                         return
                     deliver(

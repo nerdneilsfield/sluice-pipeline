@@ -1111,7 +1111,11 @@ def _request_node_work(
     from .stage_runtime import _request_materialization
 
     execution_ids: list[int] = []
-    for request in _stage_requests_for_node(app, pipeline_name, node_name, at):
+    # A Stage worker's forced-result reconcile reaches this while sibling
+    # workers hold open transactions; read the requests as one committed state.
+    with app.conn.transaction_lock:
+        requests = _stage_requests_for_node(app, pipeline_name, node_name, at)
+    for request in requests:
         outcome = _request_materialization(app, request, at)
         if outcome.execution_id is not None:
             execution_ids.append(int(outcome.execution_id))
@@ -1168,9 +1172,10 @@ def _timeout_executions(
     from .stage_runtime import _decode_policy, _fail_execution
 
     changed = False
-    rows = app.conn.execute(
-        "SELECT * FROM executions WHERE state='running' ORDER BY id"
-    ).fetchall()
+    with app.conn.transaction_lock:
+        rows = app.conn.execute(
+            "SELECT * FROM executions WHERE state='running' ORDER BY id"
+        ).fetchall()
     for row in rows:
         if (
             row["kind"] == "stage"
@@ -1206,10 +1211,11 @@ def _start_queued_stage_owners(
 ) -> bool:
     from .stage_runtime import _decode_policy, _execute_claimed_stage
 
-    rows = app.conn.execute(
-        "SELECT e.* FROM executions e JOIN materialization_claims mc ON mc.owner_execution_id=e.id "
-        "WHERE e.kind='stage' AND e.state='queued' ORDER BY e.id"
-    ).fetchall()
+    with app.conn.transaction_lock:
+        rows = app.conn.execute(
+            "SELECT e.* FROM executions e JOIN materialization_claims mc ON mc.owner_execution_id=e.id "
+            "WHERE e.kind='stage' AND e.state='queued' ORDER BY e.id"
+        ).fetchall()
     if not rows:
         return False
     grouped: dict[tuple[str, str], list[sqlite3.Row]] = {}
@@ -1223,12 +1229,14 @@ def _start_queued_stage_owners(
         for (pipeline_name, node_name), candidates in grouped.items():
             if not pipeline_name or not node_name:
                 continue
-            running = int(
-                app.conn.execute(
-                    "SELECT COUNT(*) FROM executions WHERE kind='stage' AND pipeline_name=? AND node_name=? AND state='running'",
-                    (pipeline_name, node_name),
-                ).fetchone()[0]
-            )
+            # Workers submitted for earlier nodes are already running here.
+            with app.conn.transaction_lock:
+                running = int(
+                    app.conn.execute(
+                        "SELECT COUNT(*) FROM executions WHERE kind='stage' AND pipeline_name=? AND node_name=? AND state='running'",
+                        (pipeline_name, node_name),
+                    ).fetchone()[0]
+                )
             try:
                 limit = _decode_policy(str(candidates[0]["policy_json"])).concurrency
             except ExecutionError:

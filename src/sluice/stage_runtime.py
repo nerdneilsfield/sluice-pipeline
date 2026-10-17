@@ -606,15 +606,16 @@ def resolve_dedup_history_ids(
     candidates = _load_items(app, candidate_ids)
     if not candidates:
         return ()
-    rows = app.conn.execute(
-        "SELECT sr.id AS result_id, sri.item_id AS output_id, ei.item_id AS input_id "
-        "FROM stage_result_current src "
-        "JOIN stage_results sr ON sr.id=src.result_id "
-        "JOIN stage_result_items sri ON sri.result_id=sr.id "
-        "JOIN execution_inputs ei ON ei.execution_id=sr.producer_execution_id AND ei.slot='items' "
-        "WHERE src.stage_name=? AND sr.stage_name=? ORDER BY sr.sequence,sri.ordinal,ei.ordinal",
-        (stage.name, stage.name),
-    ).fetchall()
+    with app.conn.transaction_lock:
+        rows = app.conn.execute(
+            "SELECT sr.id AS result_id, sri.item_id AS output_id, ei.item_id AS input_id "
+            "FROM stage_result_current src "
+            "JOIN stage_results sr ON sr.id=src.result_id "
+            "JOIN stage_result_items sri ON sri.result_id=sr.id "
+            "JOIN execution_inputs ei ON ei.execution_id=sr.producer_execution_id AND ei.slot='items' "
+            "WHERE src.stage_name=? AND sr.stage_name=? ORDER BY sr.sequence,sri.ordinal,ei.ordinal",
+            (stage.name, stage.name),
+        ).fetchall()
     grouped: dict[tuple[int, str], dict[str, Any]] = {}
     for row in rows:
         result_id = int(row["result_id"])
@@ -625,9 +626,10 @@ def resolve_dedup_history_ids(
         entry["input_ids"].append(str(row["input_id"]))
     accepted: list[tuple[Item, tuple[str, ...]]] = []
     for entry in grouped.values():
-        output = app.conn.execute(
-            "SELECT * FROM items WHERE id=?", (entry["output_id"],)
-        ).fetchone()
+        with app.conn.transaction_lock:
+            output = app.conn.execute(
+                "SELECT * FROM items WHERE id=?", (entry["output_id"],)
+            ).fetchone()
         if output is None:
             continue
         accepted.append((load_item(output), tuple(dict.fromkeys(entry["input_ids"]))))
@@ -1070,25 +1072,28 @@ def _request_materialization(
     # a new upstream history at retry time.
     batch_history_persisted = request.history_persisted
     if request.batch_id is not None:
-        batch_rows = app.conn.execute(
-            "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
-            (request.batch_id,),
-        ).fetchall()
+        with app.conn.transaction_lock:
+            batch_rows = app.conn.execute(
+                "SELECT item_id FROM batch_items WHERE batch_id=? ORDER BY ordinal",
+                (request.batch_id,),
+            ).fetchall()
         frozen_items = tuple(str(row[0]) for row in batch_rows)
         if not frozen_items:
             raise ExecutionError("Stage batch envelope is missing")
         if tuple(request.envelope.items) != frozen_items:
             raise ExecutionError("Stage retry must use the exact frozen batch Items")
-        first_attempt = app.conn.execute(
-            "SELECT id FROM executions WHERE kind='stage' AND batch_id=? ORDER BY id LIMIT 1",
-            (request.batch_id,),
-        ).fetchone()
+        with app.conn.transaction_lock:
+            first_attempt = app.conn.execute(
+                "SELECT id FROM executions WHERE kind='stage' AND batch_id=? ORDER BY id LIMIT 1",
+                (request.batch_id,),
+            ).fetchone()
         if first_attempt is not None:
             batch_history_persisted = True
-            history_rows = app.conn.execute(
-                "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='history' ORDER BY ordinal",
-                (first_attempt[0],),
-            ).fetchall()
+            with app.conn.transaction_lock:
+                history_rows = app.conn.execute(
+                    "SELECT item_id FROM execution_inputs WHERE execution_id=? AND slot='history' ORDER BY ordinal",
+                    (first_attempt[0],),
+                ).fetchall()
             frozen_history = tuple(str(row[0]) for row in history_rows)
             if (
                 request.envelope.history
@@ -2023,9 +2028,10 @@ def rebuild_stage(app: App, execution_id: int, at: datetime) -> RebuildResult:
     result_id = int(outcome.execution_id)
     if outcome.owner:
         result_id = _execute_claimed_stage(app, result_id, at)
-    row = app.conn.execute(
-        "SELECT state FROM executions WHERE id=? AND kind='stage'", (result_id,)
-    ).fetchone()
+    with app.conn.transaction_lock:
+        row = app.conn.execute(
+            "SELECT state FROM executions WHERE id=? AND kind='stage'", (result_id,)
+        ).fetchone()
     if row is None:
         raise ExecutionError("Stage rebuild Execution disappeared")
     state = str(row[0])

@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from threading import Event, Thread
+from threading import Event, Thread, current_thread, main_thread
 
 import pytest
 
@@ -438,3 +438,49 @@ pipelines:
         ).fetchone()[0]
         == "stale"
     )
+
+
+def test_delivery_worker_reads_hold_the_connection_lock_but_sink_send_does_not(
+    tmp_path, monkeypatch
+):
+    held_during_read = []
+    held_during_send = []
+    app, _ = delivery_app(
+        tmp_path,
+        {
+            "sluice.sinks.email": lambda config, payload, key: held_during_send.append(
+                probe_lock_held(app)
+            ),
+            "sluice.sinks.telegram": lambda config, payload, key: None,
+        },
+    )
+    execute = app.conn.execute
+
+    def probed_execute(sql, parameters=()):
+        # Only pool threads share the connection with the main reconcile loop.
+        if current_thread() is not main_thread():
+            held_during_read.append(probe_lock_held(app))
+        return execute(sql, parameters)
+
+    monkeypatch.setattr(app.conn, "execute", probed_execute)
+    tick(app, instant(0))
+
+    assert held_during_read and all(held_during_read)
+    assert held_during_send == [False]
+
+
+def probe_lock_held(app):
+    """Report from a fresh thread whether the connection lock is currently held."""
+
+    result = []
+
+    def probe():
+        acquired = app.conn.transaction_lock.acquire(blocking=False)
+        if acquired:
+            app.conn.transaction_lock.release()
+        result.append(not acquired)
+
+    thread = Thread(target=probe)
+    thread.start()
+    thread.join()
+    return result[0]
