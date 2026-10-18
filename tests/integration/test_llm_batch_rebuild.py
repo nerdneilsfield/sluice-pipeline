@@ -465,3 +465,20 @@ pipelines:
         )
         == history_ids
     )
+
+
+def test_open_app_accepts_terminal_snapshot_with_edited_prompt_file(tmp_path):
+    app, target, _batch_id, _item_ids = failed_batch_app(tmp_path)
+    state = app.conn.execute(
+        "SELECT state FROM executions WHERE id=?", (target,)
+    ).fetchone()[0]
+    assert state == "failed"
+    app.conn.close()
+    (tmp_path / "prompt.md").write_text("Edited after the run.", encoding="utf-8")
+    reopened = open_app(
+        tmp_path / "definition.yml",
+        tmp_path / "state.db",
+        llm_client=InvalidLLM([]),
+    )
+    with pytest.raises(ExecutionError):
+        rebuild_stage(reopened, target, instant(10))

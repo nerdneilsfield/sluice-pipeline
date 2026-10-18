@@ -1474,12 +1474,16 @@ def _validate_snapshot_task_binding(use: str, binding: WebBinding | None) -> Non
             raise ExecutionError("invalid retained projector binding")
 
 
-def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
+def decode_stage_snapshot(
+    value: Mapping[str, JSONValue], *, verify_files: bool = True
+) -> StageDef:
     """Decode and verify one immutable Stage configuration retained in SQLite.
 
     Execution snapshots carry file digests alongside the user-facing Task
     configuration.  The digest fields are retained in the canonical snapshot
     for verification but are stripped from the config passed to a Task.
+    Terminal history may be opened with ``verify_files=False`` so editing a
+    file does not block startup; rebuild keeps verifying.
     """
 
     if not isinstance(value, Mapping):
@@ -1563,8 +1567,9 @@ def decode_stage_snapshot(value: Mapping[str, JSONValue]) -> StageDef:
         cache_version=cache_version,
         canonical_config_json=canonical,
     )
-    try:
-        verify_stage_files(stage)
-    except (DefinitionError, KeyError, TypeError, ValueError) as error:
-        raise ExecutionError("retained Stage file metadata is invalid") from error
+    if verify_files:
+        try:
+            verify_stage_files(stage)
+        except (DefinitionError, KeyError, TypeError, ValueError) as error:
+            raise ExecutionError("retained Stage file metadata is invalid") from error
     return stage

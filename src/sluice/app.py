@@ -261,7 +261,7 @@ def open_app(
         for config_json, allow_missing in sorted(retained_configs.items()):
             try:
                 snapshot = json.loads(config_json)
-                stage = decode_stage_snapshot(snapshot)
+                stage = decode_stage_snapshot(snapshot, verify_files=not allow_missing)
             except (
                 ExecutionError,
                 TypeError,
