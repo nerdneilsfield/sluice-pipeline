@@ -197,6 +197,14 @@ def _ensure_delivery_rows(
                 (pipeline_name, node_name, node_binding, rendered_item_id),
             )
 
+        # Policy is not part of the binding digest, so rows keep the policy
+        # they were created with unless refreshed.  Running rows keep theirs.
+        app.conn.execute(
+            "UPDATE deliveries SET policy_json=? WHERE pipeline_name=? AND node_name=? "
+            "AND binding_digest=? AND state IN ('queued','failed') AND policy_json!=?",
+            (policy_json, pipeline_name, node_name, binding, policy_json),
+        )
+
         # A snapshot omission withdraws only never-started work.  Any attempt
         # token (including a failed/succeeded row) makes the send auditable and
         # therefore durable even after membership changes.

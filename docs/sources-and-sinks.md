@@ -143,6 +143,8 @@ These two go through the `web` provider layer (fetch chains, extractors, provide
 
 Sinks are at-least-once. A failed Delivery is retried according to the Node's `retries`, and a retry after a lost response can repeat the side effect. Make the receiver idempotent on the Delivery key.
 
+A Delivery row stores the Node's `retries`, `timeout`, and `concurrency` when it is created. On every `tick` or `reconcile`, the current values from the definition replace the stored ones for rows of the current Sink binding that are `queued` or `failed`. Raising `retries` from `0` to `3` therefore lets already failed Deliveries retry on the next `tick`. `running` and `succeeded` rows keep what they had, and a Sink change is a new binding, not a policy change.
+
 Both Sinks below receive the Stage output as their payload. After a render Task that is a string.
 
 ### `sluice.sinks.webhook`

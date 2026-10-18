@@ -558,3 +558,46 @@ def test_non_string_sink_result_is_coerced_and_not_retried(tmp_path):
         "SELECT state,external_id FROM deliveries WHERE delivery_key=?", (key,)
     ).fetchone()[:] == ("succeeded", "123")
     assert calls == [key]
+
+
+def test_changed_retry_policy_applies_to_failed_and_queued_rows(tmp_path):
+    definition = tmp_path / "definition.yml"
+    database = tmp_path / "state.db"
+    calls = []
+
+    def flaky(config, payload, key):
+        calls.append(key)
+        if len(calls) == 1:
+            raise RuntimeError("down")
+        return "ok"
+
+    def write_definition(retries):
+        definition.write_text(
+            f"""
+version: 1
+database: state.db
+sources: {{feed: {{use: tests.integration.test_delivery.source_collect, with: {{}}}}}}
+pipelines:
+  p:
+    nodes:
+      out: {{from: source.feed, retries: {retries}, concurrency: 1, deliver: {{use: sluice.sinks.email, with: {{target: x}}}}}}
+""",
+            encoding="utf-8",
+        )
+
+    write_definition(0)
+    first = open_app(definition, database, sink_clients={"sluice.sinks.email": flaky})
+    collect_source(first, "feed", instant(0))
+    tick(first, instant(1))
+    tick(first, instant(2))
+    assert first.conn.execute("SELECT state FROM deliveries").fetchone()[0] == "failed"
+    assert len(calls) == 1
+    first.close()
+
+    write_definition(2)
+    second = open_app(definition, database, sink_clients={"sluice.sinks.email": flaky})
+    tick(second, instant(3))
+    assert len(calls) == 2
+    assert second.conn.execute("SELECT state,retry_count FROM deliveries").fetchone()[
+        :
+    ] == ("succeeded", 1)
