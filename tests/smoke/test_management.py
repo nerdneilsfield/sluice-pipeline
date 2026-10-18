@@ -172,3 +172,40 @@ def test_ui_bound_to_non_loopback_host_allows_only_that_host(tmp_path):
     assert (
         client.get("/pipelines", headers={"Host": "localhost:8000"}).status_code == 403
     )
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::"])
+def test_ui_wildcard_bind_skips_host_check_but_keeps_post_checks(tmp_path, host):
+    app = management_app(tmp_path)
+    client = create_ui(app, host=host, port=8000).test_client()
+
+    assert (
+        client.get("/pipelines", headers={"Host": "10.1.2.3:8000"}).status_code == 200
+    )
+    assert (
+        client.get("/pipelines", headers={"Host": "sluice.lan:8000"}).status_code == 200
+    )
+    assert (
+        client.post(
+            "/executions/1/rebuild",
+            headers={"Host": "10.1.2.3:8000", "Sec-Fetch-Site": "cross-site"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/executions/1/rebuild",
+            headers={"Host": "10.1.2.3:8000", "Origin": "http://evil.example"},
+        ).status_code
+        == 403
+    )
+
+
+def test_ui_loopback_bind_still_refuses_foreign_host(tmp_path):
+    app = management_app(tmp_path)
+    client = create_ui(app, host="127.0.0.1", port=8000).test_client()
+
+    assert client.get("/pipelines", headers={"Host": "evil.example"}).status_code == 403
+    assert (
+        client.get("/pipelines", headers={"Host": "10.1.2.3:8000"}).status_code == 403
+    )

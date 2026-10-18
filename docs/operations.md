@@ -54,6 +54,8 @@ The `ui` extra provides the management interface at `http://127.0.0.1:8000/pipel
 
 The UI refuses requests whose `Host` header is not the bound address with the bound port (for a loopback bind: `localhost`, `127.0.0.1` or `[::1]`), which blocks DNS rebinding. It also refuses cross-site `POST` requests: `Sec-Fetch-Site` must be `same-origin` or `none` and `Origin`, when present, must match the request's own origin. Rejected requests get HTTP 403. This is not authentication; binding a non-loopback `--host` still exposes the actions to anyone who can reach it.
 
+A wildcard bind (`--host 0.0.0.0` or `--host ::`, as used when the UI runs in a Docker container) has no single name to match, so the `Host` check is skipped and DNS-rebinding protection is given up; the `POST` checks still apply. A wildcard bind is not authentication either: keep it on trusted networks.
+
 Stop the UI before running another process against the same database; see [Database lock](#database-lock).
 
 ## Prefect

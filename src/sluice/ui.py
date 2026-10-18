@@ -22,13 +22,22 @@ def _is_loopback(host: str) -> bool:
         return host == "localhost"
 
 
+def _is_wildcard(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_unspecified
+    except ValueError:
+        return False
+
+
 def create_ui(app, host: str = "127.0.0.1", port: int = 8000):
     """Create the HTML-only management application for one open ``App``.
 
     ``host`` and ``port`` are the address the server binds.  Requests are
     refused unless their ``Host`` header names that address (or, for a
     loopback bind, any loopback name), which defeats DNS rebinding, and state
-    changing requests must come from the same origin.
+    changing requests must come from the same origin.  A wildcard bind
+    (``0.0.0.0`` or ``::``) has no single name to match, so the ``Host`` check
+    is skipped and DNS-rebinding protection is given up.
 
     Flask is imported here, rather than by the core package or CLI parser, so
     installations without the optional ``ui`` extra retain all local runtime
@@ -49,10 +58,11 @@ def create_ui(app, host: str = "127.0.0.1", port: int = 8000):
     allowed_hosts = {f"{name}:{port}" for name in names}
     if port == 80:
         allowed_hosts |= names
+    wildcard = _is_wildcard(bound)
 
     @web.before_request
     def refuse_foreign_requests():
-        if request.host.lower() not in allowed_hosts:
+        if not wildcard and request.host.lower() not in allowed_hosts:
             abort(403)
         if request.method == "POST":
             if request.headers.get("Sec-Fetch-Site", "same-origin") not in {

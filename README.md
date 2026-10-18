@@ -129,7 +129,7 @@ sluice retry-delivery definition.yml DELIVERY_KEY --at 2026-09-22T00:00:00Z
 sluice ui definition.yml --host 127.0.0.1 --port 8000
 ```
 
-Replace `definition.yml`, Pipeline/Node names, execution ID `42`, and `DELIVERY_KEY` with values from your deployment. Retrying a Delivery can repeat an external side effect if the Sink did not honor the stable Delivery key. The management UI has mutation actions and no authentication; keep it on a trusted local interface. It refuses cross-site requests and requests with a foreign `Host` header.
+Replace `definition.yml`, Pipeline/Node names, execution ID `42`, and `DELIVERY_KEY` with values from your deployment. Retrying a Delivery can repeat an external side effect if the Sink did not honor the stable Delivery key. The management UI has mutation actions and no authentication; keep it on a trusted local interface. It refuses cross-site requests and requests with a foreign `Host` header. A wildcard bind (`--host 0.0.0.0` or `::`, as in Docker) skips the `Host` check and so gives up DNS-rebinding protection; it is still not authentication, so keep it on trusted networks.
 
 [Operate Sluice](docs/operations.md) covers scheduling `tick` with cron, rebuild and retry semantics, the UI, Prefect, the database lock, and inspecting state.
 
