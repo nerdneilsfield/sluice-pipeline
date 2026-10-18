@@ -606,7 +606,7 @@ retries: 3
 concurrency: 4
 ```
 
-`timeout` limits how long the runner awaits one attempt. `concurrency` limits simultaneously `running` Stage Executions or Delivery rows owned by that fully qualified Pipeline node inside the single writer process; queued owners and failed Delivery rows do not consume a slot. These are execution controls and do not affect Stage cache identity. For shared materialization, they apply only while the node is the owner defined in Section 7.3; a waiting node spends no attempt budget. A timed-out Delivery has the same possible external-send ambiguity described in Section 10.
+`timeout` marks an attempt that is still `running` after that long as failed when a later reconcile pass checks it; it does not interrupt a call that is already in progress. `concurrency` limits simultaneously `running` Stage Executions or Delivery rows owned by that fully qualified Pipeline node inside the single writer process; queued owners and failed Delivery rows do not consume a slot. These are execution controls and do not affect Stage cache identity. For shared materialization, they apply only while the node is the owner defined in Section 7.3; a waiting node spends no attempt budget. A timed-out Delivery has the same possible external-send ambiguity described in Section 10.
 
 Sources may use `timeout` and `retries`; Source collection remains serialized, so it has no concurrency setting. `retries` counts additional attempts after the first. Defaults are no timeout, zero retries, and node concurrency one.
 

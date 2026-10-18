@@ -16,7 +16,7 @@ Keep secrets in environment variables, not literal YAML: authored configuration 
 | Email | `smtp_host`, `from`, `to`; optional `username`, `password`, `subject`, `smtp_port`, `security` | Sends UTF-8 plain text over SMTP. `security: starttls` defaults to port 587; `security: ssl` defaults to port 465. Certificate verification is enabled; plaintext SMTP is not supported. Authentication is used when `username` is present and then requires `password`. |
 | Feishu | `webhook`; optional `secret` | Sends a custom bot text message to `https://open.feishu.cn/open-apis/bot/v2/hook/...`. If signing is enabled on the bot, set `secret`; otherwise omit it. A successful response requires `code: 0`. This is a Feishu custom bot, not an application bot or Lark endpoint. |
 
-All channels accept `timeout_seconds` (default 30, greater than 0 and at most 300). Telegram and email also accept legacy `target` in place of `chat_id` and `to`, respectively. Email defaults to subject `Sluice notification`.
+All channels accept `timeout_seconds` (default 30, greater than 0 and at most 300). This is the only thing that bounds a hung send; the Node-level `timeout` does not interrupt it (see [Timeouts](operations.md#timeouts)). For Telegram, Feishu, and email it applies to each connect, read, or write step, not to the whole send. Telegram and email also accept legacy `target` in place of `chat_id` and `to`, respectively. Email defaults to subject `Sluice notification`.
 
 Supply the environment variables used in the example through your shell or secret manager:
 

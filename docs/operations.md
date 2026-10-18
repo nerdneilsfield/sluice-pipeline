@@ -72,6 +72,12 @@ prefect_tick('/absolute/path/definition.yml')
 
 To install the extras from PyPI, run `pip install 'sluice-pipeline[web,ui,prefect]'`. From a checkout, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use.
 
+## Timeouts
+
+The Source and Delivery `timeout` does not cancel anything. It is compared with the attempt's start time only at the top of a reconcile pass, before new work is dispatched, and a Delivery worker blocks until its Sink call returns. A hung Sink or Source in the running process is therefore not interrupted, and because the pass that started the call waits for it, the check cannot fire in that process before the call returns. `timeout` only reclaims a row that is still `running` when a later pass looks at it: the row is marked failed, a late result from the old attempt is ignored, and the retry budget decides what happens next. A `running` row left by an earlier process is recovered when the database is opened, with or without `timeout`.
+
+Bound hung calls with request timeouts instead: `timeout_seconds` on the `json_api`, `hacker_news`, `github_trending`, `github_activity`, `webhook`, `telegram`, `feishu`, and `email` senders (default 30, at most 300), `llm.timeout_seconds`, and the `timeout` and `connect_timeout` of web providers. Stage `timeout` is different: it also passes a deadline to web fetches made by that Stage.
+
 ## Database lock
 
 The runtime uses `fcntl` file locking and targets Unix-like systems. Only one App can own a database at a time, so a second process opened against the same database cannot run while the first holds it. This applies to `tick`, the other execution commands, the UI, and `prefect_tick` alike.
