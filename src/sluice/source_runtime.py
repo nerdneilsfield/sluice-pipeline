@@ -496,7 +496,7 @@ def _recover_source_execution(app: App, execution_id: int, at: datetime) -> int 
     expected_json: str | None = None
     with write_transaction(app.conn):
         row = app.conn.execute(
-            "SELECT * FROM executions WHERE id=? AND kind='source' AND state IN ('queued','running')",
+            "SELECT * FROM executions WHERE id=? AND kind='source' AND state='running'",
             (execution_id,),
         ).fetchone()
         if row is None:
@@ -506,7 +506,7 @@ def _recover_source_execution(app: App, execution_id: int, at: datetime) -> int 
         expected_json = row["expected_checkpoint_json"]
         guard = app.conn.execute(
             "UPDATE executions SET state='failed',error=?,finished_at=? WHERE id=? "
-            "AND kind='source' AND state IN ('queued','running')",
+            "AND kind='source' AND state='running'",
             ("startup recovery", at_text, execution_id),
         )
         if guard.rowcount != 1:

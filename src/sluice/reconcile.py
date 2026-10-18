@@ -1485,10 +1485,11 @@ def recover_startup(app: App, at: datetime) -> None:
                         (execution_id,),
                     )
             continue
-        if kind == "source":
-            _recover_source_execution(app, execution_id, at)
-        else:
+        if kind == "stage":
             _fail_execution(app, execution_id, ExecutionError("startup recovery"), at)
+        elif row["state"] == "running":
+            # A queued Source retry never started: it keeps its retry budget.
+            _recover_source_execution(app, execution_id, at)
 
     _recover_deliveries(app, at)
 

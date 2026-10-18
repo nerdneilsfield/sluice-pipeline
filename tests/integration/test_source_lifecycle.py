@@ -466,3 +466,47 @@ sources:
         ).fetchone()[0]
         == 0
     )
+
+
+FLAKY_CALLS = []
+
+
+def flaky_collect(config, checkpoint):
+    FLAKY_CALLS.append(checkpoint)
+    if len(FLAKY_CALLS) == 1:
+        raise RuntimeError("first attempt fails")
+    return SourceResult((SourceRecord("a", {"title": "A"}),), "cursor")
+
+
+def test_restart_keeps_the_retry_budget_of_a_queued_source_retry(tmp_path):
+    from sluice.reconcile import tick
+
+    FLAKY_CALLS.clear()
+    definition = tmp_path / "source-restart.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources:
+  feed: {use: tests.integration.test_source_lifecycle.flaky_collect, retries: 1, with: {}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+    with pytest.raises(ExecutionError):
+        collect_source(app, "feed", source_recovery_instant(0))
+    app.close()
+
+    for _ in range(2):
+        app = open_app(definition, tmp_path / "state.db")
+        states = app.conn.execute(
+            "SELECT id,state,retry_count FROM executions ORDER BY id"
+        ).fetchall()
+        assert [tuple(row)[1:] for row in states] == [("failed", 0), ("queued", 1)]
+        app.close()
+
+    app = open_app(definition, tmp_path / "state.db")
+    tick(app, source_recovery_instant(5))
+    assert [
+        row[0] for row in app.conn.execute("SELECT state FROM executions ORDER BY id")
+    ] == ["failed", "succeeded"]
