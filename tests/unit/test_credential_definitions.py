@@ -110,6 +110,20 @@ def test_env_and_plain_headers_are_accepted(tmp_path):
     )
 
 
+def test_session_and_private_named_headers_stay_literal(tmp_path):
+    headers = "headers: {X-Session-Id: abc, X-Private-Mode: 'true'}"
+    load_definition(
+        write_one(
+            tmp_path,
+            (
+                "sluice.sources.json_api",
+                f"url: 'https://a.example.test/x', id_field: id, {headers}",
+            ),
+            f"url: env:HOOK_URL, {headers}",
+        )
+    )
+
+
 def write_sink(tmp_path, use, with_):
     path = tmp_path / "d.yml"
     path.write_text(f"""version: 1

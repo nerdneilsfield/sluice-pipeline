@@ -248,7 +248,7 @@ Authored configuration is stored in SQLite as written, and the binding identity 
 These rules are checked when the definition loads, so a literal credential is rejected before anything is written to SQLite. The error names the key, never the value.
 
 - `github_activity` `token`, Telegram `bot_token`, email `password`, Feishu `webhook` and `secret`, and `webhook` `url` must be exactly `env:NAME`. Webhook URLs usually carry the secret in the path or query, which cannot be detected reliably in a literal, so the whole URL is env-only.
-- A `json_api` or `webhook` header whose name contains `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `api-key`, `apikey`, `token`, `secret`, `signature`, `subscription-key`, `access-key`, `x-auth`, `session`, `private`, or `credential` (case-insensitive) must have an exact `env:NAME` value. Other headers, such as `X-Source: sluice`, stay literal.
+- A `json_api` or `webhook` header whose name contains `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `api-key`, `apikey`, `token`, `secret`, `signature`, `subscription-key`, `access-key`, `x-auth`, or `credential` (case-insensitive) must have an exact `env:NAME` value. Other headers, such as `X-Source: sluice` or `X-Session-Id`, stay literal.
 
 | Place | `env:` accepted | Notes |
 | --- | --- | --- |

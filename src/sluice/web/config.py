@@ -373,8 +373,6 @@ SENSITIVE_HEADER_PARTS = (
     "subscription-key",
     "access-key",
     "x-auth",
-    "session",
-    "private",
     "credential",
 )
 
