@@ -305,7 +305,7 @@ docker run --rm \
   --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Files appear on the host under `output/stories/`. The image sets no `USER`, so the container writes as root: the files and any directory the container creates are owned by root, and files are mode `0600`. To read them as a normal user, run `sudo chown -R "$USER" output` after the run. Create `output` yourself before the first run; if Docker creates the mount point it is also owned by root.
+Files appear on the host under `output/stories/`. The container runs as uid 10001, so `output` (and `data`) must be writable by it: create them yourself, then run `sudo chown -R 10001:10001 output data`, or add `--user "$(id -u):$(id -g)"` to `docker run`. Files are mode `0600` and owned by whichever uid ran the container; with the default user, `sudo chown -R "$USER" output` makes them readable after the run. If Docker creates the mount point it is owned by root and the container cannot write to it.
 
 ## See also
 

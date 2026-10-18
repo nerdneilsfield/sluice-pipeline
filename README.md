@@ -56,7 +56,7 @@ docker run --rm \
   --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Replace `configs/definition.yml` with your definition. The image sets no `USER`, so the container writes files in the mounted state directory as root. A definition that uses a custom Sink or other dotted-path callable needs that module importable inside the container, for example by mounting it under `/app/configs` and adding `-e PYTHONPATH=/app/configs`.
+Replace `configs/definition.yml` with your definition. The container runs as the unprivileged user `sluice` (uid/gid 10001), so a host directory mounted at `/app/data` must be writable by it: run `sudo chown -R 10001:10001 ./data` once, or pass `--user "$(id -u):$(id -g)"` to `docker run` to write as your own user. A definition that uses a custom Sink or other dotted-path callable needs that module importable inside the container, for example by mounting it under `/app/configs` and adding `-e PYTHONPATH=/app/configs`.
 
 ### From source
 

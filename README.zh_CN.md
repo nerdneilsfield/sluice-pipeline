@@ -56,7 +56,7 @@ docker run --rm \
   --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-请把 `configs/definition.yml` 换成你自己的定义。镜像没有设置 `USER`，容器会以 root 身份写入挂载的状态目录。如果定义使用自定义 Sink 或其他通过点分路径指定的可调用对象，对应的模块必须能在容器内导入，例如把它挂载到 `/app/configs` 下，并加上 `-e PYTHONPATH=/app/configs`。
+请把 `configs/definition.yml` 换成你自己的定义。容器以非特权用户 `sluice`（uid/gid 10001）运行，因此挂载到 `/app/data` 的宿主机目录必须对该用户可写：执行一次 `sudo chown -R 10001:10001 ./data`，或在 `docker run` 中加上 `--user "$(id -u):$(id -g)"`，以你自己的用户身份写入。如果定义使用自定义 Sink 或其他通过点分路径指定的可调用对象，对应的模块必须能在容器内导入，例如把它挂载到 `/app/configs` 下，并加上 `-e PYTHONPATH=/app/configs`。
 
 ### 从源码安装
 

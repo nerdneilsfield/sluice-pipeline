@@ -22,6 +22,8 @@ Rows already stored in an existing database are not rewritten. Delivery configur
 
 Template fields that hold a list or an object now render as compact JSON, for example `["a","b"]`, instead of a Python representation such as `('a', 'b')`. The rendered text is part of the rendered Item's identity, so a template that references such a field produces new Items after the upgrade, and each new Item gets a new Delivery: affected messages may be sent once more. Templates that reference only strings, numbers, or indexed members like `{author[name]}` are unaffected.
 
+The Docker image no longer runs as root. It runs as uid/gid 10001 (`sluice`), so a host directory mounted at `/app/data` that was created by an earlier root-run container must be handed over: `sudo chown -R 10001:10001 ./data`, or run the container with `--user "$(id -u):$(id -g)"`.
+
 ## Design contracts and custom callables
 
 Configuration and extension contracts are documented in the [core design](superpowers/specs/2026-08-14-sluice-v4-cleanroom-design.md) and [web design](superpowers/specs/2026-08-18-sluice-v4-web-content-pipeline-design.md).

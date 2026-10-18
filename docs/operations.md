@@ -58,6 +58,10 @@ A wildcard bind (`--host 0.0.0.0` or `--host ::`, as used when the UI runs in a 
 
 Stop the UI before running another process against the same database; see [Database lock](#database-lock).
 
+## Run in Docker
+
+The image runs as the unprivileged user `sluice` (uid/gid 10001), not root. A host directory mounted at `/app/data` (or any other output path) must be writable by that uid: run `sudo chown -R 10001:10001 ./data` once, or start the container with `--user "$(id -u):$(id -g)"`. Without that, the first write fails with `Permission denied`.
+
 ## Prefect
 
 With the `prefect` extra installed, call the same runtime through:
