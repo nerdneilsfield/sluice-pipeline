@@ -129,7 +129,7 @@ sluice retry-delivery definition.yml DELIVERY_KEY --at 2026-09-22T00:00:00Z
 sluice ui definition.yml --host 127.0.0.1 --port 8000
 ```
 
-请把 `definition.yml`、Pipeline/Node 名称、执行 ID `42` 和 `DELIVERY_KEY` 换成你部署中的实际值。如果 Sink 没有遵守稳定的 Delivery key，重试 Delivery 可能重复产生外部副作用。管理 UI 带有修改类操作，且没有认证；请只把它绑定在可信的本地接口上。
+请把 `definition.yml`、Pipeline/Node 名称、执行 ID `42` 和 `DELIVERY_KEY` 换成你部署中的实际值。如果 Sink 没有遵守稳定的 Delivery key，重试 Delivery 可能重复产生外部副作用。管理 UI 带有修改类操作，且没有认证；请只把它绑定在可信的本地接口上。它会拒绝跨站请求，以及 `Host` 头不符的请求。
 
 [Operate Sluice](docs/operations.md) 介绍如何用 cron 调度 `tick`，rebuild 和重试的语义，UI、Prefect、数据库锁，以及如何查看状态。
 

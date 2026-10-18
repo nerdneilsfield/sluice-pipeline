@@ -74,7 +74,7 @@ def test_management_read_model_states_counts_and_actions(tmp_path):
     assert summary.pending_count == 1
     detail = pipeline_detail(app, "daily_digest")
     pass_node = next(node for node in detail.nodes if node.name == "pass")
-    client = create_ui(app).test_client()
+    client = create_ui(app, port=80).test_client()
     listing = client.get("/pipelines")
     detail_page = client.get("/pipelines/daily_digest")
     assert listing.status_code == detail_page.status_code == 200
@@ -106,7 +106,7 @@ def test_management_read_model_states_counts_and_actions(tmp_path):
 )
 def test_ui_actions_are_refused_after_app_close(tmp_path, path):
     app = management_app(tmp_path)
-    client = create_ui(app).test_client()
+    client = create_ui(app, port=80).test_client()
     app.close()
 
     assert client.post(path).status_code == 404
@@ -114,7 +114,7 @@ def test_ui_actions_are_refused_after_app_close(tmp_path, path):
 
 def test_ui_action_holds_app_admission_so_close_waits_for_it(tmp_path, monkeypatch):
     app = management_app(tmp_path)
-    client = create_ui(app).test_client()
+    client = create_ui(app, port=80).test_client()
     admitted = []
     entered = Event()
     release = Event()
@@ -135,3 +135,40 @@ def test_ui_action_holds_app_admission_so_close_waits_for_it(tmp_path, monkeypat
         release.set()
         request.join(timeout=5)
     app.close()
+
+
+def test_ui_refuses_cross_site_and_foreign_host_requests(tmp_path):
+    app = management_app(tmp_path)
+    client = create_ui(app, port=80).test_client()
+    path = "/executions/1/rebuild"
+
+    for headers in (
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Site": "same-site"},
+        {"Origin": "http://evil.example"},
+        {"Origin": "null"},
+    ):
+        assert client.post(path, headers=headers).status_code == 403
+    assert client.get("/pipelines", headers={"Host": "evil.example"}).status_code == 403
+    assert client.get("/pipelines", headers={"Host": "localhost:9"}).status_code == 403
+
+    for headers in (
+        {},
+        {"Sec-Fetch-Site": "same-origin", "Origin": "http://localhost"},
+        {"Sec-Fetch-Site": "none"},
+    ):
+        assert client.post(path, headers=headers).status_code != 403
+    assert client.get("/pipelines", headers={"Host": "[::1]"}).status_code == 200
+
+
+def test_ui_bound_to_non_loopback_host_allows_only_that_host(tmp_path):
+    app = management_app(tmp_path)
+    client = create_ui(app, host="ui.internal", port=8000).test_client()
+
+    assert (
+        client.get("/pipelines", headers={"Host": "ui.internal:8000"}).status_code
+        == 200
+    )
+    assert (
+        client.get("/pipelines", headers={"Host": "localhost:8000"}).status_code == 403
+    )

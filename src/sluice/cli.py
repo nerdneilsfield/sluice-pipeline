@@ -87,7 +87,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             # construction and ``--help``.
             from .ui import create_ui
 
-            create_ui(app).run(host=args.host, port=args.port)
+            create_ui(app, host=args.host, port=args.port).run(
+                host=args.host, port=args.port
+            )
         else:  # pragma: no cover - argparse constrains command values.
             raise AssertionError(f"unknown command: {args.command!r}")
     finally:

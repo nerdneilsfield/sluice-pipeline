@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import UTC, datetime
 
 from .errors import ExecutionError
@@ -14,17 +15,54 @@ from .read_model import (
 )
 
 
-def create_ui(app):
+def _is_loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
+def create_ui(app, host: str = "127.0.0.1", port: int = 8000):
     """Create the HTML-only management application for one open ``App``.
+
+    ``host`` and ``port`` are the address the server binds.  Requests are
+    refused unless their ``Host`` header names that address (or, for a
+    loopback bind, any loopback name), which defeats DNS rebinding, and state
+    changing requests must come from the same origin.
 
     Flask is imported here, rather than by the core package or CLI parser, so
     installations without the optional ``ui`` extra retain all local runtime
     commands.
     """
 
-    from flask import Flask, abort, redirect, render_template_string, url_for
+    from flask import Flask, abort, redirect, render_template_string, request, url_for
 
     web = Flask(__name__)
+
+    bound = host.strip("[]").lower()
+    if ":" in bound:
+        bound = f"[{bound}]"
+    names = {bound}
+    if _is_loopback(bound):
+        names |= {"localhost", "127.0.0.1", "[::1]"}
+    # A browser omits the port when it is the HTTP default.
+    allowed_hosts = {f"{name}:{port}" for name in names}
+    if port == 80:
+        allowed_hosts |= names
+
+    @web.before_request
+    def refuse_foreign_requests():
+        if request.host.lower() not in allowed_hosts:
+            abort(403)
+        if request.method == "POST":
+            if request.headers.get("Sec-Fetch-Site", "same-origin") not in {
+                "same-origin",
+                "none",
+            }:
+                abort(403)
+            origin = request.headers.get("Origin")
+            if origin is not None and origin != f"{request.scheme}://{request.host}":
+                abort(403)
 
     @web.get("/")
     def home():
