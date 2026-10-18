@@ -359,6 +359,31 @@ def _provider_base_url(spec: Mapping[str, object], typ: str, label: str) -> str 
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
+# Shared by the load-time literal check and the cross-origin redirect strip.
+SENSITIVE_HEADER_PARTS = (
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "set-cookie",
+    "api-key",
+    "apikey",
+    "token",
+    "secret",
+    "signature",
+    "subscription-key",
+    "access-key",
+    "x-auth",
+    "session",
+    "private",
+    "credential",
+)
+
+
+def is_sensitive_header_name(name: str) -> bool:
+    lowered = name.casefold()
+    return any(part in lowered for part in SENSITIVE_HEADER_PARTS)
+
+
 def decode_headers(
     value: object, label: str, *, cookies: bool = False
 ) -> Mapping[str, object]:
@@ -374,19 +399,7 @@ def decode_headers(
                 f"{label} contains duplicate case-insensitive header names"
             )
         seen_names.add(normalized_name)
-        sensitive = cookies or any(
-            token in key.casefold()
-            for token in (
-                "authorization",
-                "proxy-authorization",
-                "cookie",
-                "set-cookie",
-                "api-key",
-                "token",
-                "secret",
-                "signature",
-            )
-        )
+        sensitive = cookies or is_sensitive_header_name(key)
         if sensitive:
             result[key] = _env_reference(item, f"{label}.{key}")
         elif not isinstance(item, str):

@@ -309,6 +309,42 @@ def test_cross_host_redirect_drops_sensitive_header_name_fragments_before_send(
     assert transport.requests[1][1]["X-Trace"] == "keep"
 
 
+def test_cross_host_redirect_drops_vendor_credential_headers(monkeypatch):
+    transport = _FakeTransport(
+        [
+            DirectResponse(
+                status_code=302,
+                headers={"location": "https://other.test/next"},
+                peer="93.184.216.34",
+                url="https://example.test/article",
+            ),
+            DirectResponse(
+                status_code=200,
+                headers={"content-type": "text/plain"},
+                body=b"ok",
+                peer="93.184.216.34",
+                url="https://other.test/next",
+            ),
+        ],
+        requests=[],
+    )
+    monkeypatch.setattr("sluice.web.url.resolve_host", lambda host: ["93.184.216.34"])
+    sensitive = {
+        "Ocp-Apim-Subscription-Key": "k1",
+        "X-Access-Key": "k2",
+        "X-Auth": "k3",
+    }
+    binding = ProviderBinding(
+        "direct", "httpx", target_headers={**sensitive, "X-Trace": "keep"}
+    )
+    bounded_manual_get(_request(), binding, transport=transport)
+
+    assert transport.requests is not None
+    assert all(name in transport.requests[0][1] for name in sensitive)
+    assert all(name not in transport.requests[1][1] for name in sensitive)
+    assert transport.requests[1][1]["X-Trace"] == "keep"
+
+
 def test_cross_host_redirect_to_service_endpoint_is_rejected_before_send(monkeypatch):
     transport = _FakeTransport(
         [

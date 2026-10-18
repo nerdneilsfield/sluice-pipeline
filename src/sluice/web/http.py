@@ -21,6 +21,7 @@ import httpcore
 import httpx
 
 from ..errors import WebSafetyError
+from .config import is_sensitive_header_name
 from .contracts import (
     STABLE_FAILURE_REASONS,
     FetchRequest,
@@ -41,25 +42,6 @@ from .url import (
 )
 
 MAX_BODY_BYTES = 10_485_760
-_SENSITIVE_HEADER_NAMES = frozenset(
-    {
-        "authorization",
-        "proxy-authorization",
-        "cookie",
-        "set-cookie",
-    }
-)
-_SENSITIVE_HEADER_PARTS = (
-    "authorization",
-    "proxy-authorization",
-    "cookie",
-    "set-cookie",
-    "api-key",
-    "apikey",
-    "token",
-    "secret",
-    "signature",
-)
 _INTERNAL_SAFETY_REASONS = frozenset(STABLE_FAILURE_REASONS) | frozenset(
     {
         "peer_mismatch",
@@ -672,13 +654,6 @@ def _invoke_callable(
     raise _error("network")
 
 
-def _sensitive_header(name: str) -> bool:
-    lowered = name.casefold()
-    return lowered in _SENSITIVE_HEADER_NAMES or any(
-        part in lowered for part in _SENSITIVE_HEADER_PARTS
-    )
-
-
 def _merge_target_headers(
     request: FetchRequest, binding: ProviderBinding
 ) -> dict[str, str]:
@@ -759,7 +734,7 @@ def _strip_sensitive_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {
         name: value
         for name, value in headers.items()
-        if not _sensitive_header(str(name))
+        if not is_sensitive_header_name(str(name))
     }
 
 

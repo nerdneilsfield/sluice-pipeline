@@ -63,7 +63,16 @@ def test_github_activity_env_token_is_accepted(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "name", ["authorization", "Authorization", "X-Api-Key", "X-Auth-Token"]
+    "name",
+    [
+        "authorization",
+        "Authorization",
+        "X-Api-Key",
+        "X-Auth-Token",
+        "Ocp-Apim-Subscription-Key",
+        "X-Access-Key",
+        "X-Auth",
+    ],
 )
 def test_json_api_sensitive_literal_header_is_rejected(tmp_path, name):
     path = write_one(
