@@ -319,3 +319,36 @@ def instant(seconds: int) -> datetime:
 )
 def test_freeze_eligibility_is_pure(policy, count, first, now, due, expected):
     assert freeze_eligible(policy, count, first, now, due) is expected
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schedule", "999999999h"),
+        ("schedule", "8785h"),
+        ("timeout", "999999999h"),
+        ("timeout", "169h"),
+        ("timeout", "10081m"),
+    ],
+)
+def test_schedule_and_timeout_are_bounded(tmp_path, field, value):
+    path = tmp_path / "d.yml"
+    path.write_text(
+        "version: 1\nsources:\n"
+        f"  feed: {{use: tests.unit.test_collection_and_graph.sink_callable, {field}: {value}}}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(DefinitionError, match=f"invalid sources.feed.{field}"):
+        load_definition(path)
+
+
+def test_schedule_and_timeout_accept_their_maximum(tmp_path):
+    path = tmp_path / "d.yml"
+    path.write_text(
+        "version: 1\nsources:\n"
+        "  feed: {use: tests.unit.test_collection_and_graph.sink_callable, schedule: 8784h, timeout: 168h}\n",
+        encoding="utf-8",
+    )
+    source = load_definition(path).sources["feed"]
+    assert source.schedule == timedelta(days=366)
+    assert source.policy.timeout == timedelta(days=7)

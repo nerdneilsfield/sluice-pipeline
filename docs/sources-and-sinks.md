@@ -18,7 +18,7 @@ A complete runnable definition is [examples/hn-to-files.yml](../examples/hn-to-f
 
 ## Rules shared by all Sources
 
-- **Scheduling.** Source-level `schedule` (`<n>m` or `<n>h`), `timeout` (`<n>s`, `<n>m`, or `<n>h`), and `retries` sit beside `with`, not inside it. Set `schedule` on any Source that `tick` should poll repeatedly.
+- **Scheduling.** Source-level `schedule` (`<n>m` or `<n>h`), `timeout` (`<n>s`, `<n>m`, or `<n>h`), and `retries` sit beside `with`, not inside it. Set `schedule` on any Source that `tick` should poll repeatedly. Every `schedule` and `max_wait` interval (Source or Node) is at most 366 days, and every `timeout` is at most 7 days.
 - **Stateless collection.** `json_api`, `hacker_news`, `github_trending`, and `github_activity` keep no checkpoint. They fetch the current window on every run and rely on Item identity to drop repeats. An entry that leaves the window (for example, drops out of the first `limit` Hacker News ids) before the next run is never collected, so schedule runs often enough for the window you read.
 - **Failure.** A failed request fails the whole collection. No partial records are published. Error text is a fixed message plus the HTTP status where there is one; it never contains the URL, query, header values, token, or response body.
 - **Unknown keys.** The four network Sources and the `webhook` and `file` Sinks reject any key not listed for them. The error is raised when the Source runs or the Sink sends, not when the definition loads. The exception is credentials: see [Credentials](#credentials).

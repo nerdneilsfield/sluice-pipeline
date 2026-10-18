@@ -8,7 +8,7 @@
 llm:
   base_url: https://api.example.com/v1   # http(s) with a host; no userinfo, query or fragment
   api_key: env:LLM_API_KEY               # optional; exact env:NAME only, literal keys are rejected
-  timeout_seconds: 60                    # optional, finite and > 0
+  timeout_seconds: 60                    # optional, > 0 and <= 3600
   max_attempts: 3                        # optional, integer >= 1
 ```
 
@@ -16,7 +16,7 @@ llm:
 | --- | --- | --- | --- |
 | `base_url` | yes | none | `http` or `https` URL with a host; no userinfo, query, or fragment. |
 | `api_key` | no | none | Exact `env:NAME` reference only. Literal keys are rejected. |
-| `timeout_seconds` | no | 60 | Finite number greater than 0. |
+| `timeout_seconds` | no | 60 | Finite number greater than 0 and at most 3600. |
 | `max_attempts` | no | 3 | Integer, 1 or greater. |
 
 The App resolves the `env:NAME` reference when it starts.

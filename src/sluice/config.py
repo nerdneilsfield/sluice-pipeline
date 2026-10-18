@@ -276,8 +276,13 @@ def thaw_json(value: object) -> object:
     return value
 
 
+_MAX_INTERVAL_MINUTES = 366 * 24 * 60
+_MAX_TIMEOUT_SECONDS = 7 * 24 * 3600
+_MAX_LLM_TIMEOUT_SECONDS = 3600
+
+
 def parse_interval(text: str) -> timedelta:
-    """Parse a positive whole-minute/hour interval (``m`` or ``h``)."""
+    """Parse a positive whole-minute/hour interval (``m`` or ``h``), at most 366 days."""
 
     if not isinstance(text, str):
         raise DefinitionError("duration must be a positive integer followed by m or h")
@@ -285,14 +290,14 @@ def parse_interval(text: str) -> timedelta:
     if not match:
         raise DefinitionError("duration must be a positive integer followed by m or h")
     amount, unit = int(match.group(1)), match.group(2)
-    try:
-        return timedelta(minutes=amount) if unit == "m" else timedelta(hours=amount)
-    except OverflowError as error:
-        raise DefinitionError("duration is too large") from error
+    minutes = amount * (1 if unit == "m" else 60)
+    if minutes > _MAX_INTERVAL_MINUTES:
+        raise DefinitionError("duration must be at most 366 days")
+    return timedelta(minutes=minutes)
 
 
 def parse_timeout(text: str) -> timedelta:
-    """Parse a positive whole-second/minute/hour timeout."""
+    """Parse a positive whole-second/minute/hour timeout, at most 7 days."""
 
     if not isinstance(text, str):
         raise DefinitionError(
@@ -304,14 +309,10 @@ def parse_timeout(text: str) -> timedelta:
             "timeout must be a positive integer followed by s, m, or h"
         )
     amount, unit = int(match.group(1)), match.group(2)
-    try:
-        return {
-            "s": timedelta(seconds=amount),
-            "m": timedelta(minutes=amount),
-            "h": timedelta(hours=amount),
-        }[unit]
-    except OverflowError as error:
-        raise DefinitionError("timeout is too large") from error
+    seconds = amount * {"s": 1, "m": 60, "h": 3600}[unit]
+    if seconds > _MAX_TIMEOUT_SECONDS:
+        raise DefinitionError("timeout must be at most 7 days")
+    return timedelta(seconds=seconds)
 
 
 def _optional_interval(value: object, label: str) -> timedelta | None:
@@ -658,9 +659,11 @@ def _decode_llm_config(value: object) -> LLMConfig | None:
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
         or not math.isfinite(timeout)
-        or timeout <= 0
+        or not 0 < timeout <= _MAX_LLM_TIMEOUT_SECONDS
     ):
-        raise DefinitionError("llm.timeout_seconds must be a finite positive number")
+        raise DefinitionError(
+            "llm.timeout_seconds must be a finite number greater than 0 and at most 3600"
+        )
     max_attempts = _integer(spec.get("max_attempts", 3), "llm.max_attempts", minimum=1)
     return LLMConfig(
         base_url=base_url,
