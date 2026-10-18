@@ -18,7 +18,7 @@ if flow is None:  # pragma: no cover - exercised only without the optional extra
 
     def prefect_tick(
         definition_path: str,
-        db_path: str,
+        db_path: str | None = None,
         at: datetime | None = None,
     ) -> None:
         """Report that the optional Prefect dependency is not installed."""
@@ -33,7 +33,7 @@ else:
     @flow(name="sluice-tick")
     def prefect_tick(
         definition_path: str,
-        db_path: str,
+        db_path: str | None = None,
         at: datetime | None = None,
     ) -> None:
         """Run one Sluice tick through Prefect without a second state machine."""

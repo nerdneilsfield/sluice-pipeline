@@ -67,3 +67,9 @@ def test_prefect_flow_and_local_tick_produce_identical_sqlite_state(tmp_path):
     assert runtime_summary(local.conn) == runtime_summary(
         sqlite3.connect(tmp_path / "prefect.db")
     )
+
+
+def test_prefect_flow_without_db_path_uses_the_definition_database(tmp_path):
+    definition = write_acceptance_definition(tmp_path)
+    prefect_tick(str(definition), at=instant(0))
+    assert runtime_summary(sqlite3.connect(tmp_path / "state.db"))[2] == ("a",)

@@ -65,8 +65,10 @@ With the `prefect` extra installed, call the same runtime through:
 ```python
 from sluice.prefect_flow import prefect_tick
 
-prefect_tick('/absolute/path/definition.yml', '/absolute/path/state.db')
+prefect_tick('/absolute/path/definition.yml')
 ```
+
+`db_path` is optional. Without it, the flow uses the definition's `database` (relative to the YAML file), exactly like `sluice tick`. Pass `prefect_tick('/absolute/path/definition.yml', '/absolute/path/state.db')` to override the database for that run.
 
 To install the extras from PyPI, run `pip install 'sluice-pipeline[web,ui,prefect]'`. From a checkout, run `pip install '.[web,ui,prefect]'` from the repository root, or pass the checkout path instead of `.`. Omit extras you do not use.
 
