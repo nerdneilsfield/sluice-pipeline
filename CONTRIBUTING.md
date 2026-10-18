@@ -49,9 +49,12 @@ docker run --rm sluice-pipeline:local --help
 The container includes the `web`, `ui`, and `prefect` runtime extras, not dev/test
 tools. Mount definitions and writable state directories when running a pipeline.
 
-The Docker and PyPI workflows run when a `v*.*.*` tag is pushed and require the
-tag version to match `pyproject.toml`. Pushing a release tag triggers real
-uploads to these destinations:
+The Docker and PyPI workflows run when a `v*.*.*` tag is pushed. Before
+anything is built, each one runs the full CI (lint and tests) and checks that
+the tag version matches `pyproject.toml` and that the tagged commit is already
+on `master`. Push the release commit to `master` first, then push the tag; a tag
+pushed first fails both workflows. Pushing a release tag triggers real uploads
+to these destinations:
 
 - PyPI: `sluice-pipeline`, using trusted publishing in the `pypi` GitHub environment.
 - GHCR: `ghcr.io/nerdneilsfield/sluice-pipeline`, using `GITHUB_TOKEN`.
