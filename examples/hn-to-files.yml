@@ -1,4 +1,4 @@
-# Writes one text file per Hacker News story to ./hn-files/stories/. No credentials needed.
+# Writes one text file per Hacker News story to examples/hn-files/stories/ (file_root: hn-files, relative to this file). No credentials needed.
 # The first run emits up to `limit` stories; later runs write only new ones.
 version: 1
 database: hn-to-files.db

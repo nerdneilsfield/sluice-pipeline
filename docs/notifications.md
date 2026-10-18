@@ -62,6 +62,8 @@ Telegram messages exceeding 4096 UTF-16 units and Feishu request bodies exceedin
 
 Delivery retries are not exactly-once external delivery. If a remote server accepts a message but the response is lost, retrying can send it again. SMTP uses a stable `Message-ID` derived from the Delivery key, but mail servers are not required to deduplicate it. Telegram and Feishu custom webhook APIs do not use the Sluice Delivery key as an idempotency key. Partial SMTP recipient acceptance can also produce duplicates on retry; use one recipient per Delivery for independent outcomes.
 
+The Telegram, Feishu, and webhook senders ignore `HTTP_PROXY`, `HTTPS_PROXY`, and the other proxy environment variables. This is by design: the address policy has to apply to the host that is actually connected to, and a proxy would replace it. Email connects to the SMTP host directly.
+
 Protocol tests use HTTP and SMTP fakes, including signed Feishu bodies, environment-secret handling, vendor failures, and three sibling Deliveries without injected clients. Live delivery still needs validation with your accounts; no credentials were available during implementation.
 
 References: [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage), [Feishu custom bots](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot?lang=zh-CN).

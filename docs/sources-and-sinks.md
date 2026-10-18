@@ -188,6 +188,8 @@ Writes one file per Delivery.
 
 By default `json_api` and `webhook` connect only to public addresses. The guard resolves the host name, checks every returned address, and pins the connection to the checked addresses. It blocks loopback, private (RFC 1918 and other private ranges), link-local, multicast, reserved, and unspecified addresses, and the carrier-grade NAT range `100.64.0.0/10`. The link-local block covers cloud metadata addresses. If DNS returns both public and non-public addresses, the request is refused. URLs with user info (`user:pass@host`) are refused.
 
+HTTP Sources and the `webhook` Sink ignore `HTTP_PROXY`, `HTTPS_PROXY`, and the other proxy environment variables (`trust_env=False`), so the address policy stays authoritative: the connection goes to the address that was checked, not to a proxy. A deployment that can reach the target only through a proxy needs a different route to it.
+
 To reach a receiver on a private network, allow it explicitly. These keys exist on `json_api` and the `webhook` Sink only; the fixed-host Sources (`hacker_news`, `github_trending`, `github_activity`) reject them.
 
 | Key | Meaning |
