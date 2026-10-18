@@ -38,7 +38,7 @@ from sluice.contracts import (
 )
 from sluice.errors import DefinitionError, ExecutionError, GraphError
 from sluice.sinks.file import SINK_PATH as FILE_SINK
-from sluice.sinks.file import resolve_file_root, resolve_inside
+from sluice.sinks.file import check_options, resolve_file_root, resolve_inside
 from sluice.sources.github_activity import TOKEN_REFERENCE
 from sluice.web.config import (
     WebRegistryConfig,
@@ -687,6 +687,7 @@ def _decode_definition(raw: Mapping[str, object], base_dir: Path) -> Definition:
     for pipeline in pipelines.values():
         for node in pipeline.nodes.values():
             if node.deliver is not None and node.deliver.use == FILE_SINK:
+                check_options(node.deliver.with_config, DefinitionError)
                 resolve_inside(
                     root, node.deliver.with_config.get("directory"), DefinitionError
                 )

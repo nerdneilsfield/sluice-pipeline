@@ -178,6 +178,7 @@ Writes one file per Delivery.
 | `directory` | string | required | Relative to [`file_root`](#file-root-and-docker), or absolute and inside it. Created if missing. |
 | `extension` | string | `txt` | `txt` or `md` |
 
+- Unknown option names and an `extension` other than `txt` or `md` fail when the definition loads.
 - The file is `<directory>/<delivery_key>.<extension>`, and the name is the Delivery's `external_id`. File names come only from the Delivery key, never from payload content.
 - Content: a string is written as is. A mapping with a string `content` field writes that field. Any other value is written as canonical JSON. Empty or whitespace-only content fails the Delivery, and so does content over 10 MiB.
 - A retry rewrites identical content to the same name. A changed rendered payload has a new Delivery key and so a new file; old files are kept. There is no append mode.

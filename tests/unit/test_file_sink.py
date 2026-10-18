@@ -182,3 +182,20 @@ def test_changing_file_root_keeps_the_delivery_key(tmp_path):
         app.close()
     assert [r[0] for r in rows] == [before]
     assert not os.path.exists(tmp_path / "data" / "reports")
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ("dirctory: x", "does not support option dirctory"),
+        ("extension: exe", "extension must be txt or md"),
+        ("extension: {a: 1}", "extension must be txt or md"),
+    ],
+)
+def test_load_rejects_bad_file_sink_options(tmp_path, options, message):
+    path = write_definition(tmp_path)
+    path.write_text(
+        path.read_text().replace("{directory: 'out'}", f"{{directory: out, {options}}}")
+    )
+    with pytest.raises(DefinitionError, match=message):
+        load_definition(path)

@@ -10,7 +10,6 @@ from pathlib import Path
 
 from ..contracts import JSONValue
 from ..errors import ExecutionError
-from ..sources._http import check_keys
 from ._common import message_text
 
 SINK_PATH = "sluice.sinks.file"
@@ -38,6 +37,16 @@ def resolve_inside(root: Path, directory: object, error: type[Exception]) -> Pat
     return resolved
 
 
+def check_options(config: Mapping[str, JSONValue], error: type[Exception]) -> None:
+    """Reject unknown option names and an invalid ``extension``."""
+
+    for key in config:
+        if key not in _KEYS:
+            raise error(f"File Sink does not support option {key}")
+    if config.get("extension", "txt") not in ("txt", "md"):
+        raise error("File Sink extension must be txt or md")
+
+
 def send(
     config: Mapping[str, JSONValue],
     payload: JSONValue,
@@ -45,10 +54,8 @@ def send(
     *,
     file_root: Path | None,
 ) -> str:
-    check_keys(config, _KEYS, "File Sink")
+    check_options(config, ExecutionError)
     extension = config.get("extension", "txt")
-    if extension not in {"txt", "md"}:
-        raise ExecutionError("File Sink extension must be txt or md")
     if file_root is None:
         raise ExecutionError("File Sink has no file_root")
     data = message_text(payload).encode()
