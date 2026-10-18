@@ -29,16 +29,18 @@ def open_database(path: str | Path) -> LockedConnection:
         check_same_thread=False,
         factory=LockedConnection,
     )
-    # Ownership transfers to LockedConnection.close(); the lock spans its lifetime.
-    lock_file = open(  # noqa: SIM115
-        database_path.with_suffix(database_path.suffix + ".lock"),
-        "a+",
-        encoding="utf-8",
-    )
+    lock_file = None
     try:
+        # Ownership transfers to LockedConnection.close(); the lock spans its lifetime.
+        lock_file = open(  # noqa: SIM115
+            database_path.with_suffix(database_path.suffix + ".lock"),
+            "a+",
+            encoding="utf-8",
+        )
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BaseException:
-        lock_file.close()
+        if lock_file is not None:
+            lock_file.close()
         connection.close()
         raise
     connection.writer_lock = lock_file
