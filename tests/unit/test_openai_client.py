@@ -138,6 +138,26 @@ def test_openai_client_does_not_retry_non_transient_http_error(
     assert attempts == 1
 
 
+def test_openai_client_fails_3xx_response_that_urlopen_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def fake_urlopen(request: Any, timeout: float) -> _Response:
+        nonlocal attempts
+        attempts += 1
+        return _Response(
+            {"choices": [{"message": {"content": '{"ok":true}'}}]}, status=302
+        )
+
+    monkeypatch.setattr("sluice.llm.openai_compatible.urlopen", fake_urlopen)
+    client = OpenAICompatibleClient("https://llm.example/v1", max_attempts=4)
+
+    with pytest.raises(ExecutionError, match="HTTP 302"):
+        client.complete("model-a", "Return JSON.", {"x": 1})
+    assert attempts == 1
+
+
 def test_openai_client_error_message_omits_vendor_response_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

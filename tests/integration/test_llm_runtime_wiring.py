@@ -223,6 +223,24 @@ def test_redirect_is_refused_and_api_key_is_not_forwarded(monkeypatch):
             fake.httpd.server_close()
 
 
+def test_redirect_status_without_location_fails_without_retry(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("no_proxy", "*")
+    fake = FakeServer()
+    fake.status = 302
+    fake.error_body = json.dumps(
+        {"choices": [{"message": {"content": '{"summary":"x"}'}}]}
+    ).encode()
+    try:
+        client = OpenAICompatibleClient(fake.url, max_attempts=3, backoff_seconds=0)
+        with pytest.raises(ExecutionError, match="HTTP 302"):
+            client.complete("m", "Return JSON.", {"x": 1})
+        assert len(fake.requests) == 1
+    finally:
+        fake.httpd.shutdown()
+        fake.httpd.server_close()
+
+
 def test_vendor_error_body_is_not_persisted_in_execution_error(
     tmp_path, server, monkeypatch
 ):

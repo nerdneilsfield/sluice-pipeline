@@ -173,6 +173,11 @@ class OpenAICompatibleClient:
                 with urlopen(request, timeout=self.timeout) as response:
                     status = response.getcode() or 200
                     body = response.read()
+                # A 3xx without Location never reaches _RefuseRedirect.
+                if 300 <= status < 400:
+                    raise ExecutionError(
+                        f"OpenAI-compatible endpoint returned HTTP {status}"
+                    )
                 if status >= 400:
                     description = f"HTTP {status}"
                     if status not in _RETRYABLE_HTTP_STATUS:
