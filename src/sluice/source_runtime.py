@@ -622,9 +622,17 @@ def _execute_queued_source(app: App, execution_id: int, at: datetime) -> int:
             at_text,
         )
         return execution_id
-    finalized, revision = _finalize_source(
-        app, source_name, binding, execution_id, expected_json, at_text, result
-    )
+    try:
+        finalized, revision = _finalize_source(
+            app, source_name, binding, execution_id, expected_json, at_text, result
+        )
+    except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
+        wrapped = ExecutionError("Source finalization failed")
+        wrapped.__cause__ = error
+        _record_failure(
+            app, source_name, binding, execution_id, expected_json, wrapped, at_text
+        )
+        raise wrapped
     if not finalized:
         _record_failure(
             app,

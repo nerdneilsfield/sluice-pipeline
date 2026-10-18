@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread, current_thread, main_thread
 
@@ -484,3 +485,54 @@ def probe_lock_held(app):
     thread.start()
     thread.join()
     return result[0]
+
+
+def test_failed_completion_write_fails_the_attempt_instead_of_leaving_it_running(
+    tmp_path, monkeypatch
+):
+    from sluice import delivery
+
+    app, item_id = delivery_app(
+        tmp_path,
+        {
+            "sluice.sinks.email": lambda config, payload, key: "sent",
+            "sluice.sinks.telegram": lambda config, payload, key: "ok",
+        },
+    )
+
+    def broken_complete(*args):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(delivery, "_complete_delivery", broken_complete)
+    with pytest.raises(sqlite3.OperationalError):
+        deliver(app, "p", "email", item_id, instant(0))
+
+    state, error = app.conn.execute(
+        "SELECT state,error FROM deliveries WHERE node_name='email'"
+    ).fetchone()
+    assert (state, error) == ("failed", "delivery completion failed")
+
+
+def test_unfinalizable_attempt_is_logged_and_raised(tmp_path, monkeypatch, caplog):
+    from sluice import delivery
+
+    app, item_id = delivery_app(
+        tmp_path,
+        {
+            "sluice.sinks.email": lambda config, payload, key: "sent",
+            "sluice.sinks.telegram": lambda config, payload, key: "ok",
+        },
+    )
+
+    def broken(*args):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(delivery, "_complete_delivery", broken)
+    monkeypatch.setattr(delivery, "_fail_delivery_attempt", broken)
+    with (
+        caplog.at_level("INFO", logger="sluice.delivery"),
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        deliver(app, "p", "email", item_id, instant(0))
+
+    assert "delivery_finalize_failed" in caplog.text

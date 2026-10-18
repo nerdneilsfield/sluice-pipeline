@@ -413,6 +413,27 @@ def _fail_delivery_attempt(
         return True
 
 
+def _fail_delivery_attempt_or_log(
+    app: Any,
+    attempt: _DeliveryAttempt,
+    error: BaseException | str,
+    at: datetime,
+) -> None:
+    """Fail the attempt; if that write fails too, log the stuck row and re-raise."""
+
+    try:
+        _fail_delivery_attempt(app, attempt, error, at)
+    except BaseException:
+        log_event(
+            _LOGGER,
+            "delivery_finalize_failed",
+            delivery_key=attempt.delivery_key,
+            attempt_token=attempt.attempt_token,
+            state="running",
+        )
+        raise
+
+
 def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
     # Worker-thread reads must not observe another thread's open transaction.
     # The lock is released before the external Sink call.
@@ -470,9 +491,15 @@ def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
         if result is not None and not isinstance(result, str):
             raise ExecutionError("Sink must return a string or null")
     except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
-        _fail_delivery_attempt(app, attempt, error, at)
+        _fail_delivery_attempt_or_log(app, attempt, error, at)
         return
-    _complete_delivery(app, attempt, result, at)
+    try:
+        _complete_delivery(app, attempt, result, at)
+    except BaseException:
+        # A row left running would hold its concurrency slot indefinitely.
+        # Fail it with a fixed reason and still surface the original error.
+        _fail_delivery_attempt_or_log(app, attempt, "delivery completion failed", at)
+        raise
 
 
 def deliver(

@@ -422,3 +422,47 @@ sources:
         == "failed"
     )
     assert changed.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 0
+
+
+def test_queued_retry_whose_finalization_raises_is_failed_not_left_running(
+    tmp_path, monkeypatch
+):
+    import sqlite3
+
+    definition = tmp_path / "source-finalize.yml"
+    definition.write_text(
+        """
+version: 1
+database: state.db
+sources:
+  feed: {use: tests.integration.test_source_lifecycle.source_collect, retries: 1, with: {}}
+""",
+        encoding="utf-8",
+    )
+    app = open_app(definition, tmp_path / "state.db")
+
+    def broken(*args):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(source_runtime, "_finalize_source", broken)
+    with pytest.raises(ExecutionError):
+        collect_source(app, "feed", source_recovery_instant(0))
+    retry_id = app.conn.execute(
+        "SELECT id FROM executions WHERE state='queued'"
+    ).fetchone()[0]
+
+    with pytest.raises(ExecutionError, match="finalization failed"):
+        source_runtime._execute_queued_source(app, retry_id, source_recovery_instant(1))
+
+    assert (
+        app.conn.execute(
+            "SELECT state FROM executions WHERE id=?", (retry_id,)
+        ).fetchone()[0]
+        == "failed"
+    )
+    assert (
+        app.conn.execute(
+            "SELECT COUNT(*) FROM executions WHERE state='running'"
+        ).fetchone()[0]
+        == 0
+    )

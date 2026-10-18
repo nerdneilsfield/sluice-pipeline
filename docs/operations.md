@@ -91,4 +91,6 @@ PY
 
 On a successful first run, Source, Stage, and Delivery states are `succeeded`. The Source has a one-hour schedule in the examples; an immediate second tick need not fetch again. Unchanged content does not create another delivery.
 
+If recording a final state fails (for example a SQLite I/O error), `tick` fails with that error. Sluice first tries to mark a Delivery as `failed` with the error `delivery completion failed`, and a Source attempt as `failed` with `Source finalization failed`. If that write fails too, the attempt stays `running`, the error is raised, and a Delivery also logs a `delivery_finalize_failed` event. A `running` row left this way is recovered the next time the database is opened. A Delivery marked `failed` after the Sink already accepted the message can be sent again on retry.
+
 For per-destination Delivery state in the RSS notification example, see [Run and inspect](notifications.md#run-and-inspect).
