@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 from ..canonical import canonical_json
 from ..contracts import JSONValue
-from ..errors import ExecutionError
+from ..errors import ExecutionError, InvalidStructuredOutput
 
 _RETRYABLE_HTTP_STATUS = frozenset({408, 429}) | frozenset(range(500, 600))
 
@@ -57,13 +57,13 @@ def _decode_completion(body: bytes) -> JSONValue:
         try:
             content = json.loads(content)
         except (TypeError, ValueError, json.JSONDecodeError) as error:
-            raise ExecutionError(
+            raise InvalidStructuredOutput(
                 "OpenAI-compatible response content is not valid JSON"
             ) from error
     try:
         canonical_json(content)
     except ExecutionError as error:
-        raise ExecutionError(
+        raise InvalidStructuredOutput(
             "OpenAI-compatible response content must be JSON-compatible"
         ) from error
     return content  # type: ignore[return-value]

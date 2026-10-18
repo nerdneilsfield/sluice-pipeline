@@ -97,6 +97,7 @@ class FakeServer:
         self.requests = []
         self.status = 200
         self.error_body = b""
+        self.content = None
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -109,16 +110,9 @@ class FakeServer:
                     data = outer.error_body
                 else:
                     summary = "final digest" if body["model"] == "m-summary" else "x"
+                    content = outer.content or json.dumps({"summary": summary})
                     data = json.dumps(
-                        {
-                            "choices": [
-                                {
-                                    "message": {
-                                        "content": json.dumps({"summary": summary})
-                                    }
-                                }
-                            ]
-                        }
+                        {"choices": [{"message": {"content": content}}]}
                     ).encode()
                 self.send_response(outer.status)
                 self.send_header("Content-Length", str(len(data)))
@@ -179,6 +173,28 @@ def test_tick_runs_llm_stages_from_yaml_against_configured_endpoint(
         ("/v1/chat/completions", "Bearer key-from-env", "m-extract"),
         ("/v1/chat/completions", "Bearer key-from-env", "m-summary"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("invalid", "state"), [(", invalid: drop", "dropped"), ("", "failed")]
+)
+def test_prose_model_output_follows_invalid_policy(
+    tmp_path, server, monkeypatch, invalid, state
+):
+    monkeypatch.setenv(KEY_ENV, "key-from-env")
+    server.content = "Sorry, I cannot produce JSON for this."
+    stages = LLM_STAGES.replace(", invalid: drop", invalid).replace(
+        "retries: 1", "retries: 0"
+    )
+    definition = write_definition(tmp_path, stages, llm_lines=llm_lines(server.url))
+
+    assert cli.main(["tick", str(definition), "--at", AT]) == 0
+
+    rows = query(
+        tmp_path,
+        "SELECT state FROM executions WHERE kind='stage' AND stage_name='extract'",
+    )
+    assert rows == [(state,)]
 
 
 def test_vendor_error_body_is_not_persisted_in_execution_error(

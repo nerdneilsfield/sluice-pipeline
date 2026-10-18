@@ -47,7 +47,7 @@ The endpoint is not part of cache identity. Changing `base_url` or the key reuse
 
 The model sees only the projected Item payload: Markdown text for `llm_extract`, and a JSON array of the extract results for `llm_summary`. Title, link and `metadata.web` are not sent, so templates after `llm_extract` cannot use `{title}` or `{link}`.
 
-The client sends no `response_format`; the prompts ask for bare JSON.
+The client sends no `response_format`; the prompts ask for bare JSON. Model content that is not valid JSON counts as invalid structured output, so `invalid: drop` drops it like any other schema mismatch. A non-JSON HTTP response body is an endpoint failure and is never dropped.
 
 ## Errors
 
