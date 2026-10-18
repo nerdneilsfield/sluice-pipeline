@@ -540,3 +540,22 @@ def test_projectors_accept_item_and_string_with_metadata_merge() -> None:
     assert item_result.metadata["existing"] == "kept"
     assert item_result.metadata["web"]["source_url"] == "https://example.test/item"
     assert html_result.value == "body"
+
+
+def test_render_template_shows_lists_and_objects_as_json_and_keeps_indexing() -> None:
+    from sluice.config import freeze_json
+    from sluice.contracts import Item
+    from sluice.tasks.content import render_telegram
+
+    payload = freeze_json(
+        {"tags": ["a", "é"], "author": {"name": "Ann", "id": 7}, "title": "T"}
+    )
+    item = Item("i", ("source", "s"), "l", payload, {}, "h", "2026-08-14T00:00:00Z", 1)
+
+    def render(template: str) -> str:
+        return render_telegram.run({"template": template}, item).value
+
+    assert render("{tags}") == '["a","é"]'
+    assert render("{author}") == '{"id":7,"name":"Ann"}'
+    assert render("{author[name]}|{tags[1]}|{title}") == "Ann|é|T"
+    assert render("[{tags:>12}]") == '[   ["a","é"]]'

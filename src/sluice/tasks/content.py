@@ -581,6 +581,27 @@ class _ProjectTask:
         return self.run(config, input)
 
 
+class _JsonField:
+    """A list/object template value: canonical JSON as text, still indexable."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: object) -> None:
+        self.value = value
+
+    def __format__(self, spec: str) -> str:
+        return format(canonical_json(self.value), spec)
+
+    def __getitem__(self, key: Any) -> object:
+        return _template_value(self.value[key])
+
+
+def _template_value(value: object) -> object:
+    if isinstance(value, (Mapping, list, tuple)):
+        return _JsonField(value)
+    return value
+
+
 def _render_payload(config: Mapping[str, Any], input: object) -> str:
     """Render an Item into deterministic channel text.
 
@@ -605,11 +626,15 @@ def _render_payload(config: Mapping[str, Any], input: object) -> str:
                     return ""
 
             try:
-                return template.format_map(_Values(payload))
+                return template.format_map(
+                    _Values(
+                        {key: _template_value(item) for key, item in payload.items()}
+                    )
+                )
             except (KeyError, IndexError, ValueError) as error:
                 raise ExecutionError("renderer.template is invalid") from error
         try:
-            return template.format(payload)
+            return template.format(_template_value(payload))
         except (IndexError, KeyError, ValueError) as error:
             raise ExecutionError("renderer.template is invalid") from error
     if isinstance(payload, str):

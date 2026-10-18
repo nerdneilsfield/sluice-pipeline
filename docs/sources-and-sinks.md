@@ -37,7 +37,7 @@ Which fields change the payload is listed per Source below.
 
 ## Template fields
 
-The `render_telegram` and `render_email` Tasks format the payload with `str.format`, for example `template: "{title}\n{url}"`. They are historical names; both produce plain text for any Sink. A missing top-level key renders as an empty string. Nested values use index syntax, `{author[name]}`; indexing into a key that is absent fails the render. Write a literal brace as `{{` or `}}`. A Source payload field listed below as "omitted when absent" is therefore safe to reference at the top level.
+The `render_telegram` and `render_email` Tasks format the payload with `str.format`, for example `template: "{title}\n{url}"`. They are historical names; both produce plain text for any Sink. A missing top-level key renders as an empty string. A list or object value renders as compact JSON with sorted keys (`["a","b"]`). Nested values use index syntax, `{author[name]}`; indexing into a key that is absent fails the render. Write a literal brace as `{{` or `}}`. A Source payload field listed below as "omitted when absent" is therefore safe to reference at the top level.
 
 ## Sources
 
