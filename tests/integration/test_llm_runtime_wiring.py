@@ -13,7 +13,8 @@ from sluice.app import open_app
 from sluice.canonical import node_binding_digest, stage_lookup_key
 from sluice.config import load_definition
 from sluice.contracts import Item, SourceRecord, SourceResult
-from sluice.errors import DefinitionError
+from sluice.errors import DefinitionError, ExecutionError
+from sluice.llm import OpenAICompatibleClient
 from sluice.reconcile import tick
 from sluice.stage_runtime import rebuild_stage
 
@@ -98,6 +99,7 @@ class FakeServer:
         self.status = 200
         self.error_body = b""
         self.content = None
+        self.location = None
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -115,6 +117,8 @@ class FakeServer:
                         {"choices": [{"message": {"content": content}}]}
                     ).encode()
                 self.send_response(outer.status)
+                if outer.location:
+                    self.send_header("Location", outer.location)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -195,6 +199,28 @@ def test_prose_model_output_follows_invalid_policy(
         "SELECT state FROM executions WHERE kind='stage' AND stage_name='extract'",
     )
     assert rows == [(state,)]
+
+
+def test_redirect_is_refused_and_api_key_is_not_forwarded(monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("no_proxy", "*")
+    target = FakeServer()
+    redirecting = FakeServer()
+    redirecting.status = 302
+    redirecting.location = f"{target.url}/stolen"
+    try:
+        client = OpenAICompatibleClient(
+            redirecting.url, api_key="key-secret", max_attempts=3
+        )
+        with pytest.raises(ExecutionError, match="HTTP 302") as excinfo:
+            client.complete("m", "Return JSON.", {"x": 1})
+        assert "key-secret" not in str(excinfo.value)
+        assert len(redirecting.requests) == 1
+        assert target.requests == []
+    finally:
+        for fake in (target, redirecting):
+            fake.httpd.shutdown()
+            fake.httpd.server_close()
 
 
 def test_vendor_error_body_is_not_persisted_in_execution_error(

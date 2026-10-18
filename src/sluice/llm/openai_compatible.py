@@ -14,13 +14,24 @@ from dataclasses import dataclass, field
 from time import sleep
 from types import MappingProxyType
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ..canonical import canonical_json
 from ..contracts import JSONValue
 from ..errors import ExecutionError, InvalidStructuredOutput
 
 _RETRYABLE_HTTP_STATUS = frozenset({408, 429}) | frozenset(range(500, 600))
+
+
+class _RefuseRedirect(HTTPRedirectHandler):
+    """Never follow a redirect: urllib would resend the Authorization header."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+# A refused redirect surfaces as ``HTTPError`` carrying the 3xx status.
+urlopen = build_opener(_RefuseRedirect).open
 
 
 def _strip_json_fence(value: str) -> str:

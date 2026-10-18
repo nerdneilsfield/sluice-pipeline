@@ -53,6 +53,8 @@ The client sends no `response_format`; the prompts ask for bare JSON. Model cont
 
 Error messages never contain the vendor response body. Non-retryable HTTP errors keep the status code, and retry exhaustion reports the attempt count.
 
+The client does not follow redirects, so the API key is only ever sent to the configured `base_url`. Any 3xx response fails immediately as `HTTP <code>` without retry; point `base_url` at the final endpoint.
+
 ## Deliver to another channel
 
 To send the digest to Telegram, email or Feishu instead of the console, replace the `console` node with the Sink from [notification setup](notifications.md).
