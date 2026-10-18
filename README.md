@@ -32,7 +32,7 @@ Omit extras you do not use. Email, Telegram, and LLM integrations need their own
 
 ### With Docker
 
-Published images are available for `linux/amd64` and `linux/arm64` from GitHub Container Registry (`ghcr.io/nerdneilsfield/sluice-pipeline`) and Docker Hub (`nerdneils/sluice-pipeline`). Both carry the tags `0.4.0`, `0.4`, `0`, and `latest`. Pull one and check that it starts:
+Published images are available for `linux/amd64` and `linux/arm64` from GitHub Container Registry (`ghcr.io/nerdneilsfield/sluice-pipeline`) and Docker Hub (`nerdneils/sluice-pipeline`). Both carry the tags `0.4.1`, `0.4`, `0`, and `latest`. Pull one and check that it starts:
 
 ```sh
 docker pull ghcr.io/nerdneilsfield/sluice-pipeline:latest

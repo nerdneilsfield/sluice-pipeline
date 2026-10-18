@@ -32,7 +32,7 @@ sluice --help
 
 ### 使用 Docker
 
-已发布的镜像支持 `linux/amd64` 和 `linux/arm64`，可从 GitHub Container Registry（`ghcr.io/nerdneilsfield/sluice-pipeline`）和 Docker Hub（`nerdneils/sluice-pipeline`）获取，两处都有 `0.4.0`、`0.4`、`0` 和 `latest` 标签。拉取镜像并确认它能启动：
+已发布的镜像支持 `linux/amd64` 和 `linux/arm64`，可从 GitHub Container Registry（`ghcr.io/nerdneilsfield/sluice-pipeline`）和 Docker Hub（`nerdneils/sluice-pipeline`）获取，两处都有 `0.4.1`、`0.4`、`0` 和 `latest` 标签。拉取镜像并确认它能启动：
 
 ```sh
 docker pull ghcr.io/nerdneilsfield/sluice-pipeline:latest
