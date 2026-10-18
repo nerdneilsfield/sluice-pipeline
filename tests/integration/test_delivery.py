@@ -536,3 +536,25 @@ def test_unfinalizable_attempt_is_logged_and_raised(tmp_path, monkeypatch, caplo
         deliver(app, "p", "email", item_id, instant(0))
 
     assert "delivery_finalize_failed" in caplog.text
+
+
+def test_non_string_sink_result_is_coerced_and_not_retried(tmp_path):
+    calls = []
+
+    def email(config, payload, key):
+        calls.append(key)
+        return 123
+
+    app, item_id = delivery_app(
+        tmp_path,
+        {
+            "sluice.sinks.email": email,
+            "sluice.sinks.telegram": lambda config, payload, key: "ok",
+        },
+    )
+    key = deliver(app, "p", "email", item_id, instant(0))
+
+    assert app.conn.execute(
+        "SELECT state,external_id FROM deliveries WHERE delivery_key=?", (key,)
+    ).fetchone()[:] == ("succeeded", "123")
+    assert calls == [key]

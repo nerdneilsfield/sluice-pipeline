@@ -488,11 +488,18 @@ def _send_attempt(app: Any, attempt: _DeliveryAttempt, at: datetime) -> None:
             )
             return
         result = sink.send(raw_config, payload, attempt.delivery_key)
-        if result is not None and not isinstance(result, str):
-            raise ExecutionError("Sink must return a string or null")
     except BaseException as error:  # noqa: BLE001 - finalize the durable claim on any exit
         _fail_delivery_attempt_or_log(app, attempt, error, at)
         return
+    if result is not None and not isinstance(result, str):
+        # The message was already sent: coerce instead of failing and retrying.
+        log_event(
+            _LOGGER,
+            "delivery_non_string_result",
+            delivery_key=attempt.delivery_key,
+            result_type=type(result).__name__,
+        )
+        result = str(result)
     try:
         _complete_delivery(app, attempt, result, at)
     except BaseException:
