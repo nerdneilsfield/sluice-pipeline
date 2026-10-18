@@ -9,12 +9,14 @@ machine; those semantics remain in :mod:`sluice.reconcile`,
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from datetime import datetime
 
 from .app import open_app
 from .canonical import utc_datetime
 from .delivery import retry_delivery
+from .errors import DefinitionError, ExecutionError
 from .reconcile import reconcile, tick
 from .stage_runtime import rebuild_stage
 
@@ -26,6 +28,16 @@ def _timestamp(value: str) -> datetime:
         return utc_datetime(value)
     except Exception as error:
         raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError:
+        port = 0
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be an integer from 1 to 65535")
+    return port
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -55,7 +67,7 @@ def _parser() -> argparse.ArgumentParser:
     ui_parser = commands.add_parser("ui")
     ui_parser.add_argument("definition")
     ui_parser.add_argument("--host", default="127.0.0.1")
-    ui_parser.add_argument("--port", default=8000, type=int)
+    ui_parser.add_argument("--port", default=8000, type=_port)
 
     return parser
 
@@ -72,6 +84,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run one documented local command and return its process status."""
 
     args = _parser().parse_args(argv)
+    try:
+        _run(args)
+    except (DefinitionError, ExecutionError) as error:
+        print(f"sluice: error: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _run(args: argparse.Namespace) -> None:
+    if args.command == "ui":
+        # Keep Flask optional for every non-UI command, including parser
+        # construction and ``--help``.  Check it before open_app so startup
+        # recovery does not run for a UI that cannot start.
+        try:
+            import flask  # noqa: F401
+
+            from .ui import create_ui
+        except ImportError:
+            raise ExecutionError(
+                "the ui command needs the ui extra: pip install 'sluice-pipeline[ui]'"
+            ) from None
     app = open_app(args.definition)
     try:
         if args.command == "tick":
@@ -83,10 +116,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "retry-delivery":
             retry_delivery(app, args.delivery_key, args.at)
         elif args.command == "ui":
-            # Keep Flask optional for every non-UI command, including parser
-            # construction and ``--help``.
-            from .ui import create_ui
-
             create_ui(app, host=args.host, port=args.port).run(
                 host=args.host, port=args.port
             )
@@ -94,7 +123,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise AssertionError(f"unknown command: {args.command!r}")
     finally:
         _close_app(app)
-    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by the script entrypoint.

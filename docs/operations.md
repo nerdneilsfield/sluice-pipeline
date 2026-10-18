@@ -16,7 +16,7 @@ For a cron job, pass the current time instead of a fixed one, as in the README e
 sluice tick definition.yml --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-Environment variables that a definition references with `env:NAME` must be available to the process that runs `tick`. Replace `definition.yml` with your definition path.
+A definition or execution error prints `sluice: error: <message>` to stderr and exits with status 2, without a traceback. Environment variables that a definition references with `env:NAME` must be available to the process that runs `tick`. Replace `definition.yml` with your definition path.
 
 ## Reconcile, rebuild, and retry a Delivery
 
