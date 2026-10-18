@@ -592,6 +592,12 @@ class _JsonField:
     def __format__(self, spec: str) -> str:
         return format(canonical_json(self.value), spec)
 
+    # ``{x!s}`` and ``{x!r}`` convert before formatting; keep both deterministic.
+    def __str__(self) -> str:
+        return canonical_json(self.value)
+
+    __repr__ = __str__
+
     def __getitem__(self, key: Any) -> object:
         return _template_value(self.value[key])
 

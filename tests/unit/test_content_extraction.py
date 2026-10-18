@@ -559,3 +559,4 @@ def test_render_template_shows_lists_and_objects_as_json_and_keeps_indexing() ->
     assert render("{author}") == '{"id":7,"name":"Ann"}'
     assert render("{author[name]}|{tags[1]}|{title}") == "Ann|é|T"
     assert render("[{tags:>12}]") == '[   ["a","é"]]'
+    assert render("{tags!r}|{author!s}") == '["a","é"]|{"id":7,"name":"Ann"}'
