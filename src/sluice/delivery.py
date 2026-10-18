@@ -205,6 +205,14 @@ def _ensure_delivery_rows(
             (policy_json, pipeline_name, node_name, binding, policy_json),
         )
 
+        # Never-attempted rows of a replaced Sink binding can no longer be
+        # sent (claims reject a changed binding); attempted rows stay as history.
+        app.conn.execute(
+            "DELETE FROM deliveries WHERE pipeline_name=? AND node_name=? AND binding_digest!=? "
+            "AND state='queued' AND attempt_token IS NULL AND retry_count=0",
+            (pipeline_name, node_name, binding),
+        )
+
         # A snapshot omission withdraws only never-started work.  Any attempt
         # token (including a failed/succeeded row) makes the send auditable and
         # therefore durable even after membership changes.

@@ -9,6 +9,7 @@ from sluice.contracts import SourceRecord, SourceResult
 from sluice.delivery import (
     _claim_delivery,
     _ensure_delivery_row_for_item,
+    _ensure_delivery_rows,
     _send_attempt,
     deliver,
     retry_delivery,
@@ -601,3 +602,72 @@ pipelines:
     assert second.conn.execute("SELECT state,retry_count FROM deliveries").fetchone()[
         :
     ] == ("succeeded", 1)
+
+
+def _replace_sink_scenario(tmp_path, first_sink):
+    """Run one tick with ``first_sink`` on email, then switch the node to telegram."""
+    definition = tmp_path / "definition.yml"
+    database = tmp_path / "state.db"
+
+    def write_definition(sink_use):
+        definition.write_text(
+            f"""
+version: 1
+database: state.db
+sources: {{feed: {{use: tests.integration.test_delivery.source_collect, with: {{}}}}}}
+pipelines:
+  p:
+    nodes:
+      out: {{from: source.feed, retries: 0, concurrency: 1, deliver: {{use: {sink_use}, with: {{target: x}}}}}}
+""",
+            encoding="utf-8",
+        )
+
+    def reopen(sink_use):
+        write_definition(sink_use)
+        return open_app(
+            definition,
+            database,
+            sink_clients={
+                "sluice.sinks.email": first_sink,
+                "sluice.sinks.telegram": lambda config, payload, key: "ok",
+            },
+        )
+
+    first = reopen("sluice.sinks.email")
+    collect_source(first, "feed", instant(0))
+    return first, reopen
+
+
+def test_never_attempted_rows_of_a_replaced_binding_are_dropped(tmp_path):
+    first, reopen = _replace_sink_scenario(tmp_path, lambda config, payload, key: "ok")
+    reconcile_node(first, "p", "out", instant(0))
+    old_keys = _ensure_delivery_rows(first, "p", "out", instant(0))
+    assert (
+        first.conn.execute("SELECT state FROM deliveries").fetchall()[0][0] == "queued"
+    )
+    first.close()
+
+    second = reopen("sluice.sinks.telegram")
+    tick(second, instant(1))
+    rows = second.conn.execute("SELECT delivery_key,state FROM deliveries").fetchall()
+    assert [tuple(row) for row in rows] != []
+    assert all(row[0] not in old_keys for row in rows)
+    assert [row[1] for row in rows] == ["succeeded"]
+
+
+def test_attempted_rows_of_a_replaced_binding_are_kept(tmp_path):
+    def down(config, payload, key):
+        raise RuntimeError("down")
+
+    first, reopen = _replace_sink_scenario(tmp_path, down)
+    tick(first, instant(1))
+    old = first.conn.execute("SELECT delivery_key,state FROM deliveries").fetchall()
+    assert [row[1] for row in old] == ["failed"]
+    first.close()
+
+    second = reopen("sluice.sinks.telegram")
+    tick(second, instant(2))
+    states = dict(second.conn.execute("SELECT delivery_key,state FROM deliveries"))
+    assert states[old[0][0]] == "failed"
+    assert sorted(states.values()) == ["failed", "succeeded"]

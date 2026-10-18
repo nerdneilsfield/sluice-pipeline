@@ -145,6 +145,8 @@ Sinks are at-least-once. A failed Delivery is retried according to the Node's `r
 
 A Delivery row stores the Node's `retries`, `timeout`, and `concurrency` when it is created. On every `tick` or `reconcile`, the current values from the definition replace the stored ones for rows of the current Sink binding that are `queued` or `failed`. Raising `retries` from `0` to `3` therefore lets already failed Deliveries retry on the next `tick`. `running` and `succeeded` rows keep what they had, and a Sink change is a new binding, not a policy change.
 
+When a Node's Sink or its `with` configuration changes, the Node gets a new binding and new Delivery keys. Rows of the old binding that were never attempted (`queued`, no attempt, `retry_count` 0) can never be sent, so the next `tick` or `reconcile` deletes them. Rows that were ever attempted (`running`, `failed`, `succeeded`, or with a retry) stay as history, and `retry-delivery` rejects them.
+
 Both Sinks below receive the Stage output as their payload. After a render Task that is a string.
 
 ### `sluice.sinks.webhook`
