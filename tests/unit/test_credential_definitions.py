@@ -15,7 +15,7 @@ def write_one(tmp_path, source=None, deliver=None):
         "sluice.sources.json_api",
         "url: 'https://a.example.test/x', id_field: id",
     )
-    sink = deliver or "url: 'https://h.example.test/in'"
+    sink = deliver or "url: env:HOOK_URL"
     path = tmp_path / "d.yml"
     path.write_text(f"""version: 1
 sources:
@@ -82,7 +82,7 @@ def test_json_api_sensitive_literal_header_is_rejected(tmp_path, name):
 def test_webhook_sensitive_literal_header_is_rejected(tmp_path, name):
     path = write_one(
         tmp_path,
-        deliver=f"url: 'https://h.example.test/in', headers: {{'{name}': {SECRET}}}",
+        deliver=f"url: env:HOOK_URL, headers: {{'{name}': {SECRET}}}",
     )
     assert_rejected_and_not_persisted(tmp_path, path)
 
@@ -96,6 +96,44 @@ def test_env_and_plain_headers_are_accepted(tmp_path):
                 "sluice.sources.json_api",
                 f"url: 'https://a.example.test/x', id_field: id, {headers}",
             ),
-            f"url: 'https://h.example.test/in', {headers}",
+            f"url: env:HOOK_URL, {headers}",
         )
     )
+
+
+def write_sink(tmp_path, use, with_):
+    path = tmp_path / "d.yml"
+    path.write_text(f"""version: 1
+sources:
+  feed: {{use: sluice.sources.json_api, with: {{url: 'https://a.example.test/x', id_field: id}}}}
+pipelines:
+  p:
+    nodes:
+      out:
+        from: source.feed
+        deliver: {{use: {use}, with: {{{with_}}}}}
+""")
+    return path
+
+
+SINK_CREDENTIALS = [
+    ("sluice.sinks.telegram", "bot_token", "chat_id: '1'"),
+    ("sluice.sinks.email", "password", "username: env:U"),
+    ("sluice.sinks.feishu", "webhook", "secret: env:S"),
+    ("sluice.sinks.feishu", "secret", "webhook: env:W"),
+    ("sluice.sinks.webhook", "url", "headers: {X-Source: sluice}"),
+]
+
+
+@pytest.mark.parametrize(("use", "key", "rest"), SINK_CREDENTIALS)
+def test_builtin_sink_literal_credential_is_rejected(tmp_path, use, key, rest):
+    path = write_sink(tmp_path, use, f"{key}: '{SECRET}', {rest}")
+    with pytest.raises(DefinitionError, match=f"with.{key} must be") as caught:
+        load_definition(path)
+    assert SECRET not in str(caught.value)
+    assert_rejected_and_not_persisted(tmp_path, path)
+
+
+@pytest.mark.parametrize(("use", "key", "rest"), SINK_CREDENTIALS)
+def test_builtin_sink_env_credential_is_accepted(tmp_path, use, key, rest):
+    load_definition(write_sink(tmp_path, use, f"{key}: env:CRED, {rest}"))

@@ -220,16 +220,17 @@ def test_failed_attempt_resends_with_the_same_key(tmp_path, monkeypatch):
         return DirectResponse(status_code=next(statuses), body=b"")
 
     monkeypatch.setattr("sluice.sinks.webhook.send_pinned_httpx_post", fake)
+    monkeypatch.setenv("HOOK_URL", URL)
     definition = tmp_path / "d.yml"
-    definition.write_text(f"""version: 1
+    definition.write_text("""version: 1
 sources:
-  feed: {{use: tests.unit.test_webhook_sink.source}}
+  feed: {use: tests.unit.test_webhook_sink.source}
 pipelines:
   p:
     nodes:
       hook:
         from: source.feed
-        deliver: {{use: sluice.sinks.webhook, with: {{url: '{URL}'}}}}
+        deliver: {use: sluice.sinks.webhook, with: {url: 'env:HOOK_URL'}}
 """)
     app = open_app(definition, tmp_path / "state.db")
     try:

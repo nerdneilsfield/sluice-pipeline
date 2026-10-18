@@ -151,7 +151,7 @@ Sends one JSON `POST` per Delivery.
 
 | Key | Type | Default | Limits |
 | --- | --- | --- | --- |
-| `url` | string | required | `https` only. May be `env:NAME`. |
+| `url` | string | required | `https` only. Must be exactly `env:NAME`; a literal URL is rejected when the definition loads. |
 | `headers` | map of string to string | none | Same sensitive-name rule and name restrictions as `json_api`: a sensitive name must be exactly `env:NAME`, checked when the definition loads. |
 | `timeout_seconds` | number | 30 | (0, 300] |
 | `target_allow_hosts` | list of strings | none | See [Private targets](#private-targets). |
@@ -245,16 +245,17 @@ Invalid values in these keys are reported when the Source runs or the Sink sends
 
 Authored configuration is stored in SQLite as written, and the binding identity includes it. Put secrets in environment variables and reference them as `env:NAME`; the value is resolved at run time and is not stored or logged.
 
-Two rules are checked when the definition loads, so a literal credential is rejected before anything is written to SQLite. The error names the key, never the value.
+These rules are checked when the definition loads, so a literal credential is rejected before anything is written to SQLite. The error names the key, never the value.
 
-- `github_activity` `token` must be exactly `env:NAME`.
+- `github_activity` `token`, Telegram `bot_token`, email `password`, Feishu `webhook` and `secret`, and `webhook` `url` must be exactly `env:NAME`. Webhook URLs usually carry the secret in the path or query, which cannot be detected reliably in a literal, so the whole URL is env-only.
 - A `json_api` or `webhook` header whose name contains `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `api-key`, `token`, `secret`, or `signature` (case-insensitive) must have an exact `env:NAME` value. Other headers, such as `X-Source: sluice`, stay literal.
 
 | Place | `env:` accepted | Notes |
 | --- | --- | --- |
 | `json_api` `headers` values | required for sensitive names | Missing or empty variable fails the run. |
 | `github_activity` `token` | required | A literal value is rejected. |
-| `webhook` `url`, and `headers` values | `url` yes; `headers` required for sensitive names | Missing or empty variable fails the Delivery. |
+| `webhook` `url`, and `headers` values | `url` required; `headers` required for sensitive names | Missing or empty variable fails the Delivery. |
+| Telegram `bot_token`, email `password`, Feishu `webhook` and `secret` | required | A literal value is rejected. |
 | `json_api` `url` | no | Do not put a token in the query string; use a header. |
 
 The variables must be set in the environment of the process that runs `tick`. In Docker, pass them with `-e NAME` or `--env-file`.

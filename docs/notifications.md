@@ -8,7 +8,7 @@ The built-in RSS Source supports RSS 2.0, Atom, and RSS 1.0. It fetches the feed
 
 This example sends real messages. A first collection can publish every entry currently in the feed, producing one message per entry per destination. Use a small feed for the first run and remove Delivery nodes for channels you do not want to contact.
 
-Keep secrets in environment variables, not literal YAML: authored configuration is retained in SQLite. The senders resolve `env:NAME` when sending and do not write resolved credentials or vendor error bodies to execution errors. Environment variables must be available to the process running `tick` or the UI.
+Keep secrets in environment variables, not literal YAML: authored configuration is retained in SQLite. Telegram `bot_token`, email `password`, and Feishu `webhook` and `secret` must be an exact `env:NAME` reference; a literal value fails when the definition loads. The senders resolve `env:NAME` when sending and do not write resolved credentials or vendor error bodies to execution errors. Environment variables must be available to the process running `tick` or the UI.
 
 | Channel | Configuration | Behavior |
 | --- | --- | --- |

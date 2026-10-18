@@ -354,6 +354,15 @@ def _decode_source_policy(spec: Mapping[str, object], label: str) -> ExecutionPo
 
 
 _HEADER_BUILTINS = frozenset({"sluice.sources.json_api", "sluice.sinks.webhook"})
+# A webhook URL is env-only because its secret usually sits in the path
+# (Feishu, n8n, Slack), where no pattern check on a literal URL can find it.
+_ENV_ONLY_KEYS = {
+    "sluice.sources.github_activity": ("token",),
+    "sluice.sinks.telegram": ("bot_token",),
+    "sluice.sinks.email": ("password",),
+    "sluice.sinks.feishu": ("webhook", "secret"),
+    "sluice.sinks.webhook": ("url",),
+}
 
 
 def _check_builtin_credentials(
@@ -361,12 +370,13 @@ def _check_builtin_credentials(
 ) -> None:
     """Reject literal credentials of built-ins before the config is persisted."""
 
-    if use == "sluice.sources.github_activity" and "token" in with_config:
-        token = with_config["token"]
-        if not (isinstance(token, str) and TOKEN_REFERENCE.fullmatch(token)):
-            raise DefinitionError(
-                f"{label}.with.token must be an exact env:NAME reference"
-            )
+    for key in _ENV_ONLY_KEYS.get(use, ()):
+        if key in with_config:
+            value = with_config[key]
+            if not (isinstance(value, str) and TOKEN_REFERENCE.fullmatch(value)):
+                raise DefinitionError(
+                    f"{label}.with.{key} must be an exact env:NAME reference"
+                )
     if use in _HEADER_BUILTINS and with_config.get("headers") is not None:
         decode_headers(with_config["headers"], f"{label}.with.headers")
 
