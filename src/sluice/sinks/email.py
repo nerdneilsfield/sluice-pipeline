@@ -32,7 +32,9 @@ def send(config: Mapping[str, JSONValue], payload: JSONValue, delivery_key: str)
     """Send a UTF-8 plain-text message over authenticated TLS SMTP."""
     import smtplib
     import ssl
+    from datetime import UTC, datetime
     from email.message import EmailMessage
+    from email.utils import format_datetime
     from hashlib import sha256
 
     from ..errors import ExecutionError
@@ -59,6 +61,7 @@ def send(config: Mapping[str, JSONValue], payload: JSONValue, delivery_key: str)
         message["To"] = recipient
         message["Subject"] = subject
         message["Message-ID"] = message_id
+        message["Date"] = format_datetime(datetime.now(UTC))
         message.set_content(message_text(payload))
     except ValueError:
         raise ExecutionError("Email headers are invalid") from None

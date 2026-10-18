@@ -216,3 +216,36 @@ def test_smtp_ssl_failure_is_sanitized(monkeypatch):
             "key",
         )
     assert "mail-secret" not in str(error.value)
+
+
+def test_email_sets_a_parseable_date_header(monkeypatch):
+    import smtplib
+    from email.utils import parsedate_to_datetime
+
+    sent = []
+
+    class SMTP:
+        def __init__(self, host, port, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def starttls(self, **kwargs):
+            pass
+
+        def send_message(self, message):
+            sent.append(message)
+            return {}
+
+    monkeypatch.setattr(smtplib, "SMTP", SMTP)
+    email.send(
+        {"smtp_host": "smtp.example.test", "from": "[邮箱]", "to": "[邮箱]"},
+        "Hello",
+        "key",
+    )
+
+    assert parsedate_to_datetime(sent[0]["Date"]).tzinfo is not None
